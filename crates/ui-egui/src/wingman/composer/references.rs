@@ -11,6 +11,7 @@ struct Code {
     delimiter: u8,
     len: usize,
     fence: bool,
+    quote_depth: usize,
 }
 
 impl Code {
@@ -18,31 +19,54 @@ impl Code {
     fn advance(&mut self, text: &str, at: usize) -> usize {
         let bytes = text.as_bytes();
         let byte = bytes[at];
+        if byte == b'\n' && self.len != 0 && self.fence && self.quote_depth > 0 {
+            // A quoted fenced block cannot continue outside its blockquote container.
+            let mut line = &bytes[at + 1..];
+            for _ in 0..self.quote_depth {
+                let indent = line.iter().take(3).take_while(|&&b| b == b' ').count();
+                let Some(after) = line[indent..].strip_prefix(b">") else {
+                    self.len = 0;
+                    break;
+                };
+                line = after.strip_prefix(b" ").unwrap_or(after);
+            }
+        }
         if !matches!(byte, b'`' | b'~') {
             return 1;
         }
         let len = bytes[at..].iter().take_while(|&&c| c == byte).count();
         let line_start = || {
             let mut rev = bytes[..at].iter().rev();
-            for _ in 0..4 {
+            let mut indent = 0;
+            let mut quotes = 0;
+            loop {
                 match rev.next() {
-                    None | Some(b'\n') => return true,
-                    Some(b' ') => {}
-                    _ => return false,
+                    None | Some(b'\n') => return (indent <= 3).then_some(quotes),
+                    // One optional separating space after a Markdown blockquote marker
+                    // is not part of the fenced code block's (at most three) indent.
+                    Some(b'>') if indent <= 4 => {
+                        quotes += 1;
+                        indent = 0;
+                    }
+                    Some(b' ') if indent < 4 => indent += 1,
+                    _ => return None,
                 }
             }
-            false
         };
         if self.len == 0 {
-            let fence = len >= 3 && line_start();
+            let depth = (len >= 3).then(line_start).flatten();
+            let fence = depth.is_some();
             if (byte == b'`' || fence) && !text[..at].ends_with('\\') {
                 self.delimiter = byte;
                 self.len = len;
                 self.fence = fence;
+                self.quote_depth = depth.unwrap_or(0);
             }
         } else if byte == self.delimiter {
             let close = if self.fence {
-                len >= self.len && line_start() && bytes[at + len..].iter().take_while(|&&b| b != b'\n').all(|&b| b.is_ascii_whitespace())
+                len >= self.len
+                    && line_start() == Some(self.quote_depth)
+                    && bytes[at + len..].iter().take_while(|&&b| b != b'\n').all(|&b| b.is_ascii_whitespace())
             } else {
                 len == self.len
             };

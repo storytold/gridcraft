@@ -13,8 +13,9 @@ workspace = true
 # `cargo xtask parity` reads the command catalog from the engine. CI steps that only need the
 # version or the layer/asset checks run with --no-default-features and skip compiling it.
 default = ["engine"]
-engine = ["dep:gridcraft-engine"]
+engine = ["dep:gridcraft-engine", "dep:syn"]
 
 [dependencies]
 serde_json = { workspace = true }
 gridcraft-engine = { workspace = true, optional = true }
+syn = { version = "2", features = ["full", "visit"], optional = true }

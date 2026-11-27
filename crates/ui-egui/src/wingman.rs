@@ -51,10 +51,10 @@ impl Mode {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-struct AgentKey(String, String, String, String);
+struct AgentKey(String, String, String, String, [u8; 32]);
 impl From<&Agent> for AgentKey {
     fn from(a: &Agent) -> Self {
-        Self(a.name.clone(), a.provider.clone(), a.model.clone(), a.endpoint.clone())
+        Self(a.name.clone(), a.provider.clone(), a.model.clone(), a.endpoint.clone(), a.credential_identity)
     }
 }
 
@@ -120,6 +120,10 @@ struct Turn {
     agent: Agent,
     target: Target,
     rounds: usize,
+    ribbon: workbook::ribbon::Ribbon,
+    native_offered: std::collections::BTreeSet<String>,
+    /// End of the last exchange with all tool calls answered (safe to replay on interruption).
+    completed_wire: usize,
     final_answer: bool,
     calls: usize,
     // Messages from the start of this turn, distinct from older completed history.
@@ -147,6 +151,7 @@ pub(crate) struct PanelState {
     archives: VecDeque<Thread>,
     turn: Option<Turn>,
     composer: Composer,
+    guide: panel::RibbonGuide,
     mcp: mcp::Hub,
 }
 
@@ -181,7 +186,11 @@ impl PanelState {
     }
 
     fn stop(&mut self) {
-        if let Some(t) = self.turn.take() {
+        if let Some(mut t) = self.turn.take() {
+            if t.completed_wire > 0 {
+                t.wire.truncate(t.completed_wire);
+                self.remember(t.wire);
+            }
             if !t.partial.is_empty() {
                 self.thread.line("Assistant (partial)", t.partial);
             }

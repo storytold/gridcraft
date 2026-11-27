@@ -46,7 +46,15 @@ pub(in super::super) fn open_config() -> Result<(), String> {
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     match options.open(&path) {
-        Ok(mut file) => file.write_all(EXAMPLE.as_bytes()).map_err(|e| format!("Cannot write wingman.json: {e}"))?,
+        Ok(mut file) => {
+            if let Err(error) = file.write_all(EXAMPLE.as_bytes()).and_then(|()| file.flush()) {
+                drop(file);
+                return Err(match fs::remove_file(&path) {
+                    Ok(()) => format!("Cannot write wingman.json: {error}"),
+                    Err(cleanup) => format!("Cannot write wingman.json: {error}; cannot remove partial template: {cleanup}"),
+                });
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(format!("Cannot create wingman.json: {e}")),
     }
@@ -59,7 +67,8 @@ fn open_editor(path: &Path) -> std::io::Result<()> {
 }
 #[cfg(target_os = "macos")]
 fn open_editor(path: &Path) -> std::io::Result<()> {
-    std::process::Command::new("/usr/bin/open").arg("-t").arg(path).spawn().map(|_| ())
+    let result = std::process::Command::new("/usr/bin/open").arg("-t").arg(path).status()?;
+    if result.success() { Ok(()) } else { Err(std::io::Error::other(format!("open exited with {result}"))) }
 }
 #[cfg(not(any(windows, target_os = "macos")))]
 fn open_editor(path: &Path) -> std::io::Result<()> {
@@ -152,6 +161,8 @@ pub(in super::super) struct Agent {
     pub provider: String,
     pub model: String,
     pub endpoint: String,
+    pub is_loopback: bool,
+    pub credential_identity: [u8; 32],
     pub supports_tools: bool,
     pub max_tokens: Option<u32>,
     pub default_profile: Option<String>,
@@ -163,8 +174,7 @@ pub(in super::super) struct Agent {
     pub(super) legacy_limit: bool,
     pub(super) reasoning_history: bool,
     pub(super) completions: bool,
-    pub(super) headers: HeaderMap,
-    pub(super) key_env: Option<String>,
+    pub(super) headers: std::sync::Arc<HeaderMap>,
     pub(super) idle_secs: u64,
 }
 
@@ -262,20 +272,38 @@ fn base_url(raw: &str, ollama: bool) -> Result<String, String> {
     {
         return Err("Use an HTTP(S) base URL without credentials, query or fragment.".into());
     }
-    let base = url.as_str().trim_end_matches('/');
-    if ollama {
-        return Ok(base
-            .strip_suffix("/api/chat")
-            .or_else(|| base.strip_suffix("/api"))
-            .or_else(|| base.strip_suffix("/v1"))
-            .unwrap_or(base)
-            .to_owned());
+    let path = url.path().trim_end_matches('/');
+    let prefix = if ollama {
+        path.strip_suffix("/api/chat").or_else(|| path.strip_suffix("/api")).or_else(|| path.strip_suffix("/v1")).unwrap_or(path)
+    } else if path.is_empty() {
+        "/v1"
+    } else {
+        path.strip_suffix("/chat/completions").unwrap_or(path)
+    };
+    Ok(format!("{}{prefix}", url.origin().ascii_serialization()))
+}
+
+// Freeze the exact headers used on this catalog entry, rather than re-reading the account
+// environment every round. Thread keys only retain the digest, never live bearer credentials.
+fn auth_snapshot(custom: &BTreeMap<String, String>, key: Option<std::ffi::OsString>) -> Result<(std::sync::Arc<HeaderMap>, [u8; 32]), String> {
+    use sha2::{Digest, Sha256};
+    let mut result = headers(custom)?;
+    if let Some(key) = key.filter(|s| !s.is_empty()) {
+        let key = key.to_str().ok_or("The API key is not valid text.")?;
+        let mut val = HeaderValue::from_str(&format!("Bearer {key}")).map_err(|_| "Invalid API key header value.")?;
+        val.set_sensitive(true);
+        result.insert(reqwest::header::AUTHORIZATION, val);
     }
-    let base = base.strip_suffix("/chat/completions").unwrap_or(base);
-    if url.path().trim_end_matches('/').is_empty() {
-        return Ok(format!("{base}/v1"));
+    let mut digest = Sha256::new();
+    let mut ordered: Vec<_> = result.iter().collect();
+    ordered.sort_unstable_by_key(|(key, _)| key.as_str());
+    for (key, value) in ordered {
+        for field in [key.as_str().as_bytes(), value.as_bytes()] {
+            digest.update((field.len() as u64).to_be_bytes());
+            digest.update(field);
+        }
     }
-    Ok(base.to_owned())
+    Ok((std::sync::Arc::new(result), digest.finalize().into()))
 }
 
 fn key_variable(name: &str) -> String {
@@ -309,11 +337,17 @@ impl Host {
         if !(1..=1800).contains(&idle_secs) {
             return Err(format!("The read timeout for {name} must be 1–1800 seconds."));
         }
+        let (headers, credential_identity) = auth_snapshot(&cfg.custom_headers, key_env.as_ref().and_then(std::env::var_os))?;
+        let url = Url::parse(&endpoint).map_err(|_| "Invalid provider endpoint.")?;
+        let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
+        let is_loopback = host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
         let template = Agent {
             name: String::new(),
             provider: name,
             model: String::new(),
             endpoint,
+            is_loopback,
+            credential_identity,
             supports_tools: true,
             max_tokens: cfg.context_window,
             default_profile: None,
@@ -325,8 +359,7 @@ impl Host {
             legacy_limit: false,
             reasoning_history: false,
             completions: true,
-            headers: headers(&cfg.custom_headers)?,
-            key_env,
+            headers,
             idle_secs,
         };
         Ok(Self { template, discover: cfg.auto_discover.unwrap_or(true) })
@@ -454,6 +487,25 @@ pub(in super::super) fn load() -> Result<Vec<Agent>, String> {
 #[cfg(test)]
 mod tests {
     use super::build_catalog;
+
+    #[test]
+    fn suffixes_are_only_trimmed_from_paths_and_credentials_partition_accounts() {
+        for (raw, root) in [
+            ("https://v1", "https://v1"),
+            ("https://api", "https://api"),
+            ("https://v1:8081/models/api/chat", "https://v1:8081/models"),
+            ("https://[::1]:8000/v1/", "https://[::1]:8000"),
+        ] {
+            assert_eq!(super::base_url(raw, true).unwrap(), root);
+        }
+        assert_eq!(super::base_url("https://chat/completions", false).unwrap(), "https://chat/completions");
+        let custom = std::collections::BTreeMap::new();
+        let a = super::auth_snapshot(&custom, Some("account-a".into())).unwrap();
+        let b = super::auth_snapshot(&custom, Some("account-b".into())).unwrap();
+        assert_ne!(a.1, b.1);
+        assert_eq!(a.1, super::auth_snapshot(&custom, Some("account-a".into())).unwrap().1);
+        assert_ne!(a.1, super::auth_snapshot(&[("X-Tenant".into(), "other".into())].into(), Some("account-a".into())).unwrap().1);
+    }
     use serde_json::json;
 
     #[test]

@@ -5,6 +5,75 @@ use serde_json::json;
 
 const ICON: &[u8] = include_bytes!("../../../../assets/wingman/artcraft-ai-256.png");
 
+#[derive(Default)]
+pub(super) struct RibbonGuide {
+    section: String,
+    query: String,
+    offset: usize,
+    page: Option<serde_json::Value>,
+}
+
+impl RibbonGuide {
+    fn show(&mut self, ui: &mut Ui, l: Language) {
+        ui.collapsing(l.tr("Ribbon guide"), |ui| {
+            let Ok(sections) = super::workbook::menu::sections() else {
+                ui.label(l.tr("The ribbon guide is unavailable."));
+                return;
+            };
+            let mut changed = false;
+            egui::ComboBox::from_id_salt("wingman_guide_section")
+                .selected_text(if self.section.is_empty() { l.tr("All sections") } else { l.tr(&self.section) })
+                .show_ui(ui, |ui| {
+                    changed |= ui.selectable_value(&mut self.section, String::new(), l.tr("All sections")).changed();
+                    for &name in sections {
+                        changed |= ui.selectable_value(&mut self.section, name.to_owned(), l.tr(name)).changed();
+                    }
+                });
+            changed |= ui.add(egui::TextEdit::singleline(&mut self.query).char_limit(120).hint_text(l.tr("Find a control or group…"))).changed();
+            if changed {
+                self.offset = 0;
+                self.page = None;
+            }
+            if self.page.is_none() {
+                let section = (!self.section.is_empty()).then_some(&self.section);
+                self.page = super::workbook::menu::find(&json!({"search":self.query,"section":section,"offset":self.offset})).ok();
+            }
+            let Some(page) = &self.page else {
+                return;
+            };
+            ScrollArea::vertical().id_salt("wingman_guide_results").max_height(160.0).show(ui, |ui| {
+                for entry in page["items"].as_array().into_iter().flatten() {
+                    let get = |k: &str| entry[k].as_str().unwrap_or("");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.strong(l.tr(get("label")));
+                        ui.weak(format!("{} › {}", l.tr(get("section")), l.tr(get("group"))));
+                    });
+                    let tool = get("wingmanTool");
+                    if tool.is_empty() {
+                        ui.small(l.tr("Manual control"));
+                    } else {
+                        ui.small(format!("{} · {tool}", l.tr(get("access"))));
+                    }
+                }
+                if page["items"].as_array().is_none_or(Vec::is_empty) {
+                    ui.label(l.tr("No matching controls."));
+                }
+            });
+            let next = page["nextOffset"].as_u64().map(|n| n as usize);
+            ui.horizontal(|ui| {
+                if ui.add_enabled(self.offset > 0, Button::new(l.tr("Previous"))).clicked() {
+                    self.offset = self.offset.saturating_sub(16);
+                    self.page = None;
+                }
+                if ui.add_enabled(next.is_some(), Button::new(l.tr("Next"))).clicked() {
+                    self.offset = next.unwrap_or(self.offset);
+                    self.page = None;
+                }
+            });
+        });
+    }
+}
+
 fn icon(ctx: &Context) -> Option<egui::TextureHandle> {
     let id = egui::Id::unique("gc_wingman_icon");
     if let Some(texture) = ctx.data(|d| d.get_temp(id)) {
@@ -127,6 +196,12 @@ impl PanelState {
         }
         ui.separator();
         self.settings(ui, l, !app.synthetic_pending);
+        self.guide.show(ui, l);
+        if let Some(t) = self.turn.as_ref().filter(|t| t.agent.supports_tools && self.mode != Mode::Chat) {
+            let (tab, group) = t.ribbon.location();
+            let path = group.map_or_else(|| l.tr(tab).to_owned(), |g| format!("{} › {}", l.tr(tab), l.tr(g)));
+            ui.weak(format!("{}: {path}", l.tr("Agent ribbon")));
+        }
         if !self.note.is_empty() {
             status(ui, &self.note);
         }
@@ -220,6 +295,9 @@ impl PanelState {
                 }
                 if let Some(a) = self.agents.get_mut(self.selected) {
                     ui.weak(format!("{} · {}", a.model, a.endpoint));
+                    if !a.is_loopback {
+                        ui.label(l.tr("Remote provider: messages and attached workbook data are sent to this endpoint."));
+                    }
                     let mut mode = self.mode;
                     let supports_tools = a.supports_tools;
                     let mut access = |ui: &mut Ui| {
@@ -317,7 +395,13 @@ impl PanelState {
                     ));
                 }
                 ScrollArea::vertical().id_salt("wingman_args").max_height((ctx.content_rect().height() * 0.22).max(48.0)).show(ui, |ui| {
-                    ui.monospace(call.preview());
+                    if call.name == "apply_edits" && external.is_none() {
+                        ui.label(l.tr("One approval and one undo step. If a step fails, the plan is rolled back."));
+                        ui.monospace(call.plan_outline());
+                        ui.collapsing(l.tr("Exact arguments"), |ui| ui.monospace(call.preview()));
+                    } else {
+                        ui.monospace(call.preview());
+                    }
                 });
                 let label = if external.is_some() { "Allow call" } else { "Apply edit" };
                 ui.horizontal_wrapped(|ui| {

@@ -19,9 +19,35 @@ pub(in super::super) struct ToolCall {
     pub name: String,
     pub arguments: String,
     pretty: std::sync::OnceLock<String>,
+    plan: std::sync::OnceLock<String>,
 }
 
 impl ToolCall {
+    pub(in super::super) fn plan_outline(&self) -> &str {
+        self.plan.get_or_init(|| {
+            let Some(plan) = serde_json::from_str::<Value>(&self.arguments).ok() else {
+                return String::new();
+            };
+            let label = |s: &str| s.chars().filter(|c| !c.is_control()).take(64).collect::<String>();
+            plan["actions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .take(16)
+                .enumerate()
+                .map(|(i, step)| {
+                    let a = &step["args"];
+                    let details = ["sheet", "range", "source", "target", "destinationSheet", "at", "cell", "lines", "table", "chart", "shape"]
+                        .into_iter()
+                        .filter_map(|k| a.get(k).map(|v| format!("{k}: {}", v.as_str().map(label).unwrap_or_else(|| label(&v.to_string())))))
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    format!("{}. {}  {details}", i + 1, label(step["tool"].as_str().unwrap_or("?")))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+    }
     pub(in super::super) fn preview(&self) -> &str {
         self.pretty.get_or_init(|| {
             serde_json::from_str::<Value>(&self.arguments)
@@ -64,7 +90,7 @@ impl Assembly {
             }
         }
         if let Some(reason) = choice["finish_reason"].as_str() {
-            self.finish = Some(reason.into());
+            self.record_finish(reason);
         }
         Ok(())
     }
@@ -90,7 +116,7 @@ impl Assembly {
             }
         }
         if v["done"] == true {
-            self.finish = Some(v["done_reason"].as_str().unwrap_or("stop").into());
+            self.record_finish(v["done_reason"].as_str().unwrap_or("stop"));
         }
         Ok(())
     }
@@ -149,6 +175,11 @@ impl Assembly {
         }
         Ok(())
     }
+    fn record_finish(&mut self, reason: &str) {
+        if !self.finish.as_deref().is_some_and(|previous| !matches!(previous, "stop" | "tool_calls")) {
+            self.finish = Some(reason.to_owned());
+        }
+    }
     pub(super) fn finished(&self) -> bool {
         self.finish.is_some()
     }
@@ -188,34 +219,55 @@ impl Assembly {
 
 /// Lines split across network packets are combined as bytes before UTF-8 and
 /// JSON decoding. An SSE event may comprise several data lines.
-#[derive(Default)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Frames {
+    Sse,
+    JsonLines,
+}
 pub(super) struct Lines {
+    frames: Frames,
+    native: bool,
+    skip_lf: bool,
     pending: Vec<u8>,
     data: Vec<u8>,
     done: bool,
 }
 impl Lines {
-    pub(super) fn push(&mut self, chunk: &[u8], native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
-        for segment in chunk.split_inclusive(|&b| b == b'\n') {
+    pub(super) fn new(frames: Frames, native: bool) -> Self {
+        Self { frames, native, skip_lf: false, pending: Vec::new(), data: Vec::new(), done: false }
+    }
+    pub(super) fn push(&mut self, chunk: &[u8], a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+        let sse = self.frames == Frames::Sse;
+        for segment in chunk.split_inclusive(|&b| b == b'\n' || (sse && b == b'\r')) {
             if self.done {
                 break;
             }
-            self.pending.extend_from_slice(segment);
-            if self.pending.ends_with(b"\n") {
-                self.line(native, a, notify)?;
+            if std::mem::take(&mut self.skip_lf) && segment == b"\n" {
+                continue;
+            }
+            if let Some((&end, body)) = segment.split_last()
+                && (end == b'\n' || (sse && end == b'\r'))
+            {
+                self.skip_lf = sse && end == b'\r';
+                self.pending.extend_from_slice(body);
+                self.line(a, notify)?;
+            } else {
+                self.pending.extend_from_slice(segment);
             }
         }
         Ok(())
     }
-    fn line(&mut self, native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+    fn line(&mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
         let line = std::mem::take(&mut self.pending);
-        let line = line.strip_suffix(b"\n").unwrap_or(&line);
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        if native {
-            if !line.is_empty() {
-                a.ollama(&decode(line)?, notify)?;
+        if self.frames == Frames::JsonLines {
+            if !line.trim_ascii().is_empty() {
+                if self.native {
+                    a.ollama(&decode(&line)?, notify)?;
+                } else {
+                    a.completion(&decode(&line)?, notify)?;
+                }
             }
-            self.done = a.finished();
+            self.done = self.native && a.finished();
         } else if line.is_empty() {
             self.dispatch(a, notify)?;
         } else if let Some(s) = line.strip_prefix(b"data:") {
@@ -232,16 +284,20 @@ impl Lines {
         if bytes.trim_ascii() == b"[DONE]" {
             self.done = true;
         } else {
-            a.completion(&decode(&bytes)?, notify)?;
+            if self.native {
+                a.ollama(&decode(&bytes)?, notify)?;
+                self.done = a.finished();
+            } else {
+                a.completion(&decode(&bytes)?, notify)?;
+            }
         }
         Ok(())
     }
-    pub(super) fn end(mut self, native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<bool, String> {
-        if !self.pending.is_empty() {
-            self.line(native, a, notify)?;
-        }
-        if !native {
-            self.dispatch(a, notify)?;
+    pub(super) fn end(mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<bool, String> {
+        // JSON lines may end at EOF. SSE requires the blank line, including for [DONE]:
+        // a disconnect must discard both pending line bytes and an unfinished data event.
+        if self.frames == Frames::JsonLines && !self.pending.is_empty() {
+            self.line(a, notify)?;
         }
         Ok(self.done)
     }

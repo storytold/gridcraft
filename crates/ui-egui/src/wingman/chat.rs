@@ -67,6 +67,9 @@ impl PanelState {
             agent,
             target,
             rounds: 0,
+            ribbon: Default::default(),
+            native_offered: Default::default(),
+            completed_wire: 0,
             final_answer: false,
             calls: 0,
             wire: vec![json!({"role":"user","content":content})],
@@ -77,6 +80,9 @@ impl PanelState {
             search: None,
             offered: Default::default(),
         };
+        if turn.target.editor.is_some() {
+            turn.ribbon.switch("Automate")?;
+        }
         self.request(&mut turn, ctx)?;
         self.note.clear();
         self.thread.owner = Some(AgentKey::from(&turn.agent));
@@ -125,17 +131,27 @@ impl PanelState {
         let mut tools = if self.mode == Mode::Chat || !turn.agent.supports_tools || turn.final_answer {
             Vec::new()
         } else {
-            workbook::schemas(self.mode.writes())
+            workbook::schemas(self.mode.writes(), &turn.ribbon, turn.target.editor.is_some())
         };
         tools.retain(|t| {
             let name = t["function"]["name"].as_str().unwrap_or("");
             let editor = super::script_editor::is_write(name).is_some();
             if turn.target.editor.is_some() { editor || workbook::is_write(name) == Ok(false) } else { !editor }
         });
-        turn.offered =
-            if self.mode == Mode::Mcp && turn.agent.supports_tools && !turn.final_answer { self.mcp.offer(&mut tools)? } else { Default::default() };
+        turn.native_offered = tools.iter().filter_map(|v| v["function"]["name"].as_str().map(str::to_owned)).collect();
+        turn.ribbon.issued(&turn.native_offered);
+        turn.offered = if self.mode == Mode::Mcp && turn.agent.supports_tools && !turn.final_answer && turn.ribbon.external() {
+            self.mcp.offer(&mut tools)?
+        } else {
+            Default::default()
+        };
         let search_guide = if self.mode != Mode::Chat && turn.agent.supports_tools { SEARCH_GUIDE } else { "" };
-        let mut used = size(&turn.wire) + PROMPT.len() + search_guide.len() + turn.agent.instructions.len();
+        let workflow = if search_guide.is_empty() {
+            ""
+        } else {
+            "Open the relevant tool tab first; use the schemas on the following request. A menu entry marked guide is manual, not callable. For repetitive changes use native fill, transfers, or comments extraction rather than per-cell writes. Inspect the target before choosing ranges; check proposed formulas before editing. For related edits offer one ordered apply_edits plan, then verify representative endpoints or cached errors. Explicit formulas beginning with = and literal imported text have different semantics."
+        };
+        let mut used = size(&turn.wire) + PROMPT.len() + search_guide.len() + workflow.len() + turn.agent.instructions.len();
         if used > WIRE_LIMIT {
             return Err("Turn is too large. Start a smaller request.".into());
         }
@@ -155,7 +171,10 @@ impl PanelState {
                 used <= history_limit
             })
             .collect::<Vec<_>>();
-        let mut system = format!("{PROMPT}\nCurrent mode: {}.\n{search_guide}", self.mode.label());
+        let mut system = format!("{PROMPT}\nCurrent mode: {}.\n{search_guide}\n{workflow}", self.mode.label());
+        if !tools.is_empty() {
+            system.push_str("\nControls are organized like a ribbon. Use change_tab to reveal one section's tools at a time. This changes your menu only. For a related series of edits, open the tabs you need, then propose apply_edits once. Prefer native range operations: for row-wise sums, write the seed formula and drag_fill; do not enumerate cells. Verify with read_range, inspect_format, inspect_chart or formula_diagnostics as appropriate. Never claim a guide-only button was pressed.");
+        }
         if turn.final_answer {
             system.push_str(
                 "\nTool budget reached. Answer from the results you already have; identify any incomplete work. Do not request another tool.",
@@ -192,6 +211,10 @@ impl PanelState {
             Ok(true) => self.turn = Some(turn),
             Ok(false) => self.remember(turn.wire),
             Err(message) => {
+                if turn.completed_wire > 0 {
+                    turn.wire.truncate(turn.completed_wire);
+                    self.remember(turn.wire);
+                }
                 if !turn.partial.is_empty() {
                     self.thread.line("Assistant (partial)", turn.partial);
                 }
@@ -200,7 +223,7 @@ impl PanelState {
         }
     }
 
-    fn remember(&mut self, messages: Vec<Value>) {
+    pub(super) fn remember(&mut self, messages: Vec<Value>) {
         self.thread.history.push_back(messages);
         while self.thread.history.len() > 16
             || (self.thread.history.len() > 1 && self.thread.history.iter().flatten().map(|m| m.to_string().len()).sum::<usize>() > WIRE_LIMIT)
@@ -268,13 +291,18 @@ impl PanelState {
             ctx.request_repaint();
         }
         if turn.queue.is_empty() {
+            if turn.external.is_some() {
+                return Ok(true);
+            }
+            turn.completed_wire = turn.wire.len();
             self.request(turn, ctx)?;
         }
         Ok(true)
     }
 
     pub(super) fn needs_approval(&self, turn: &Turn, call: &provider::ToolCall) -> bool {
-        (self.mode.writes() && workbook::is_write(&call.name) == Ok(true)) || (self.mode == Mode::Mcp && turn.offered.contains_key(&call.name))
+        (self.mode.writes() && turn.native_offered.contains(&call.name) && workbook::is_write(&call.name) == Ok(true))
+            || (self.mode == Mode::Mcp && turn.offered.contains_key(&call.name))
     }
 
     fn check_target(app: &SheetApp, turn: &Turn) -> Result<(), String> {
@@ -304,11 +332,20 @@ impl PanelState {
             return Ok(());
         }
         let result = (|| {
+            if !turn.native_offered.contains(&call.name) {
+                return Err("Tool was not offered on this request. Use change_tab, then call a control shown in the new menu.".into());
+            }
             let writes = workbook::is_write(&call.name)?;
             if writes && !(approve && self.mode.writes()) {
                 return Err("Edit denied. Do not retry.".into());
             }
             let mut args: Value = serde_json::from_str(&call.arguments).map_err(|_| "Invalid JSON tool arguments.".to_string())?;
+            if call.name == "change_tab" {
+                return turn.ribbon.open(&args, self.mode, turn.target.editor.is_some()).map(Some);
+            }
+            if call.name == "apply_edits" {
+                return workbook::ribbon::apply(app, &turn.ribbon, &args).map(Some);
+            }
             if matches!(call.name.as_str(), "grep" | "formula_diagnostics") {
                 let mut batch = turn.search.take().unwrap_or_default();
                 let limit = args["limit"].as_u64().unwrap_or(20) as usize;
@@ -350,6 +387,10 @@ impl PanelState {
                 receipt.push_str(" · oversized fields skipped");
             }
             self.thread.line(label, receipt);
+        } else if call.name == "change_tab" && data["result"]["activeTab"].is_string() {
+            let (tab, group) = turn.ribbon.location();
+            let path = group.map_or_else(|| tab.to_owned(), |g| format!("{tab} › {g}"));
+            self.thread.line("Agent ribbon", path);
         } else {
             self.thread.line(label, format!("{}\n{}", call.name, data));
         }

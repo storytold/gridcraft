@@ -15,6 +15,8 @@ mod layers;
 mod parity;
 mod stats;
 mod version;
+#[cfg(feature = "engine")]
+mod wingman_commands;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
@@ -24,7 +26,7 @@ usage: cargo xtask <command>
 
 commands:
   ci              i18n-report, fmt --check, clippy -D warnings, test, doctest, assets, layers, wasm,
-                  parity --check, keytips --check (stops at the first failure; the parity check runs
+                  parity --check, keytips --check, wingman-commands --check (stops at the first failure; the parity check runs
                   only if docs/parity-checklist.md exists)
   test            workspace tests (cargo nextest when installed, else cargo test), then doctests
   assets          check that every icon/image/font/sample file is attributed in ATTRIBUTION.md
@@ -33,6 +35,8 @@ commands:
   wasm            cargo check --target wasm32-unknown-unknown for the L0-L5 crates (+ gridcraft-web), one call
   parity [--check] [--out PATH]
                   write docs/parity-checklist.md from gridcraft_engine::catalog (implemented vs missing ids)
+  wingman-commands [--check]
+                  index workbook commands, actual desktop menus and Wingman adapters (metadata only)
   keytips [--check]
                   regenerate crates/ui-egui/src/keytips/generated.rs from keytips.json (--check: fail if stale)
   version [set X.Y.Z[-pre]]
@@ -58,6 +62,8 @@ fn main() -> ExitCode {
         Some("bench") => bench::run(&root(), &rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root(), &rest),
+        #[cfg(feature = "engine")]
+        Some("wingman-commands") => wingman_commands::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
         Some("version") => version::run(&root(), &rest),
@@ -237,6 +243,8 @@ fn cmd_ci() -> Result<(), String> {
             }),
         ),
         ("keytips", Box::new(|| keytips::run(&root(), &["--check"]))),
+        #[cfg(feature = "engine")]
+        ("wingman-commands", Box::new(|| wingman_commands::run(&root(), &["--check"]))),
     ];
     let mut done = Vec::new();
     for (name, f) in &steps {

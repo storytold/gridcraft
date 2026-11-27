@@ -5,6 +5,33 @@ use gridcraft_engine::find_command;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+/// All steps execute synchronously after one approval. No group spans a model request.
+pub(super) fn transaction(
+    app: &mut SheetApp,
+    label: &str,
+    apply: impl FnOnce(&mut gridcraft_engine::Session) -> gridcraft_engine::Result<Value>,
+) -> Result<(Value, Option<String>), String> {
+    let before = app.session.active().ok_or("No open workbook")?.wb.clone();
+    let value = app.run_command_using("wingman.editPlan", Value::Null, |s, _, _| {
+        let d = s.active().ok_or("No open workbook")?;
+        if s.in_group(d.uid) {
+            return Err("Finish the open workbook action before applying a Wingman edit.".into());
+        }
+        let remembered = d.sheet_selections.clone();
+        let queued = s.ui_requests.len();
+        let result = s.grouped(label, apply);
+        if result.is_err() {
+            s.ui_requests.truncate(queued);
+            if let Some(d) = s.active_mut() {
+                d.sheet_selections = remembered;
+            }
+        }
+        result.map_err(|e| e.to_string())
+    })?;
+    let undo = app.session.active().filter(|d| !Arc::ptr_eq(&before, &d.wb)).and_then(|d| d.undo.last()).map(|e| e.label.clone());
+    Ok((value, undo))
+}
+
 pub(super) fn edit(app: &mut SheetApp, id: &'static str, args: Value) -> Result<(Value, Option<String>), String> {
     let before = app.session.active().ok_or("No open workbook")?.wb.clone();
     let result = app.run_command_using(id, args, |s, id, args| {
@@ -27,8 +54,10 @@ pub(super) fn shortcuts(app: &mut SheetApp, ui: &Ui, composer: &super::composer:
         return;
     }
     let Some(mut id) = ctx.memory(|m| m.focused()) else { return };
-    let sent = id == super::composer::Composer::id() && composer.workbook_owns_undo();
-    if (ctx.text_edit_focused() && !sent)
+    let sent = id == super::composer::Composer::id()
+        && composer.workbook_owns_undo()
+        && !ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_) | egui::Event::Text(_) | egui::Event::Ime(_))));
+    if ((id == super::composer::Composer::id() || ctx.text_edit_focused()) && !sent)
         || app.editor.is_some()
         || app.text_box_editor.is_some()
         || app.message.is_some()

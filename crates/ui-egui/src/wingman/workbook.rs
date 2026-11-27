@@ -2,12 +2,26 @@
 //! engine commands. Never infer permissions from a provider's tool label, command prefixes,
 //! or the engine's `query` flag (some UI queries toggle a pane).
 
+#[path = "workbook_analysis.rs"]
+mod analysis;
+#[path = "workbook_appearance.rs"]
+mod appearance;
+#[path = "workbook_buttons.rs"]
+mod buttons;
 #[path = "workbook_context.rs"]
 mod context;
 #[path = "workbook_data.rs"]
 mod data;
 #[path = "workbook_formula.rs"]
 mod formula;
+#[path = "workbook_layout.rs"]
+mod layout;
+#[path = "workbook_menu.rs"]
+pub(super) mod menu;
+#[path = "workbook_profile.rs"]
+mod profile;
+#[path = "workbook_ribbon.rs"]
+pub(super) mod ribbon;
 #[path = "workbook_search.rs"]
 mod search;
 
@@ -69,6 +83,60 @@ pub(super) fn comment_transfer_params() -> Json {
 }
 
 const TOOLS: &[Tool] = &[
+    tool!(
+        "profile_range",
+        "Count stored/cached types per column (including blanks, formula errors and numeric-looking text), with example cell addresses and row pagination. Does not recalculate or change data.",
+        None,
+        ["range"],
+        ["sheet", "offset"]
+    ),
+    tool!(
+        "select_range",
+        "Select a visible rectangle in the actual grid. Following edits on the same sheet may use @selection as their range or fill source. Selection by itself is navigation.",
+        Some("selection.set"),
+        ["sheet", "range"],
+        []
+    ),
+    tool!(
+        "number_format",
+        "Apply a Home number format such as Currency or Percentage to a range. Supply either a ribbon format or a custom code.",
+        Some("home.numberFormat"),
+        ["sheet", "range"],
+        ["format", "code"]
+    ),
+    tool!(
+        "drag_fill",
+        "Drag the native fill handle along one axis. target includes the source (or @selection) plus new rows or columns. To fill a block from one cell, fill across then down. Copy mode shifts relative formula references; $ anchors stay fixed.",
+        Some("edit.autoFill"),
+        ["sheet", "source", "target"],
+        ["fillMode"]
+    ),
+    tool!(
+        "transfer_range",
+        "Copy, cut/move, or transpose a worksheet block to at. Whole columns or rows trim to their occupied span. Other cells are not overwritten unless overwrite is requested.",
+        Some("range.transfer"),
+        ["sheet", "source", "at"],
+        ["destinationSheet", "operation", "overwrite"]
+    ),
+    tool!(
+        "reshape_delimited",
+        "Split delimited text locally into literal fields. rows: one output row per input cell; columns: one column per cell; row: flatten all fields into one row.",
+        Some("range.reshapeDelimited"),
+        ["sheet", "source", "at", "delimiter"],
+        ["destinationSheet", "layout", "overwrite"]
+    ),
+    tool!(
+        "set_borders",
+        "Apply a native border preset, optionally with a line style and RGB color.",
+        Some("home.borders"),
+        ["sheet", "range", "preset"],
+        ["lineStyle", "color"]
+    ),
+    tool!("merge_cells", "Merge a rectangle without discarding occupied cells.", Some("home.mergeCells"), ["sheet", "range"], []),
+    tool!("unmerge_cells", "Unmerge whole merged areas, keeping contents at their anchors.", Some("home.unmergeCells"), ["sheet", "range"], []),
+    tool!("inspect_format", "Inspect actual range styles, borders, fills, alignment and merges.", None, ["range"], ["sheet", "offset"]),
+    tool!("recommend_charts", "Rank native chart types suitable for the range.", None, ["sheet", "range"], []),
+    tool!("inspect_chart", "Read back chart settings and series by chart ID.", None, ["sheet", "chart"], ["offset"]),
     tool!("workbook_info", "Inspect visible sheets and the active selection; no local file paths.", None, [], ["offset"]),
     tool!(
         "grep",
@@ -93,10 +161,10 @@ const TOOLS: &[Tool] = &[
     ),
     tool!(
         "check_formula",
-        "Check the syntax of a proposed =formula before editing. Uses GridCraft's native canonical formula grammar; does not evaluate, resolve names or modify a cell.",
+        "Lint a proposed =formula before editing: native parser, function signatures and worksheet context. Does not evaluate or write a cell. Optionally give its intended sheet and cell.",
         None,
         ["formula"],
-        []
+        ["sheet", "cell"]
     ),
     tool!(
         "read_range",
@@ -123,8 +191,8 @@ const TOOLS: &[Tool] = &[
         "find_commands",
         "Look up GridCraft commands, ribbon paths and parameter hints. Documentation only; a listed command is not permission to run it.",
         None,
-        ["search"],
-        ["offset"]
+        [],
+        ["search", "section", "group", "offset"]
     ),
     tool!("find_functions", "Find supported spreadsheet formulas, signatures and descriptions by name or keyword.", None, ["search"], ["offset"]),
     tool!("list_scripts", "List workbook-native Automate scripts and imported VBA project metadata, without execution.", None, [], ["offset"]),
@@ -234,17 +302,17 @@ const TOOLS: &[Tool] = &[
     ),
     tool!(
         "create_chart",
-        "Create a chart from an explicit data rectangle. at is its optional top-left anchor.",
+        "Create a chart from an explicit data rectangle; type auto uses GridCraft's native recommendation. at is its optional top-left anchor.",
         Some("insert.chart"),
         ["sheet", "range", "type"],
-        ["title", "at"]
+        ["title", "at", "subtype", "width", "height"]
     ),
     tool!(
         "update_chart",
         "Change the identified chart on the active sheet; chart is its numeric ID from list_objects.",
         Some("chart.set"),
         ["sheet", "chart"],
-        ["type", "title", "xTitle", "yTitle", "legend", "dataLabels", "gridlines", "at"]
+        ["type", "title", "xTitle", "yTitle", "legend", "dataLabels", "gridlines", "at", "subtype", "width", "height"]
     ),
     tool!(
         "create_table",
@@ -278,8 +346,11 @@ const TOOLS: &[Tool] = &[
     ),
 ];
 
+fn tools() -> impl Iterator<Item = &'static Tool> {
+    TOOLS.iter().chain(buttons::TOOLS).chain(layout::tools())
+}
 fn lookup(name: &str) -> Result<&'static Tool, String> {
-    TOOLS.iter().find(|t| t.name == name).ok_or_else(|| format!("Unknown Wingman tool: {name}"))
+    tools().find(|t| t.name == name).ok_or_else(|| format!("Unknown Wingman tool: {name}"))
 }
 
 fn string(max: usize) -> Json {
@@ -293,6 +364,25 @@ fn object(properties: Json, required: &[&str]) -> Json {
 fn field(k: &str) -> Json {
     let boolean = || json!({"type":"boolean"});
     match k {
+        "tab" => json!({"type":"string","enum":ribbon::SECTIONS}),
+        "section" | "group" => string(120),
+        "actions" => {
+            json!({"type":"array","minItems":1,"maxItems":16,"items":object(json!({"tool":string(64),"args":{"type":"object"}}), &["tool","args"])})
+        }
+        "operation" => json!({"type":"string","enum":["copy","move","transpose"]}),
+        "layout" => json!({"type":"string","enum":["rows","columns","row"]}),
+        "source" | "target" => string(42),
+        "delimiter" => string(8),
+        "overwrite" => boolean(),
+        "fillMode" => {
+            json!({"type":"string","enum":["copy","series","formats","values","extend","days","weekdays","months","years","linearTrend","growthTrend"]})
+        }
+        "format" => {
+            json!({"type":"string","enum":["General","Number","Currency","Accounting","Short Date","Long Date","Time","Percentage","Fraction","Scientific","Text","Comma"]})
+        }
+        "code" => string(255),
+        "width" | "height" => json!({"type":"number","minimum":32,"maximum":4096}),
+        "subtype" => json!({"type":"string","enum":["clustered","stacked","stacked100","markers","stacked100Markers","lines"]}),
         "pattern" => string(512),
         "scope" => json!({"type":"string","enum":["sheet","workbook"]}),
         "searchIn" => json!({"type":"string","enum":["all","value","display","formula","comment","error"]}),
@@ -307,9 +397,11 @@ fn field(k: &str) -> Json {
             json!({"type":"integer","minimum":1,"maximum":gridcraft_engine::core::MAX_ROWS})
         }
         "headerText" => string(32767),
-        "cell" | "at" => json!({"type":"string","description":"Unqualified A1 cell address","maxLength":20}),
+        "cell" | "at" => {
+            json!({"type":"string","description":"Unqualified A1 cell address. @selection requires one selected cell on the target sheet.","maxLength":20})
+        }
         "range" => {
-            json!({"type":"string","description":"One literal A1 address or rectangular A1:B5 range, not a named, whole-row or whole-column reference","maxLength":42})
+            json!({"type":"string","description":"One unqualified A1 address, rectangular A1:B5 range, or @selection on the target sheet. Whole axes only where the tool supports them.","maxLength":42})
         }
         "type" => json!({"type":"string","enum":CHARTS}),
         "kind" => json!({"type":"string","enum":["charts","comments","tables","names"]}),
@@ -323,17 +415,7 @@ fn field(k: &str) -> Json {
             json!({"type":"array","minItems":1,"maxItems":8,"items":object(json!({"column":field("column"),"order":{"type":"string","enum":["asc","desc"]}}), &["column","order"])})
         }
         "matches" => json!({"type":"array","minItems":1,"maxItems":128,"items":string(255)}),
-        "style" => {
-            let font = object(
-                json!({"name":string(128),"size":{"type":"number","minimum":1,"maximum":409},"bold":boolean(),"italic":boolean(),"strike":boolean()}),
-                &[],
-            );
-            let align = object(
-                json!({"wrap":boolean(),"h":{"type":"string","enum":["General","Left","Center","Right","Fill","Justify","CenterAcross","Distributed"]},"v":{"type":"string","enum":["Top","Center","Bottom","Justify","Distributed"]}}),
-                &[],
-            );
-            object(json!({"font":font, "align":align, "numFmt":string(255)}), &[])
-        }
+        "style" | "preset" | "lineStyle" => appearance::field(k),
         "values" => {
             json!({"type":"array","minItems":1,"maxItems":MAX_CELLS,"items":{"type":"array","minItems":1,"maxItems":MAX_CELLS,"items":{"type":["string","number","boolean","null"]}}})
         }
@@ -342,7 +424,7 @@ fn field(k: &str) -> Json {
         }
         "input" | "text" => string(32767),
         "title" | "xTitle" | "yTitle" => string(1024),
-        _ => string(255),
+        _ => buttons::field(k).or_else(|| layout::field(k)).unwrap_or_else(|| string(255)),
     }
 }
 
@@ -353,7 +435,9 @@ impl Tool {
             .iter()
             .chain(self.optional)
             .map(|&k| {
-                let schema = if (self.name, k) == ("inspect_formula", "cell") {
+                let schema = if (self.name, k) == ("create_chart", "type") {
+                    json!({"type":"string","enum":std::iter::once("auto").chain(CHARTS.iter().copied()).collect::<Vec<_>>()})
+                } else if (self.name, k) == ("inspect_formula", "cell") {
                     json!({"type":"string","description":"A1 cell address, optionally sheet-qualified, e.g. 'Quarter 1'!B2","maxLength":320})
                 } else if matches!(self.name, "grep" | "formula_diagnostics") && k == "range" {
                     json!({"type":"string","description":"Optional A1 range on each searched sheet, e.g. A1:D100 or AB:AB","maxLength":42})
@@ -367,16 +451,28 @@ impl Tool {
     }
 }
 
-pub(super) fn schemas(allow_write: bool) -> Vec<Json> {
-    TOOLS
-        .iter()
-        .filter(|t| allow_write || t.command.is_none())
+pub(super) fn schemas(allow_write: bool, ribbon: &ribbon::Ribbon, editor: bool) -> Vec<Json> {
+    let mut out: Vec<_> = tools()
+        .filter(|t| ribbon.includes(t.name) && (t.command.is_none() || allow_write && !editor))
         .map(|t| json!({"type":"function","function":{"name":t.name,"description":t.help,"parameters":t.params()}}))
-        .chain(super::script_editor::schemas(allow_write))
-        .collect()
+        .collect();
+    if editor && ribbon.includes("read_macro_draft") {
+        out.extend(super::script_editor::schemas(allow_write));
+    }
+    out.push(json!({"type":"function","function":{"name":"change_tab","description":"Switch your tool menu, not the user's ribbon. Open a tab to see its groups. Optionally narrow it to one exact group. Home: format/move/fill. Insert: charts/pivots. Formulas: lint/dependencies. Data: filter/sort/split. Review: comments. Automate: native scripts. External: connected MCP.","parameters":ribbon::switch_schema()}}));
+    if allow_write && !editor {
+        out.push(json!({"type":"function","function":{"name":"apply_edits","description":"Apply 1–16 ordered spreadsheet actions with one user approval and one Undo. Use worksheet tool names and args from tabs opened this turn. No scripts, external tools, or nested plans. If a step fails, roll back the plan.","parameters":object(json!({"actions":field("actions")}),&["actions"])}}));
+    }
+    out
 }
 
 pub(super) fn is_write(name: &str) -> Result<bool, String> {
+    if name == "change_tab" {
+        return Ok(false);
+    }
+    if name == "apply_edits" {
+        return Ok(true);
+    }
     if let Some(write) = super::script_editor::is_write(name) {
         return Ok(write);
     }
@@ -391,10 +487,19 @@ pub(super) fn valid_field(key: &str, value: &Json) -> bool {
 
 fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
     let fail = || format!("Invalid {path}; expected {}", spec["type"]);
-    if let Some(types) = spec["type"].as_array() {
-        return if types.iter().any(|t| validate(&json!({"type":t}), value, path).is_ok()) { Ok(()) } else { Err(fail()) };
-    }
-    match spec["type"].as_str() {
+    let kind = spec["type"].as_str().or_else(|| {
+        spec["type"].as_array()?.iter().filter_map(Json::as_str).find(|t| match *t {
+            "boolean" => value.is_boolean(),
+            "string" => value.is_string(),
+            "number" => value.is_number(),
+            "integer" => value.is_i64(),
+            "null" => value.is_null(),
+            "array" => value.is_array(),
+            "object" => value.is_object(),
+            _ => false,
+        })
+    });
+    match kind {
         Some("object") => {
             let fields = value.as_object().ok_or_else(fail)?;
             if let Some(keys) = spec["required"].as_array() {
@@ -413,7 +518,7 @@ fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
         }
         Some("array") => {
             let items = value.as_array().ok_or_else(fail)?;
-            if items.is_empty() || items.len() as u64 > spec["maxItems"].as_u64().unwrap_or(MAX_CELLS) {
+            if (items.len() as u64) < spec["minItems"].as_u64().unwrap_or(0) || items.len() as u64 > spec["maxItems"].as_u64().unwrap_or(MAX_CELLS) {
                 return Err(format!("Invalid number of entries at {path}"));
             }
             for item in items {
@@ -433,8 +538,8 @@ fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
         Some("null") if value.is_null() => {}
         Some("integer")
             if value
-                .as_u64()
-                .is_some_and(|n| n >= spec["minimum"].as_u64().unwrap_or(0) && n <= spec["maximum"].as_u64().unwrap_or(u64::from(u32::MAX))) => {}
+                .as_i64()
+                .is_some_and(|n| n >= spec["minimum"].as_i64().unwrap_or(0) && n <= spec["maximum"].as_i64().unwrap_or(i64::from(u32::MAX))) => {}
         Some("number")
             if value.as_f64().is_some_and(|n| {
                 n.is_finite() && n >= spec["minimum"].as_f64().unwrap_or(f64::MIN) && n <= spec["maximum"].as_f64().unwrap_or(f64::MAX)
@@ -466,15 +571,27 @@ pub(super) fn execute_with_matcher(
     }
     let tool = lookup(name)?;
     validate(&tool.params(), args, name)?;
+    let resolved;
+    let args = if tool.command.is_none() {
+        resolved = ribbon::resolve_selection(app.session.active().ok_or("No open workbook")?, args)?;
+        &*resolved
+    } else {
+        args
+    };
     let result = if let Some(command) = tool.command {
-        let p = write_args(app, tool, args)?;
+        let d = app.session.active().ok_or("No open workbook")?;
+        let p = write_args(d, tool, args)?;
         if name == "save_script" && args["replace"] != true {
             let scripts = app.run("automate.allScripts", json!({}))?;
             if scripts.as_array().is_some_and(|a| a.iter().any(|s| s["name"] == args["name"])) {
                 return Err("That script already exists; replace must be explicit.".into());
             }
         }
-        let (value, undo_label) = super::history::edit(app, command, p)?;
+        let (value, undo_label) = if name == "select_range" {
+            super::history::transaction(app, "Wingman: Select range", |s| s.execute(command, p))?
+        } else {
+            super::history::edit(app, command, p)?
+        };
         // Some commands return null or a potentially large report of auto-converted entries.
         // Never tell the model an already applied edit failed merely because its receipt is large.
         let receipt = json!({"applied":true,"undoLabel":undo_label,"result":value});
@@ -492,31 +609,15 @@ pub(super) fn execute_with_matcher(
                 search::grep_slice(app.session.active().ok_or("No open workbook")?, &query, matcher)?
             }
             "inspect_formula" => formula::query(app, args)?,
-            "check_formula" => {
-                let source = args["formula"].as_str().ok_or("Expected a formula starting with =")?;
-                if !source.starts_with('=') {
-                    return Err("Start the formula with =, as for set_cell.".into());
-                }
-                match gridcraft_engine::formula::parse(source) {
-                    Ok(_) => json!({"validSyntax":true}),
-                    Err(e) => json!({"validSyntax":false,"message":e.msg,"positionInExpression":e.pos}),
-                }
+            "inspect_format" => appearance::inspect(app.session.active().ok_or("No open workbook")?, args)?,
+            "profile_range" => profile::inspect(app.session.active().ok_or("No open workbook")?, args)?,
+            "check_formula" | "recommend_charts" | "inspect_chart" => analysis::query(app, name, args)?,
+            "inspect_table" | "inspect_rules" => buttons::read(app.session.active().ok_or("No open workbook")?, name, args)?,
+            "inspect_layout" | "inspect_pivots" | "inspect_shapes" | "preview_goal_seek" => {
+                let d = app.session.active().ok_or("No open workbook")?;
+                layout::query(d, context::sheet(d, args)?, name, args)?
             }
-            "find_commands" => {
-                let q = args["search"].as_str().unwrap_or("").trim().to_ascii_lowercase();
-                let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-                let found = gridcraft_engine::command_specs()
-                    .iter()
-                    .filter(|c| [c.id, c.label, c.params].into_iter().chain(c.menu.iter().copied()).any(|s| s.to_ascii_lowercase().contains(&q)));
-                context::page(
-                    found.skip(offset).map(|c| {
-                        json!({"id":c.id,"label":c.label,"ribbon":c.menu,"parameters":c.params,
-                        "wingmanTool":TOOLS.iter().find(|t|t.command==Some(c.id)).map(|t|t.name)})
-                    }),
-                    offset,
-                    16,
-                )
-            }
+            "find_commands" => menu::find(args)?,
             "find_functions" | "list_scripts" | "read_script" => script_or_function_page(app, name, args)?,
             _ => context::query(app, name, args)?,
         }
@@ -562,11 +663,12 @@ fn script_or_function_page(app: &mut SheetApp, name: &str, args: &Json) -> Resul
     Ok(context::page(result.as_array().ok_or("Expected list")?.iter().skip(offset).cloned(), offset, 32))
 }
 
-fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
-    let d = app.session.active().ok_or("No open workbook")?;
+fn write_args(d: &gridcraft_engine::DocState, t: &Tool, supplied: &Json) -> Result<Json, String> {
     if d.read_only_source.is_some() {
         return Err("This workbook was opened read-only.".into());
     }
+    let resolved = ribbon::resolve_selection(d, supplied)?;
+    let args = &*resolved;
     let mut p = args.clone();
     let sh = context::sheet(d, args)?;
     // Cells and styles go through the corresponding protection-aware engine paths. The object
@@ -579,6 +681,8 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
                 | "format_range"
                 | "set_fill"
                 | "set_ink"
+                | "set_borders"
+                | "number_format"
                 | "add_sheet"
                 | "rename_sheet"
                 | "size_rows"
@@ -606,14 +710,50 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
         }
     }
     if let Some(range) = args["range"].as_str() {
-        limited_range(range)?;
+        match t.name {
+            "select_range" | "filter_column" => {
+                RangeRef::parse(range).ok_or("Specify one literal A1 range.")?;
+            }
+            "set_fill" | "set_ink" | "number_format" => {
+                appearance::style_range(sh, args)?;
+            }
+            "format_range" | "set_borders" | "merge_cells" | "unmerge_cells" | "create_chart" | "clear_filter" | "reapply_filter"
+            | "conditional_format" | "clear_format_rules" | "set_validation" | "clear_validation" | "remove_duplicates" => {} // Each native adapter validates its own work bound.
+            _ => {
+                limited_range(range)?;
+            }
+        }
     }
     match t.name {
+        name if buttons::TOOLS.iter().any(|v| v.name == name) => buttons::prepare(d, sh, name, &mut p)?,
+        name if layout::tools().iter().any(|v| v.name == name) => layout::prepare(d, sh, name, &mut p)?,
         "set_values" => matrix(args)?,
-        "format_range"
-            if !args["style"].as_object().is_some_and(|s| s.values().any(|v| !v.is_object() || v.as_object().is_some_and(|v| !v.is_empty()))) =>
-        {
-            return Err("Supply a style property to change.".into());
+        "format_range" | "set_borders" | "merge_cells" | "unmerge_cells" => appearance::prepare(d, sh, t.name, &mut p)?,
+        "number_format" => {
+            if args.get("format").is_some() == args.get("code").is_some() || args["code"].as_str().is_some_and(|s| s.trim().is_empty()) {
+                return Err("Specify exactly one ribbon format or nonempty custom number format code.".into());
+            }
+        }
+        "drag_fill" => {
+            let area = |k: &str| {
+                args[k]
+                    .as_str()
+                    .and_then(RangeRef::parse)
+                    .filter(|r| r.count() <= 100_000)
+                    .ok_or("Specify source and target rectangles of at most 100,000 cells.")
+            };
+            let source = area("source")?;
+            let target = area("target")?;
+            if source.width() != target.width() && source.height() != target.height() {
+                return Err("One drag fills one axis. Fill a row first, then drag that row down (these can share a plan).".into());
+            }
+            if source == target || !gridcraft_engine::fill::holds_source_in_corner(source, target) {
+                return Err("The target must extend the source and contain it in a corner.".into());
+            }
+            if !d.wb.active().is_some_and(|a| a.uid == sh.uid) {
+                return Err("Select a range on the requested sheet before dragging its handle.".into());
+            }
+            p = json!({"sheet":sh.name,"source":source.a1(),"target":target.a1(),"mode":args["fillMode"].as_str().unwrap_or("copy")});
         }
         "set_fill" | "set_ink" => {
             let color = args["color"].as_str().unwrap_or("");
@@ -623,6 +763,7 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
                 return Err("Supply a #RRGGBB color, none (fill) or auto (ink).".into());
             }
         }
+        "create_chart" => analysis::prepare_chart(d, sh, t.name, &mut p)?,
         "update_chart" => {
             if d.wb.active().map(|active| active.uid.get()) != Some(sh.uid.get()) {
                 return Err("Chart updates apply only to the active sheet.".into());
@@ -630,9 +771,10 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
             if !t.optional.iter().any(|&k| args.get(k).is_some()) {
                 return Err("Supply at least one chart property to change.".into());
             }
+            analysis::prepare_chart(d, sh, t.name, &mut p)?;
         }
         "set_comment" | "set_note" | "reply_comment" | "resolve_comment" => prepare_comment(sh, t.name, &mut p)?,
-        "save_script" => return script_steps(app, args),
+        "save_script" => return script_steps_for(d, args),
         _ => data::prepare(d, sh, t.name, &mut p)?,
     }
     Ok(p)
@@ -673,6 +815,10 @@ fn prepare_comment(sh: &gridcraft_engine::model::Sheet, name: &str, p: &mut Json
 }
 
 pub(super) fn script_steps(app: &SheetApp, args: &Json) -> Result<Json, String> {
+    script_steps_for(app.session.active().ok_or("No open workbook")?, args)
+}
+
+fn script_steps_for(d: &gridcraft_engine::DocState, args: &Json) -> Result<Json, String> {
     validate(&field("steps"), &args["steps"], "steps")?;
     let mut commands = Vec::new();
     for step in args["steps"].as_array().ok_or("Expected script steps")? {
@@ -684,7 +830,7 @@ pub(super) fn script_steps(app: &SheetApp, args: &Json) -> Result<Json, String> 
         }
         let id = tool.command.ok_or("Only editable tools can be saved as script steps")?;
         validate(&tool.params(), &step["args"], tool.name)?;
-        commands.push(json!({"command":id, "params":write_args(app, tool, &step["args"])?}));
+        commands.push(json!({"command":id, "params":write_args(d, tool, &step["args"])?}));
     }
     Ok(json!({"name":args["name"],"commands":commands}))
 }

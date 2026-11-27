@@ -21,20 +21,20 @@ pub(super) enum Request {
     Refresh(oneshot::Sender<Catalog>),
 }
 pub(super) struct Call {
-    pub tool: String,
+    pub entry: Arc<Entry>,
     pub arguments: serde_json::Map<String, Value>,
     pub reply: Sender,
 }
 pub(super) struct Connection {
     stop: Option<oneshot::Sender<()>>,
     pub calls: mpsc::Sender<Request>,
-    pub catalog: oneshot::Receiver<Catalog>,
+    pub catalog: Option<oneshot::Receiver<Catalog>>,
 }
 impl Connection {
     pub fn refresh(&mut self) -> Result<(), String> {
         let (tx, rx) = oneshot::channel();
         self.calls.try_send(Request::Refresh(tx)).map_err(|_| "MCP worker is busy or disconnected.")?;
-        self.catalog = rx;
+        self.catalog = Some(rx);
         Ok(())
     }
 }
@@ -197,20 +197,29 @@ async fn serve(
     tokio::pin!(ended);
     let handle_requests = async {
         let initial = catalog(&peer, &cfg, &name).await;
-        let failed = initial.is_err();
+        let mut confirmed = initial.as_ref().ok().cloned();
         let _ = catalog_tx.send(initial);
         ctx.request_repaint_of(view);
-        if !failed {
+        if confirmed.is_some() {
             while let Some(request) = rx.recv().await {
                 match request {
                     Request::Refresh(tx) => {
-                        let _ = tx.send(catalog(&peer, &cfg, &name).await);
+                        let listed = catalog(&peer, &cfg, &name).await;
+                        confirmed = listed.as_ref().ok().cloned();
+                        let _ = tx.send(listed);
                     }
                     Request::Call(mut c) => {
+                        // A click can enqueue an approval while refresh is already queued.
+                        // Check the actual catalog again in worker order, not just UI order.
+                        if !confirmed.as_ref().is_some_and(|items| items.iter().any(|e| Arc::ptr_eq(e, &c.entry))) {
+                            let _ = c.reply.send(Err("MCP catalog changed; request this tool again.".into()));
+                            ctx.request_repaint_of(view);
+                            continue;
+                        }
                         let result = tokio::select! {
                             biased;
                             () = c.reply.closed() => continue,
-                            r = tokio::time::timeout(Duration::from_secs(cfg.timeout_seconds),invoke(&peer,c.tool,c.arguments)) =>
+                            r = tokio::time::timeout(Duration::from_secs(cfg.timeout_seconds),invoke(&peer,c.entry.tool.clone(),c.arguments)) =>
                                 r.unwrap_or_else(|_| Err("MCP tool timed out; not retried.".into())),
                         };
                         let _ = c.reply.send(result);
@@ -244,5 +253,5 @@ pub(super) fn start(name: String, cfg: ServerConfig, ctx: egui::Context) -> Resu
             ctx.request_repaint_of(viewport);
         })
         .map_err(|_| "Cannot start MCP worker.")?;
-    Ok(Connection { stop: Some(stop), calls, catalog })
+    Ok(Connection { stop: Some(stop), calls, catalog: Some(catalog) })
 }

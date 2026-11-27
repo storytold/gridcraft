@@ -1,4 +1,4 @@
-use super::stream::{Assembly, Lines, Reply};
+use super::stream::{Assembly, Frames, Lines, Reply};
 use super::{
     settings::Protocol,
     thinking::{Levels, Thinking},
@@ -7,17 +7,32 @@ use super::{
 use serde_json::{Value, json};
 
 fn receive(bytes: &[u8], native: bool) -> Result<Reply, String> {
-    let mut lines = Lines::default();
+    framed(bytes, if native { Frames::JsonLines } else { Frames::Sse }, native)
+}
+fn framed(bytes: &[u8], frames: Frames, native: bool) -> Result<Reply, String> {
+    let mut lines = Lines::new(frames, native);
     let mut assembly = Assembly::default();
     for chunk in bytes.chunks(1) {
-        lines.push(chunk, native, &mut assembly, &|_| {})?;
+        lines.push(chunk, &mut assembly, &|_| {})?;
     }
-    let terminated = lines.end(native, &mut assembly, &|_| {})?;
+    let terminated = lines.end(&mut assembly, &|_| {})?;
     assembly.reply(terminated, false)
 }
 
 fn event(delta: Value, finish: Value) -> String {
     format!("data: {}\r\n\r\n", json!({"choices":[{"delta":delta,"finish_reason":finish}]}))
+}
+
+#[test]
+fn stream_framing_and_completion_reasons_gate_tool_dispatch() {
+    let delta = json!({"tool_calls":[{"id":"one","function":{"name":"read","arguments":"{}"}}]});
+    let pending = event(delta.clone(), Value::Null);
+    assert!(receive((pending.clone() + "data: [DONE]\n").as_bytes(), false).is_err());
+    assert!(receive((pending + "data: [DONE]\r\r").replace("\r\n", "\r").as_bytes(), false).is_ok());
+    let filtered = event(delta.clone(), json!("content_filter")) + &event(json!({}), json!("stop"));
+    assert!(receive(filtered.as_bytes(), false).is_err());
+    let line = json!({"choices":[{"delta":delta,"finish_reason":"tool_calls"}]}).to_string();
+    assert_eq!(framed(line.as_bytes(), Frames::JsonLines, false).unwrap().tool_calls.len(), 1);
 }
 
 #[test]

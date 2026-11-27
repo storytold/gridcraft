@@ -54,6 +54,7 @@ pub(super) struct Composer {
     dismissed: Option<Query>,
     ime_active: bool,
     menu_rect: Option<egui::Rect>,
+    selected_row: Option<egui::Id>,
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -125,19 +126,41 @@ impl Query {
         let tail = &text[pos..];
         // Only complete an unfinished sheet name, not a name already followed by !address.
         let word = |c: char| c.is_alphanumeric() || matches!(c, '.' | '-' | '_');
-        let prefix = if quoted {
+        let (prefix, rest) = if quoted {
             let raw = &target[1..];
-            if raw.contains(['\r', '\n', '!']) {
+            if raw.contains(['\r', '\n', '[', ']']) {
                 return None;
             }
-            raw.trim_end_matches('\'').replace("''", "'")
+            // Locate the end of the *whole* quoted name, not the next word boundary
+            // after the caret. Two consecutive quotes are a literal apostrophe in A1 syntax.
+            let full = &text[pos - raw.len()..];
+            let mut chars = full.char_indices().peekable();
+            let mut rest = tail.trim_start_matches(word);
+            let mut prefix = raw;
+            while let Some((at, ch)) = chars.next() {
+                match ch {
+                    '\'' if chars.next_if(|(_, ch)| *ch == '\'').is_some() => {}
+                    '\'' => {
+                        if at + 1 < raw.len() {
+                            return None;
+                        }
+                        if at + 1 == raw.len() {
+                            prefix = &raw[..at];
+                        }
+                        rest = &full[at + 1..];
+                        break;
+                    }
+                    '\r' | '\n' => break,
+                    _ => {}
+                }
+            }
+            (prefix.replace("''", "'"), rest)
         } else {
             if !target.chars().all(word) {
                 return None;
             }
-            target.to_owned()
+            (target.to_owned(), tail.trim_start_matches(word))
         };
-        let rest = tail.trim_start_matches(|c| word(c) || (quoted && c == '\''));
         if rest.starts_with('!') {
             return None;
         }
@@ -249,7 +272,7 @@ impl Composer {
         ui.ctx().request_repaint();
     }
 
-    fn keys(&mut self, ui: &egui::Ui, focused: bool) -> ComposerKey {
+    fn keys(&mut self, ui: &egui::Ui, focused: bool, on_row: bool) -> ComposerKey {
         if !focused {
             self.ime_active = false;
             return ComposerKey::None;
@@ -299,11 +322,19 @@ impl Composer {
                 if consume(input, Key::Escape) {
                     self.dismissed = Some(p.query.clone());
                     self.picker = None;
+                    return ComposerKey::EditorFocus;
                 } else if consume(input, Key::ArrowDown) {
                     p.selected = (p.selected + 1) % p.matches.len();
+                    return ComposerKey::RowFocus;
                 } else if consume(input, Key::ArrowUp) {
                     p.selected = (p.selected + p.matches.len() - 1) % p.matches.len();
+                    return ComposerKey::RowFocus;
                 } else if consume(input, Key::Tab) {
+                    if on_row {
+                        self.dismissed = Some(p.query.clone());
+                        self.picker = None;
+                        return ComposerKey::NextFocus;
+                    }
                     return ComposerKey::Accept;
                 }
             }
@@ -317,10 +348,22 @@ impl Composer {
         if std::mem::take(&mut self.focus_requested) && enabled {
             ui.memory_mut(|m| m.request_focus(id));
         }
-        let focused = ui.memory(|m| m.has_focus(id));
-        let key = self.keys(ui, focused && enabled);
-        if key == ComposerKey::PreviousFocus {
-            ui.memory_mut(|m| m.move_focus(egui::FocusDirection::Previous));
+        let mut on_row = self.selected_row.is_some_and(|row| ui.memory(|m| m.has_focus(row)));
+        if on_row && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_) | egui::Event::Text(_) | egui::Event::Ime(_)))) {
+            ui.memory_mut(|m| m.request_focus(id));
+            on_row = false;
+        }
+        let focused = on_row || ui.memory(|m| m.has_focus(id));
+        let key = self.keys(ui, focused && enabled, on_row);
+        if matches!(key, ComposerKey::EditorFocus | ComposerKey::PreviousFocus | ComposerKey::NextFocus) {
+            ui.memory_mut(|m| {
+                m.request_focus(id);
+                match key {
+                    ComposerKey::PreviousFocus => m.move_focus(egui::FocusDirection::Previous),
+                    ComposerKey::NextFocus => m.move_focus(egui::FocusDirection::Next),
+                    _ => {}
+                }
+            });
         }
         let label = ui.label(lang.tr("Message"));
         let width = ui.available_width();
@@ -352,7 +395,7 @@ impl Composer {
         }
         let over_menu = self.menu_rect.is_some_and(|rect| ui.rect_contains_pointer(rect));
         let cursor = field.cursor_range.or_else(|| field.state.cursor.char_range());
-        if enabled && (response.has_focus() || over_menu) {
+        if enabled && (response.has_focus() || over_menu || on_row) {
             self.refresh(cursor, app);
         } else {
             self.picker = None;
@@ -360,7 +403,7 @@ impl Composer {
         let mut submit = false;
         if let Some(p) = &self.picker {
             let exact = p.matches.get(p.selected).is_some_and(|s| self.text.get(p.query.span.clone()) == Some(s.as_str()));
-            if key == ComposerKey::Accept || key == ComposerKey::Enter && (!exact || p.query.prefix == "/mode") {
+            if key == ComposerKey::Accept || key == ComposerKey::Enter && (on_row || !exact || p.query.prefix == "/mode") {
                 self.accept(ui, p.selected);
             } else if key == ComposerKey::Enter {
                 submit = true;
@@ -368,7 +411,7 @@ impl Composer {
         } else if key == ComposerKey::Enter {
             submit = true;
         }
-        self.menu(ui, lang);
+        self.menu(ui, lang, key == ComposerKey::RowFocus);
         if response.has_focus() {
             // egui chooses Tab's focus target at the beginning of the *next* frame, so publish
             // the filter after processing this frame's typed '@', rather than a frame later.
@@ -380,7 +423,8 @@ impl Composer {
         if submit { self.take_draft() } else { None }
     }
 
-    fn menu(&mut self, ui: &mut egui::Ui, lang: Language) {
+    fn menu(&mut self, ui: &mut egui::Ui, lang: Language, move_focus: bool) {
+        self.selected_row = None;
         let Some(p) = &self.picker else {
             self.menu_rect = None;
             return;
@@ -395,13 +439,23 @@ impl Composer {
                         clicked = Some(i);
                     }
                     if p.selected == i {
+                        self.selected_row = Some(row.id);
+                        if move_focus {
+                            row.request_focus();
+                            row.scroll_to_me(None);
+                        }
+                        if row.has_focus() {
+                            ui.memory_mut(|m| {
+                                m.set_focus_lock_filter(
+                                    row.id,
+                                    egui::EventFilter { tab: true, escape: true, horizontal_arrows: false, vertical_arrows: true },
+                                )
+                            });
+                        }
                         ui.ctx().accesskit_node_builder(Self::id(), |n| {
                             n.set_active_descendant(row.id.accesskit_id());
                             n.set_expanded(true);
                         });
-                        if ui.input(|s| s.key_down(Key::ArrowDown) || s.key_down(Key::ArrowUp)) {
-                            row.scroll_to_me(None);
-                        }
                     }
                 }
             });
@@ -417,5 +471,56 @@ enum ComposerKey {
     None,
     Enter,
     Accept,
+    EditorFocus,
+    RowFocus,
+    NextFocus,
     PreviousFocus,
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::*;
+    #[test]
+    fn keyboard_moves_real_focus_to_a_suggestion_and_back_to_editor() {
+        use egui_kittest::kittest::Queryable as _;
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let app = SheetApp::new(session, crate::Services::default());
+        let mut composer = Composer::default();
+        composer.request_focus();
+        let mut harness = egui_kittest::Harness::builder().with_context_setup(crate::framework::install_headless).build_ui_state(
+            move |ui, c: &mut Composer| {
+                c.show(ui, true, Language::En, &app);
+            },
+            composer,
+        );
+        harness.event(egui::Event::Text("@".into()));
+        harness.run_steps(2);
+        harness.key_press(Key::ArrowDown);
+        harness.run_steps(2);
+        assert!(harness.get_by_label_contains("@read   Read a range").is_focused());
+        harness.key_press(Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state().text, "@read ");
+        assert!(harness.ctx.memory(|m| m.has_focus(Composer::id())));
+    }
+    #[test]
+    fn quoted_sheet_name_is_one_completion_token_even_with_the_caret_inside_it() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let app = SheetApp::new(session, crate::Services::default());
+        let text = "@read 'Q1 Sales'' East'!B2";
+        for position in 7..=23 {
+            assert!(Query::sheet_at(text, position, &app).is_none(), "{position}");
+        }
+        let text = "@read 'Q1 Sales'' East'";
+        let q = Query::sheet_at(text, 9, &app).unwrap();
+        assert_eq!(q.span, 0..text.len());
+        assert_eq!(q.prefix, "q1");
+    }
+    #[test]
+    fn quoted_fences_never_attach_pasted_workbook_tokens() {
+        assert_eq!(mentions("@A1\n> ~~~\n> @B2\n> ~~~\n@C3").unwrap(), ["@read:A1", "@read:C3"]);
+        assert_eq!(mentions("> > ~~~\n> > @B2\n> @C3").unwrap(), ["@read:C3"]);
+    }
 }

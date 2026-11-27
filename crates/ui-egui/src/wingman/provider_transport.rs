@@ -9,7 +9,7 @@ use reqwest::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
 
 use super::settings::{self, Agent, Host, Protocol};
-use super::stream::{Assembly, Lines, Reply, decode};
+use super::stream::{Assembly, Frames, Lines, Reply, decode};
 
 const REPLY_LIMIT: usize = 16 * 1024 * 1024;
 const CATALOG_LIMIT: usize = 2 * 1024 * 1024;
@@ -94,20 +94,14 @@ fn client(a: &Agent) -> Result<Client, String> {
         .map_err(|_| "Cannot initialize the HTTP client.".into())
 }
 fn authorize(req: RequestBuilder, a: &Agent) -> Result<RequestBuilder, String> {
-    let key = a.key_env.as_ref().and_then(std::env::var_os).filter(|v| !v.is_empty());
-    if key.is_none() && a.headers.is_empty() {
+    if a.headers.is_empty() {
         return Ok(req);
     }
     let url = reqwest::Url::parse(&a.endpoint).map_err(|_| "Invalid provider URL.")?;
-    let host = url.host_str().unwrap_or("").trim_matches(['[', ']']);
-    if url.scheme() != "https" && host != "localhost" && !host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
+    if url.scheme() != "https" && !a.is_loopback {
         return Err("Use HTTPS to send API keys or custom headers outside loopback.".into());
     }
-    let req = req.headers(a.headers.clone());
-    match key {
-        Some(k) => Ok(req.bearer_auth(k.to_str().ok_or("The API key is not valid text.")?)),
-        None => Ok(req),
-    }
+    Ok(req.headers((*a.headers).clone()))
 }
 async fn send(req: RequestBuilder) -> Result<Response, String> {
     let r = req.send().await.map_err(network_error)?;
@@ -227,35 +221,39 @@ async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn
 
 async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(&str)) -> Result<Reply, String> {
     let media = r.headers().get("content-type").and_then(|h| h.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").trim();
-    let stream = media.eq_ignore_ascii_case("text/event-stream")
-        || media.eq_ignore_ascii_case("application/x-ndjson")
-        || media.eq_ignore_ascii_case("application/ndjson");
+    let frames = if media.eq_ignore_ascii_case("text/event-stream") {
+        Some(Frames::Sse)
+    } else if native || media.eq_ignore_ascii_case("application/x-ndjson") || media.eq_ignore_ascii_case("application/ndjson") {
+        Some(Frames::JsonLines)
+    } else {
+        None
+    };
     let mut a = Assembly::default();
-    if !stream && !native {
+    let Some(frames) = frames else {
         let raw = bytes(r, REPLY_LIMIT).await?;
         // A few local runtimes emit SSE without setting its content type.
         if raw.trim_ascii_start().starts_with(b"data:") {
-            let mut lines = Lines::default();
-            lines.push(&raw, false, &mut a, &notify)?;
-            let done = lines.end(false, &mut a, &notify)?;
+            let mut lines = Lines::new(Frames::Sse, false);
+            lines.push(&raw, &mut a, &notify)?;
+            let done = lines.end(&mut a, &notify)?;
             return a.reply(done, reasoning);
         }
         a.completion(&decode(&raw)?, &notify)?;
         return a.reply(true, reasoning);
-    }
+    };
     let mut size = 0;
-    let mut lines = Lines::default();
+    let mut lines = Lines::new(frames, native);
     while let Some(chunk) = r.chunk().await.map_err(network_error)? {
         if chunk.len() > REPLY_LIMIT - size {
             return Err("Provider response exceeds 16 MiB.".into());
         }
         size += chunk.len();
-        lines.push(&chunk, native, &mut a, &notify)?;
+        lines.push(&chunk, &mut a, &notify)?;
         if lines.done() {
             break;
         }
     }
-    let done = lines.end(native, &mut a, &notify)?;
+    let done = lines.end(&mut a, &notify)?;
     a.reply(done, reasoning)
 }
 

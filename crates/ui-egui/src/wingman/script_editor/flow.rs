@@ -84,13 +84,15 @@ pub(super) fn relative_axis(s: &str) -> Option<RepeatOf> {
     (!n.starts_with('0') && n.bytes().all(|c| c.is_ascii_digit()) && n.parse::<u32>().ok()? <= max).then_some(axis)
 }
 
-fn uses_axis(steps: &[Step], axis: RepeatOf) -> bool {
+fn uses_iteration(steps: &[Step], inputs: &[&str]) -> bool {
+    use gridcraft_engine::macros::resolve::{iteration_ref, params_use_iteration};
     steps.iter().any(|s| match &s.kind {
-        StepKind::Command { id, params } if id == "cell.set" => {
-            params.get("sheet").is_none() && params["cell"].as_str().and_then(relative_axis) == Some(axis)
-        }
-        StepKind::If { then, otherwise, .. } => uses_axis(then, axis) || uses_axis(otherwise, axis),
-        _ => false, // A nested Repeat owns its own Row/Column.
+        StepKind::Command { params, .. } => params_use_iteration(params, inputs),
+        StepKind::If { cell, then, otherwise, .. } => iteration_ref(cell) || uses_iteration(then, inputs) || uses_iteration(otherwise, inputs),
+        // The inner Repeat resolves its header *before* binding a fresh item for its body.
+        StepKind::Repeat { over, .. } => iteration_ref(over),
+        // Native Stop messages and If comparison values are literal.
+        StepKind::Stop { .. } => false,
     })
 }
 
@@ -128,7 +130,7 @@ fn flag(v: &Value) -> Result<bool, String> {
     v.as_bool().ok_or_else(|| "Expected a boolean macro flag.".into())
 }
 
-fn header_field(kind: &mut StepKind, k: &str, v: &Value) -> Result<(), String> {
+fn header_field(kind: &mut StepKind, k: &str, v: &Value, inputs: &[&str]) -> Result<(), String> {
     match (kind, k) {
         (StepKind::If { cell, .. }, "cell") => *cell = text(v, 1024, true)?,
         (StepKind::If { op, .. }, "op") => *op = serde_json::from_value(v.clone()).map_err(|_| "Unknown macro comparison.")?,
@@ -138,8 +140,8 @@ fn header_field(kind: &mut StepKind, k: &str, v: &Value) -> Result<(), String> {
         (StepKind::Repeat { over, .. }, "over") => *over = text(v, 1024, true)?,
         (StepKind::Repeat { of, body, .. }, "of") => {
             let axis = serde_json::from_value(v.clone()).map_err(|_| "Repeat of rows or columns.")?;
-            if *of != axis && uses_axis(body, *of) {
-                return Err("Change or remove the current Repeat-relative cell writes before switching its axis.".into());
+            if *of != axis && uses_iteration(body, inputs) {
+                return Err("Change or remove the current Repeat-relative parameters or references before switching its axis.".into());
             }
             *of = axis;
         }
@@ -181,7 +183,7 @@ pub(super) fn create(tool: &str, args: &Value, within: Option<RepeatOf>) -> Resu
         return Err("Missing required macro control-flow argument.".into());
     }
     for (k, v) in obj {
-        header_field(&mut step.kind, k, v)?;
+        header_field(&mut step.kind, k, v, &[])?;
     }
     Ok(Some(step))
 }
@@ -200,7 +202,7 @@ fn safe_to_enable(step: &Step) -> bool {
     }
 }
 
-pub(super) fn update(step: &mut Step, patch: &Map<String, Value>) -> Result<(), String> {
+pub(super) fn update(step: &mut Step, patch: &Map<String, Value>, inputs: &[&str]) -> Result<(), String> {
     if patch.is_empty() {
         return Err("Specify at least one step field.".into());
     }
@@ -215,8 +217,40 @@ pub(super) fn update(step: &mut Step, patch: &Map<String, Value>) -> Result<(), 
                 }
                 step.enabled = enable;
             }
-            key => header_field(&mut step.kind, key, v)?,
+            key => header_field(&mut step.kind, key, v, inputs)?,
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod axis_tests {
+    use super::*;
+    #[test]
+    fn axis_change_checks_every_command_and_only_references_in_the_current_scope() {
+        let repeat = |over: &str, body: Vec<Step>| Step::new(StepKind::Repeat { of: RepeatOf::Rows, over: over.into(), max: 8, body });
+        let cond = |cell: &str, otherwise| {
+            Step::new(StepKind::If { cell: cell.into(), op: CompareOp::Eq, value: json!("{{Column}}"), then: vec![], otherwise })
+        };
+        let set = |params| Step::command("range.setValues", params);
+        let switch = |body| header_field(&mut repeat("A1:C3", body).kind, "of", &json!("columns"), &["Input"]);
+        for params in [
+            json!({"range":"Row.cell(1,2)", "values":[[7]]}),
+            json!({"nested":{"ranges":["A1",{"$ref":"Column.offset(1,0)"}]}}),
+            json!({"values":[["=SUM({{Row}})"]]}),
+            json!({"target":"Row.right"}),
+        ] {
+            assert!(switch(vec![cond("A1", vec![set(params.clone())])]).is_err(), "{params}");
+        }
+        assert!(switch(vec![cond("Column.cell(1,1)", vec![])]).is_err());
+        assert!(switch(vec![repeat("Row", vec![])]).is_err());
+        assert!(switch(vec![repeat("A1:A3", vec![set(json!({"range":"Row.right"}))])]).is_ok());
+        assert!(
+            switch(vec![cond(
+                "A1",
+                vec![set(json!({"values":[["Row",{"$text":"{{Row}}"}]],"range":"'Row'!B2","area":"row","to":"Column","note":"{{{{Row}}"}))]
+            )])
+            .is_ok()
+        );
+    }
 }

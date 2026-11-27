@@ -35,7 +35,7 @@ Choose **Open JSON**. GridCraft creates `wingman.json` beside its own `ui.json` 
 
 Use your server's model ID in all three places. Multiple servers, models and named agents can coexist. Choose an agent above the conversation; the destination and model are visible before sending. A change of agent starts a fresh conversation and does not forward the earlier agent's transcript.
 
-The settings follow the [local model](https://zed.dev/docs/ai/use-a-local-model) and [OpenAI-compatible provider](https://zed.dev/docs/ai/llm-providers) conventions. Supported provider keys include `ollama`, `lmstudio`, `llama.cpp`, `openai` and named `openai_compatible` entries. Ollama uses its native chat API; the others use Chat Completions. For a server with a bearer key, set the provider's `api_key_env` to the **name** of an environment variable. Use HTTPS for authenticated remote servers. A workbook model needs function calling for tools; a text-only model can still discuss explicitly attached cells.
+The settings follow the [local model](https://zed.dev/docs/ai/use-a-local-model) and [OpenAI-compatible provider](https://zed.dev/docs/ai/llm-providers) conventions. Supported provider keys include `ollama`, `lmstudio`, `llama.cpp`, `openai` and named `openai_compatible` entries. Ollama uses its native chat API; the others use Chat Completions. For a server with a bearer key, set the provider's `api_key_env` to the **name** of an environment variable. Use HTTPS for authenticated remote servers. A remote endpoint receives the context you send. Reload after changing credentials; conversations are partitioned by the configured agent, model, destination and credential identity. A workbook model needs function calling for tools; a text-only model can still discuss explicitly attached cells.
 
 ### Thinking modes
 
@@ -77,7 +77,21 @@ To reuse the comment extraction in another run, open a native macro for editing 
 
 Wingman’s `grep` searches populated cells across visible sheets by default. It can narrow the search to a sheet, a range or a column, and match literal text or a regular expression in values, formatted display text, formulas, or comment threads. It returns sheet names, addresses and matching excerpts. Large searches yield to the UI between slices; **Stop** cancels them. Only result pages go to the model. No cursor means the search is finished; a skipped-fields count distinguishes an incomplete scan from a clean miss.
 
-Use `formula_diagnostics` to locate cached spreadsheet errors: a cell displaying the text `#REF!` is not the same as an actual reference error. `inspect_formula` follows direct static precedents or dependents without expanding large ranges, and reports unavailable indexes or incomplete traces. Neither tool recalculates the workbook. `check_formula` checks a proposed formula’s syntax without executing it; valid syntax is not a guarantee that referenced names exist or that its calculated result is correct.
+Use `check_formula` before entering a proposed formula: it checks the native cell-entry rules and reports static warnings without writing or evaluating it. Use `formula_diagnostics` after an edit to find cached spreadsheet errors: text reading `#REF!` is not a reference error. `inspect_formula` traces direct static references and reports incomplete traces. `profile_range` shows stored value types, blanks and numeric-looking text by column; it does not reinterpret dates or currency as separate storage types. None guarantees that the formula answers the intended business question.
+
+For example, if A2 contains the literal text `pending`, checking `=A2+1` can report a cached operand warning at A2. A stored numeric string that GridCraft can coerce is different. A direct zero divisor is reported separately. These checks do not evaluate conditional branches, expand ranges, or follow indirect references.
+
+### Working across ribbon tabs
+
+Wingman starts with workbook search and inspection. Asking it to open **Home**, **Data**, or another tab changes the tools offered to the model on its next request; your ribbon stays put. It can browse a tab’s groups, narrow to one group, or use `find_commands` to look up an individual button. You can browse the same entries in the dock’s **Ribbon guide** without connecting a model. [Compare the agent workflows](wingman-parity.md) or [browse the complete control index](wingman-commands.md).
+
+For example: “On Orders, format B2:C200 as currency. Put the sum of each row in D, then fill it down.” After opening Home, Wingman can request one reviewed plan:
+
+1. Apply the Currency number format to `B2:C200`.
+2. Set `D2` to `=B2+C2`.
+3. Drag-fill `D2` into `D2:D200`. The last formula references B200 and C200.
+
+The plan displays its ordered targets and exact arguments. Up to 16 eligible changes can share one approval and one undo step. Each step uses the selection left by the preceding step; a failed step rolls back the entire plan. Otherwise, individual approvals remain available. Host actions, scripts, and external calls cannot be hidden in a workbook edit plan.
 
 To find an object rather than a cell, ask for a chart by title, a table by name, or a defined name. `list_objects` can filter the native object list before paging; its chart IDs and table ranges can be passed to other workbook tools.
 

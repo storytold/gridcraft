@@ -64,7 +64,7 @@ pub(super) fn prepare(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) -> Res
             }
         }
         "filter_column" => {
-            let r = range(p)?;
+            let r = p["range"].as_str().and_then(RangeRef::parse).ok_or("Specify the existing filter's exact A1 range.")?;
             if !active || !sh.autofilter.as_ref().is_some_and(|af| af.range == r) {
                 return Err("Specify the active worksheet and its existing AutoFilter range from workbook_info.".into());
             }

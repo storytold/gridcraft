@@ -38,6 +38,16 @@ fn enabled() -> bool {
     true
 }
 impl ServerConfig {
+    fn endpoint_label(&self, name: &str) -> String {
+        let Some(raw) = self.url.as_deref() else { return self.command.as_deref().unwrap_or(name).to_owned() };
+        let Ok(mut url) = reqwest::Url::parse(raw) else { return name.to_owned() };
+        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() || url.set_username("").is_err() || url.set_password(None).is_err() {
+            return name.to_owned();
+        }
+        url.set_query(None);
+        url.set_fragment(None);
+        url.to_string()
+    }
     fn validate(&self) -> Result<(), String> {
         if !(1..=3600).contains(&self.timeout_seconds) {
             return Err("Set timeout_seconds between 1 and 3600.".into());
@@ -179,9 +189,8 @@ impl Hub {
     }
     pub fn tick(&mut self) {
         self.live.retain(|name, l| {
-            if l.tools.is_none()
-                && let Some(msg) = poll(&mut l.conn.catalog)
-            {
+            if let Some(msg) = l.conn.catalog.as_mut().and_then(poll) {
+                l.conn.catalog = None;
                 match msg {
                     Ok(v) => l.tools = Some(v),
                     Err(e) => {
@@ -208,7 +217,7 @@ impl Hub {
             let is_live = active.is_some();
             ui.push_id(name, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(name).on_hover_text(cfg.command.as_ref().or(cfg.url.as_ref()).map(String::as_str).unwrap_or(""));
+                    ui.label(name).on_hover_text(cfg.endpoint_label(name));
                     if let Some(s) = state {
                         ui.weak(s);
                     }
@@ -226,7 +235,7 @@ impl Hub {
                                             ui.weak(l.tr("No matching tools."));
                                         }
                                     });
-                                    let clicked = ui.button(l.tr("Refresh tools")).clicked();
+                                    let clicked = ui.add_enabled(live.conn.catalog.is_none(), egui::Button::new(l.tr("Refresh tools"))).clicked();
                                     if clicked {
                                         ui.close();
                                     }
@@ -234,21 +243,24 @@ impl Hub {
                                 })
                                 .inner
                                 == Some(true);
-                            if refresh {
-                                match live.conn.refresh() {
-                                    Ok(()) => live.tools = None,
-                                    Err(e) => self.error = e,
-                                }
+                            // Keep the last confirmed catalog until its replacement arrives.
+                            // An approved call can finish while discovery is in flight.
+                            if refresh && let Err(e) = live.conn.refresh() {
+                                self.error = e;
                             }
                         }
                         if ui.button(l.tr("Disconnect")).clicked() {
                             self.live.remove(name);
                         }
-                    } else if ui
-                        .add_enabled(can_connect, egui::Button::new(l.tr("Connect")))
-                        .on_hover_text(l.tr("Start this configured server and list its tools"))
-                        .clicked()
-                    {
+                    } else {
+                        let action = l.tr("Connect");
+                        let btn = ui
+                            .add_enabled(can_connect, egui::Button::new(action))
+                            .on_hover_text(l.tr("Start this configured server and list its tools"));
+                        btn.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, btn.enabled(), format!("{action} {name}")));
+                        if !btn.clicked() {
+                            return;
+                        }
                         match connection::start(name.clone(), cfg.clone(), ui.ctx().clone()) {
                             Ok(conn) => {
                                 self.live.insert(name.clone(), Live { conn, tools: None });
@@ -301,7 +313,7 @@ impl Hub {
         let (reply, rx) = oneshot::channel();
         live.conn
             .calls
-            .try_send(connection::Request::Call(connection::Call { tool: entry.tool.clone(), arguments, reply }))
+            .try_send(connection::Request::Call(connection::Call { entry: Arc::clone(entry), arguments, reply }))
             .map_err(|_| "The MCP server is busy or disconnected.")?;
         Ok(Pending { id, label: entry.label(), rx })
     }
@@ -310,6 +322,14 @@ impl Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_labels_do_not_disclose_credentials_or_query_tokens() {
+        let label = |url: &str| serde_json::from_value::<ServerConfig>(json!({"url":url})).unwrap().endpoint_label("local");
+        assert_eq!(label("https://user:password@example.org:9000/mcp?api_key=secret#frag"), "https://example.org:9000/mcp");
+        assert_eq!(label("not a URL?secret"), "local");
+        assert_eq!(label("mailto:user@example.org"), "local");
+    }
 
     #[test]
     fn transport_settings_do_not_cross_between_local_programs_and_network_endpoints() {

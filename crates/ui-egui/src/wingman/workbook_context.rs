@@ -30,33 +30,66 @@ fn clipped(s: &str, chars: usize) -> (String, bool) {
 }
 
 pub(super) fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
+    if detail {
+        // JSON-escaped control characters and multi-byte text cost more than their character
+        // counts suggest. Budget the *whole* receipt, retaining a preview of every field.
+        for scale in [1, 2, 4] {
+            let out = cell_preview(d, sh, c, true, scale);
+            if out.to_string().len() <= super::MAX_RESULT {
+                return out;
+            }
+        }
+        // At 1/8, even six-byte escapes in every preview leave room for style and thread metadata.
+        return cell_preview(d, sh, c, true, 8);
+    }
+    cell_preview(d, sh, c, false, 1)
+}
+
+fn cell_preview(d: &DocState, sh: &Sheet, c: CellRef, detail: bool, scale: usize) -> Json {
     let entry = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
     let hidden = sh.is_protected() && style.protection.hidden;
-    let limit = if detail { 4096 } else { 768 };
-    let value = match sh.value(c) {
-        Value::Empty => Json::Null,
-        Value::Text(t) => json!(clip(&t, limit)),
-        Value::Number(n) => json!(n),
-        Value::Bool(b) => json!(b),
-        Value::Error(e) => json!({"error":e.as_str()}),
-        Value::Array(a) => json!({"arrayRows":a.rows,"arrayColumns":a.cols}),
+    let limit = if detail { 4096 / scale } else { 768 };
+    let mut cut = false;
+    let value = match sh.value_ref(c) {
+        None | Some(Value::Empty) => Json::Null,
+        Some(Value::Text(t)) => {
+            let (v, truncated) = clipped(t, limit);
+            cut = truncated;
+            json!(v)
+        }
+        Some(Value::Number(n)) => json!(n),
+        Some(Value::Bool(b)) => json!(b),
+        Some(Value::Error(e)) => json!({"error":e.as_str()}),
+        Some(Value::Array(a)) => json!({"arrayRows":a.rows,"arrayColumns":a.cols}),
     };
     let mut out = json!({"cell":c.a1(),"value":value});
+    if cut {
+        out["valueTruncated"] = true.into();
+    }
     if let Some(f) = entry.and_then(|x| x.formula.as_ref()) {
         if hidden {
             out["formulaHidden"] = json!(true);
         } else {
-            out["formula"] = json!(format!("={}", clip(&f.text, limit)));
+            let (v, truncated) = clipped(&f.text, limit);
+            out["formula"] = json!(format!("={v}"));
+            if truncated {
+                out["formulaTruncated"] = true.into();
+            }
         }
     }
     if detail {
         out["style"] = json!({"font":clip(&style.font.name,128),"size":style.font.size,"bold":style.font.bold,"italic":style.font.italic,
             "strike":style.font.strike,"color":style.font.color.hex(&d.wb.theme),"fill":style.fill,"align":style.align,
             "numFmt":clip(style.num_fmt.as_str(),255)});
-        out["comment"] = sh.comments.get(&c).map_or(Json::Null, |v| comment(v, true));
+        out["comment"] = sh.comments.get(&c).map_or(Json::Null, |v| comment_preview(v, true, scale));
         if let Some(py) = entry.and_then(|x| x.py.as_deref()) {
-            out["python"] = if hidden { json!({"hidden":true}) } else { json!({"code":clip(&py.code,limit),"stale":py.stale}) };
+            out["python"] = if hidden {
+                json!({"hidden":true})
+            } else {
+                let (code, truncated) = clipped(&py.code, limit);
+                json!({"code":code,"codeTruncated":truncated,"stale":py.stale})
+            };
         }
         if let Some(p) = sh.cell_pictures.get(&c) {
             out["picture"] = json!({"alt":clip(&p.alt,256),"mime":clip(&p.mime,80)});
@@ -66,9 +99,13 @@ pub(super) fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> J
 }
 
 fn comment(c: &Comment, detail: bool) -> Json {
+    comment_preview(c, detail, 1)
+}
+
+fn comment_preview(c: &Comment, detail: bool, scale: usize) -> Json {
     let message = |author: &str, text: &str, limit| {
-        let (author, author_cut) = clipped(author, 128);
-        let (text, text_cut) = clipped(text, limit);
+        let (author, author_cut) = clipped(author, 128 / scale);
+        let (text, text_cut) = clipped(text, limit / scale);
         json!({"author":author,"authorTruncated":author_cut,"text":text,"textTruncated":text_cut})
     };
     let mut out = message(&c.author, &c.text, if detail { 2048 } else { 256 });
@@ -220,6 +257,23 @@ mod object_search_tests {
     use super::*;
     use gridcraft_engine::{Session, model::DefinedName};
     use std::sync::Arc;
+
+    #[test]
+    fn inspection_preserves_multibyte_values_and_escaped_thread_previews_together() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell":"A1","input":"😀".repeat(4096)})).unwrap();
+        s.execute("review.newComment", json!({"cell":"A1","author":"A","text":"😀".repeat(2048)})).unwrap();
+        for _ in 0..8 {
+            s.execute("review.replyComment", json!({"cell":"A1","author":"A","text":"\u{0001}".repeat(256)})).unwrap();
+        }
+        let app = SheetApp::new(s, Default::default());
+        let receipt = query(&app, "inspect_cell", &json!({"cell":"A1"})).unwrap();
+        assert!(receipt.to_string().len() <= super::super::MAX_RESULT);
+        assert_eq!(receipt["valueTruncated"], true);
+        assert_eq!(receipt["comment"]["replyCount"], 8);
+        assert_eq!(receipt["comment"]["textTruncated"], true);
+    }
 
     #[test]
     fn name_search_is_literal_and_pages_visible_matches() {

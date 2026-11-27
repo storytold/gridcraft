@@ -1656,6 +1656,10 @@ fn picker(ui: &mut Ui, ed: &mut Editor) {
 // ---------------------------------------------------------------- the inspector
 
 fn inspector(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor, debugging: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::mem::take(&mut ed.wingman_history.reset_inspector) {
+        d.values.retain(|key, _| !key.starts_with("json:"));
+    }
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in [(Tab::Step, "Details"), (Tab::Inputs, "Inputs"), (Tab::Output, "Output")] {
             if ui.selectable_label(ed.tab == tab, label).clicked() {
@@ -1994,12 +1998,18 @@ fn command_fields(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Edit
                     let jk = format!("json:{path}:{k}");
                     let mut text = d.values.get(&jk).and_then(Json::as_str).map(str::to_string).unwrap_or_else(|| other.to_string());
                     let ok = serde_json::from_str::<Json>(&text).is_ok();
+                    // The same tree path can now denote a different step. Its editor must
+                    // not inherit the replaced step's caret or text undo buffer either.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let editor_id = ("me_pj", path, k, ed.wingman_history.inspector_epoch);
+                    #[cfg(target_arch = "wasm32")]
+                    let editor_id = ("me_pj", path, k);
                     let r = ui.add(
                         egui::TextEdit::singleline(&mut text)
                             .desired_width(220.0)
                             .font(egui::TextStyle::Monospace)
                             .text_color(if ok { t.text } else { t.danger })
-                            .id_salt(("me_pj", path, k)),
+                            .id_salt(editor_id),
                     );
                     if r.changed() {
                         if let Ok(v) = serde_json::from_str::<Json>(&text) {

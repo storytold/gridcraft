@@ -29,6 +29,8 @@ struct Snapshot {
 #[derive(Clone, Debug)]
 pub(crate) struct DraftHistory {
     instance: u64,
+    pub(crate) reset_inspector: bool,
+    pub(crate) inspector_epoch: u64,
     expected: Option<u64>,
     undo: VecDeque<Snapshot>,
     redo: VecDeque<Snapshot>,
@@ -36,7 +38,8 @@ pub(crate) struct DraftHistory {
 
 impl Default for DraftHistory {
     fn default() -> Self {
-        Self { instance: INSTANCE.fetch_add(1, Ordering::Relaxed), expected: None, undo: VecDeque::new(), redo: VecDeque::new() }
+        let instance = INSTANCE.fetch_add(1, Ordering::Relaxed);
+        Self { instance, reset_inspector: false, inspector_epoch: instance, expected: None, undo: VecDeque::new(), redo: VecDeque::new() }
     }
 }
 
@@ -292,7 +295,8 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Value, approved: bo
             if edit.steps.is_some() || edit.remove.is_some() {
                 return Err("Use fields or a splice, not both.".into());
             }
-            flow::update(list.get_mut(i).ok_or("No step at this index to update.")?, &fields)?;
+            let inputs: Vec<_> = draft.inputs.iter().map(|input| input.name.as_str()).collect();
+            flow::update(list.get_mut(i).ok_or("No step at this index to update.")?, &fields, &inputs)?;
         } else {
             let insert = new_steps(app, edit.steps.as_deref().unwrap_or_default(), within)?;
             let count = edit.remove.unwrap_or(0);
@@ -329,6 +333,8 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Value, approved: bo
 }
 
 fn invalidate(ed: &mut Editor) {
+    ed.wingman_history.reset_inspector = true;
+    ed.wingman_history.inspector_epoch = INSTANCE.fetch_add(1, Ordering::Relaxed);
     ed.check = None;
     ed.errors.clear();
     ed.outcome = None;
