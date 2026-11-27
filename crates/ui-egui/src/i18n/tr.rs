@@ -765,7 +765,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values range (blank: second column of the selection):" => "Değerler aralığı (boş: seçimin ikinci sütunu):",
         "Confidence interval" => "Güven aralığı",
         "Confidence level (%):" => "Güven düzeyi (%):",
-        "Seasonality (auto, 0 for none, or a season length):" => "Mevsimsellik (otomatik, yok için 0 veya dönem uzunluğu):",
+        "Seasonality (auto, 0 for none, or a season length):" => "Mevsimsellik (auto, yok için 0 veya dönem uzunluğu):",
         "Fill missing points using" => "Eksik noktaları doldurma yöntemi",
         "Interpolation" => "Enterpolasyon",
         "Zeros" => "Sıfırlar",
