@@ -116,11 +116,11 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
         let label = ui.label(lang.tr("Currency position"));
         egui::ComboBox::from_id_salt("backstage_accounting_position")
             .width(160.0)
-            .selected_text(match position.as_str() {
+            .selected_text(lang.tr(match position.as_str() {
                 "before" => "Before number",
                 "after" => "After number",
                 _ => "Automatic",
-            })
+            }))
             .show_ui(ui, |ui| {
                 for (value, name) in [("auto", "Automatic"), ("before", "Before number"), ("after", "After number")] {
                     if ui.selectable_label(position.as_str() == value, lang.tr(name)).clicked() {
