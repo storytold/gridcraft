@@ -380,9 +380,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         return;
     }
     if previous_popups.0 != app.grid.filter_menu && previous_popups.0.is_some() {
-        app.grid.filter_checks = None;
-        app.grid.filter_search.clear();
-        app.grid.filter_buttons.clear();
+        app.grid.clear_filter_menu_state();
     }
     update_cursor(app, ui, resp, geo, sh);
     crate::text_box::show(app, ui, geo, sh);

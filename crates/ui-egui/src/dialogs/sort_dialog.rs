@@ -61,7 +61,7 @@ pub(super) fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
         return None;
     }
     // An open filter menu would take the Enter that confirms Sort (and apply its filter).
-    app.grid.filter_menu = None;
+    app.grid.close_filter_menu();
     let restore = app.session.active().map(|doc| doc.selection.clone());
     let home = sheet_key(app);
     let active_col = app.session.active().map(|doc| doc.selection.active.col);
