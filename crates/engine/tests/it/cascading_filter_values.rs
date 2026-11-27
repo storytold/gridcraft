@@ -198,7 +198,8 @@ fn choices_respect_blank_and_formatted_value_criteria_on_other_columns() {
     s.execute("home.numberFormat", json!({"range": "B5:B6", "code": "0.00"})).unwrap();
     s.execute("data.filter", json!({"range": "A1:B6"})).unwrap();
     s.execute("data.filterBy", json!({"column": "B", "values": [], "blanks": true})).unwrap();
-    assert_eq!(filter_values(&s.doc().unwrap().wb, 0, 0), vec![("empty".into(), true), ("formula".into(), true)]);
+    // Excel AutoFilter's (Blanks) group also matches whitespace-only text (#2911).
+    assert_eq!(filter_values(&s.doc().unwrap().wb, 0, 0), vec![("empty".into(), true), ("formula".into(), true), ("spaces".into(), true)]);
     for value in ["12", "12.00"] {
         s.execute("data.filterBy", json!({"column": "B", "values": [value]})).unwrap();
         assert_eq!(filter_values(&s.doc().unwrap().wb, 0, 0), vec![("number".into(), true)]);
@@ -249,7 +250,8 @@ fn duplicate_color_choices_keep_any_eligible_match() {
             s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
             let color = if font { FilterCriterion::FontColor(Color::Rgb(0xFF0000)) } else { FilterCriterion::FillColor(Color::Rgb(0xFF0000)) };
             let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
-            sh.autofilter.as_mut().unwrap().criteria = vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }), (1, color)];
+            sh.autofilter.as_mut().unwrap().criteria =
+                vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] }), (1, color)];
             s.execute("data.reapply", json!({})).unwrap();
             assert_eq!(
                 filter_values(&s.doc().unwrap().wb, 0, 1),
@@ -290,7 +292,7 @@ fn querying_a_table_backed_sheet_filter_is_read_only_and_preserves_xlsx_criteria
         let (reopened, _) = gridcraft_xlsx::read_xlsx(&before).unwrap();
         let sh = reopened.active().unwrap();
         let criteria = if table { &sh.tables[0].filter } else { &sh.autofilter.as_ref().unwrap().criteria };
-        assert_eq!(criteria, &vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })]);
+        assert_eq!(criteria, &vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })]);
         assert!(!sh.is_row_hidden(3) && !sh.is_row_hidden(4) && sh.is_row_hidden(5));
     }
 }
@@ -304,7 +306,7 @@ fn an_unrelated_tables_criteria_do_not_restrict_the_sheet_filter_choices() {
     s.execute("range.setValues", json!({"range": "F3", "values": [["Company", "Job"], ["West", "Unrelated"], ["East", "Separate"]]})).unwrap();
     s.execute("insert.table", json!({"range": "F3:G5", "header": true})).unwrap();
     let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
-    sh.tables[0].filter = vec![(0, FilterCriterion::Values { values: vec!["West".into()], blanks: false })];
+    sh.tables[0].filter = vec![(0, FilterCriterion::Values { values: vec!["West".into()], blanks: false, identities: vec![] })];
     s.execute("selection.set", json!({"cell": "B3"})).unwrap();
     s.execute("data.filter", json!({"range": "B3:C6"})).unwrap();
     s.execute("data.filterBy", json!({"column": "B", "values": ["East"]})).unwrap();
@@ -418,7 +420,7 @@ fn large_values_criteria_preserve_unicode_case_and_blank_matching() {
     }
     sh.autofilter = Some(AutoFilter {
         range: RangeRef::new(CellRef::new(0, 0), CellRef::new(5_003, 1)),
-        criteria: vec![(0, FilterCriterion::Values { values: selected, blanks: true })],
+        criteria: vec![(0, FilterCriterion::Values { values: selected, blanks: true, identities: vec![] })],
     });
     let choices = filter_values(&s.doc().unwrap().wb, 0, 1);
     let mut expected: Vec<_> = (1..=5_000).map(|n| (n.to_string(), true)).collect();

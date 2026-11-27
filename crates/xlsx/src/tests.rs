@@ -9,6 +9,7 @@ mod chart_data_table;
 mod chart_line_percent_stacked;
 mod chart_read_tests;
 mod chart_ref_offsets;
+mod chart_style_roundtrip;
 mod controls_tests;
 mod csv_tests;
 mod encrypted_tests;

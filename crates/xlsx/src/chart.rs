@@ -432,6 +432,11 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
+/// Parses a legacy OOXML `<c:style val="..."/>` index (`1..=48`), trimming surrounding spaces.
+fn parse_chart_style(val: &str) -> Option<u32> {
+    val.trim().parse::<u32>().ok().filter(|s| (1..=48).contains(s))
+}
+
 fn group_kind(g: &El) -> Option<ChartKind> {
     let grouping = g.child_val("grouping").unwrap_or("standard");
     let stacked = grouping == "stacked";
@@ -463,7 +468,8 @@ fn group_kind(g: &El) -> Option<ChartKind> {
                 }
             }
         }
-        "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
+        "pieChart" | "pie3DChart" => ChartKind::Pie,
+        "ofPieChart" => ChartKind::Pie,
         "doughnutChart" => ChartKind::Doughnut,
         "areaChart" | "area3DChart" => {
             if pct {
@@ -713,7 +719,18 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
             outline: t.outline,
         }),
         gridlines: dc.gridlines,
-        style: dc.style,
+        // Excel can wrap the legacy chart style in mc:AlternateContent.
+        // The c14 Choice uses different IDs, so read the c:style Fallback.
+        style: root
+            .and_then(|r| {
+                r.child_val("style").and_then(parse_chart_style).or_else(|| {
+                    r.kids("AlternateContent")
+                        .filter_map(|wrapper| wrapper.child("Fallback"))
+                        .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
+                })
+            })
+            .or_else(|| (1..=48).contains(&dc.style).then_some(dc.style))
+            .unwrap_or(2),
         hole_size,
         first_slice_angle: dc.first_slice_angle,
         x_title: axis_titles.0,
