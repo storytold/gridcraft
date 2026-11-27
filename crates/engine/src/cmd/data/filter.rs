@@ -209,6 +209,12 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
+/// Character-wise Unicode lowercase key matching `gridcraft_core::compare_text`'s final tie-breaker
+/// (avoiding `str::to_lowercase`'s context-sensitive Greek final sigma).
+fn filter_case_key(s: &str) -> String {
+    s.chars().flat_map(char::to_lowercase).collect()
+}
+
 /// Match value-list entries using the same Unicode case rules as custom filters.
 fn matches_filter_value(a: &str, b: &str) -> bool {
     gridcraft_core::compare_text(a, b) == Ordering::Equal
@@ -323,7 +329,7 @@ impl<'a> FilterMatcher<'a> {
                 FilterCriterion::Values { values, .. } => {
                     let mut buckets: HashMap<String, Vec<String>> = HashMap::new();
                     for v in values {
-                        buckets.entry(v.to_lowercase()).or_default().push(v.clone());
+                        buckets.entry(filter_case_key(v)).or_default().push(v.clone());
                     }
                     Some((i, buckets))
                 }
@@ -349,7 +355,7 @@ impl<'a> FilterMatcher<'a> {
                 } else {
                     self.values.get(&i).is_some_and(|buckets| {
                         let matches_in = |candidate: &str| {
-                            buckets.get(&candidate.to_lowercase()).is_some_and(|list| list.iter().any(|x| matches_filter_value(x, candidate)))
+                            buckets.get(&filter_case_key(candidate)).is_some_and(|list| list.iter().any(|x| matches_filter_value(x, candidate)))
                         };
                         matches_in(&text) || matches_in(&v.display())
                     })
@@ -445,11 +451,11 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
 pub fn filter_selection(wb: &Workbook, sheet: usize, col: u32, choices: &[(String, bool)]) -> Vec<(String, bool)> {
     let mut edited = std::collections::BTreeMap::new();
     for (value, on) in choices {
-        *edited.entry(value.to_lowercase()).or_insert(false) |= *on;
+        *edited.entry(filter_case_key(value)).or_insert(false) |= *on;
     }
     let mut selection = column_filter_values(wb, sheet, col, false);
     for (value, on) in &mut selection {
-        if let Some(checked) = edited.get(&value.to_lowercase()) {
+        if let Some(checked) = edited.get(&filter_case_key(value)) {
             *on = *checked;
         }
     }
@@ -610,5 +616,47 @@ mod unicode_filter_tests {
 
             assert_eq!(selected, Some(expected), "{label}");
         }
+    }
+
+    /// Bucket keys use character-wise lowercase just like `compare_text`: `"ΟΣ"` matches `"οσ"`
+    /// while remaining distinct from final-sigma `"ος"`.
+    #[test]
+    fn unicode_value_filter_matches_greek_sigma_consistently_with_compare_text() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["ΟΣ"], ["οσ"], ["ος"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+
+        s.execute("data.filterBy", json!({"column": "A", "values": ["ΟΣ"]})).unwrap();
+        assert!(!is_hidden(&s, 1), "ΟΣ must remain visible");
+        assert!(!is_hidden(&s, 2), "οσ must match ΟΣ under compare_text");
+        assert!(is_hidden(&s, 3), "final-sigma ος is distinct under compare_text");
+
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        for (label, expected) in [("ΟΣ", true), ("οσ", true), ("ος", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+            assert_eq!(selected, Some(expected), "{label}: {options:?}");
+        }
+    }
+
+    /// `filter_selection` keeps comparator-distinct labels (`"ΟΣ"` vs `"ος"`) separate when
+    /// round-tripping an unchanged selection.
+    #[test]
+    fn filter_selection_keeps_greek_final_sigma_distinct() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["ΟΣ"], ["ος"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["ΟΣ"]})).unwrap();
+
+        let choices = filter_values(&s.doc().unwrap().wb, 0, 0);
+        let merged = filter_selection(&s.doc().unwrap().wb, 0, 0, &choices);
+        assert_eq!(merged.iter().find(|(t, _)| t == "ΟΣ").map(|(_, on)| *on), Some(true), "{merged:?}");
+        assert_eq!(merged.iter().find(|(t, _)| t == "ος").map(|(_, on)| *on), Some(false), "{merged:?}");
+
+        let values: Vec<String> = merged.into_iter().filter_map(|(v, on)| on.then_some(v)).collect();
+        s.execute("data.filterBy", json!({"column": "A", "values": values})).unwrap();
+        assert!(!is_hidden(&s, 1), "ΟΣ stays visible after unchanged apply");
+        assert!(is_hidden(&s, 2), "ος stays excluded after unchanged apply");
     }
 }
