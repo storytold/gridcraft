@@ -34,7 +34,7 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@71ebbb23403e58ad36c944cf34d7e76989843418
     with:
       tooling-revision: f94a43818dabb2e85f2f4d5cd768bb8e5662600a
       app-name: gridcraft
