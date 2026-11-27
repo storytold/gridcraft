@@ -11,7 +11,10 @@ pub enum Orientation {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PrintSettings {
     pub orientation: Orientation,
-    /// Paper size name (`Letter`, `A4`, `Legal`…).
+    /// Paper size name (`Letter`, `A4`, `Legal`…; see [`crate::paper`]). Empty means no paper is
+    /// stated, so the printer's or locale's paper applies: a reader may leave it so for a file
+    /// that states none (none does yet). Print layout falls back to Letter and XLSX writes no
+    /// `paperSize`. New sheets default to Letter.
     pub paper: String,
     /// Margins in inches: left, right, top, bottom, header, footer.
     pub margins: [f32; 6],
@@ -53,6 +56,11 @@ pub struct PrintSettings {
     /// sheet is more than one page wide and tall.
     #[serde(default)]
     pub page_order: PageOrder,
+    /// Page Setup › Page › First page number: the number the sheet's first printed page takes,
+    /// or `None` for Automatic (XLSX `pageSetup firstPageNumber` with `useFirstPageNumber`). Left
+    /// out of a JSON workbook when Automatic, so files without it are written as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_number: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -187,14 +195,15 @@ impl Default for PrintSettings {
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
             page_order: PageOrder::DownThenOver,
+            first_page_number: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SheetProtection {
-    /// Hash of the password (Excel-compatible, written to XLSX `sheetProtection`; never the
-    /// password itself).
+    /// Hash of the password, never the password itself. XLSX `sheetProtection` writes its Excel
+    /// form ([`crate::PasswordHash::excel`]); a digest alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<crate::PasswordHash>,
     /// The internal hash older GridCraft JSON workbooks stored ([`password_hash`]); still
@@ -252,7 +261,8 @@ pub struct LineInfo {
     pub outline: u8,
     pub collapsed: bool,
     pub style: Option<crate::style::StyleId>,
-    /// The size was set by the user (rows): automatic heights follow the content.
+    /// The size was set by the user. Rows without it follow their content's height; columns
+    /// without it widen when a number format makes their numbers wider (`home.increaseDecimal`…).
     #[serde(default)]
     pub custom: bool,
 }
@@ -280,5 +290,18 @@ mod tests {
         assert!(saved.as_object_mut().unwrap().remove("page_order").is_some());
         p = serde_json::from_value(saved).unwrap();
         assert_eq!(p, PrintSettings::default());
+    }
+
+    #[test]
+    fn first_page_number_is_saved_only_when_set() {
+        // Automatic writes nothing, so a JSON workbook without a first page number is unchanged and
+        // one saved before the field existed loads as Automatic.
+        let saved = serde_json::to_value(PrintSettings::default()).unwrap();
+        assert!(saved.get("first_page_number").is_none(), "{saved}");
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap().first_page_number, None);
+        let p = PrintSettings { first_page_number: Some(7), ..Default::default() };
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["first_page_number"], 7);
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap(), p);
     }
 }

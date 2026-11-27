@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""Run the synthetic nightly packaging suites together; no app build, no signing, no network."""
+import importlib.util
+from pathlib import Path
+import unittest
+
+
+def main() -> int:
+    here = Path(__file__).resolve().parent
+    suite = unittest.TestSuite()
+    for name, relative in (
+        ("gridcraft_archive_suite", "nightly-archive-tests.py"),
+        ("gridcraft_plist_suite", "macos/nightly_plist_tests.py"),
+        ("gridcraft_release_dispatch_suite", "nightly-release-tests.py"),
+        ("gridcraft_mac_sign_suite", "macos/nightly_sign_tests.py"),
+        ("gridcraft_linux_launch_suite", "linux/nightly-linux-launch-tests.py"),
+    ):
+        spec = importlib.util.spec_from_file_location(name, here / relative)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromModule(module))
+    return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

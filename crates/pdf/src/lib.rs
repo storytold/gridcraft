@@ -1,23 +1,77 @@
-//! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
+//! PDF 1.7 drawing for GridCraft print/export, with shared object and xref framing.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
+//!   ([`text_width`]) so callers can measure, align and wrap text. Latin Extended-A letters
+//!   WinAnsiEncoding lacks (ő, ű, ł, č, …) are set in the same face through a second resource with
+//!   a `/Differences` encoding of standard glyph names. Other characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
 //!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
+//! - Arabic is shaped and set in embedded Type3 subsets, with exact shaped advances.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
-//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
+//! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded). The
+//!   decoded image bytes one document keeps across all its pages are capped
+//!   ([`MAX_DOC_IMAGE_BYTES`]); images past the cap are left out.
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the RunLengthDecode filter).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod arabic;
 mod metrics;
 mod symbol;
 
 pub use symbol::{symbol_code, symbol_width};
+
+/// Paragraph base direction. Context follows spreadsheet reading order: the first
+/// non-whitespace character determines direction, including digits and punctuation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl TextDirection {
+    /// Resolve once for a paragraph before wrapping it into visual lines.
+    pub fn resolve(self, text: &str) -> Self {
+        use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
+        let rtl = match self {
+            Self::Auto => BidiInfo::new(text, None).paragraphs.first().is_some_and(|p| p.level.is_rtl()),
+            Self::Context => text.chars().find(|ch| !ch.is_whitespace()).is_some_and(|ch| matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)),
+            explicit => return explicit,
+        };
+        if rtl { Self::RightToLeft } else { Self::LeftToRight }
+    }
+
+    fn level(self) -> Option<unicode_bidi::Level> {
+        match self {
+            Self::Auto => None,
+            Self::LeftToRight | Self::Context => Some(unicode_bidi::Level::ltr()),
+            Self::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        }
+    }
+}
+
+/// A PDF export could not preserve the requested text or serialize its object envelope.
+#[derive(Clone, Debug)]
+pub struct Error(String);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Error {}
+
+impl From<craft_pdf::classic::Error> for Error {
+    fn from(error: craft_pdf::classic::Error) -> Self {
+        Self(error.to_string())
+    }
+}
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -38,6 +92,13 @@ impl Point {
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
+}
+
+/// A text baseline origin and its clockwise rotation in radians.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Baseline {
+    pub origin: Point,
+    pub angle: f32,
 }
 
 /// A page-space rectangle described by its top-left corner and extent.
@@ -202,10 +263,29 @@ impl Font {
     }
 }
 
+/// Whether [`text_width_with_direction`] is the sum of `text`'s character widths: not shaped,
+/// not reordered right to left and holding no bidi controls. A prefix's width is then a running sum.
+pub fn width_is_char_sum(font: Font, text: &str, direction: TextDirection) -> bool {
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+    !arabic::shaped(font, text) && arabic::is_logical_order(text, direction)
+}
+
 /// Width of `text` in points when set in `font` at `size` points.
+/// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
+/// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
+    text_width_with_direction(font, size, text, TextDirection::Auto)
+}
+
+/// Width measured with the same base direction as drawing.
+pub fn text_width_with_direction(font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+    if arabic::shaped(font, text) {
+        return arabic::layout(font, text, direction).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
+    }
     // u64: a u32 sum overflows for ~8 million characters.
-    let units: u64 = text.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let Ok(visual) = arabic::latin_visual(text, direction) else { return 0.0 };
+    let units: u64 = visual.chars().map(|c| u64::from(font.char_width(c))).sum();
     units as f32 * size / 1000.0
 }
 
@@ -248,10 +328,73 @@ pub fn win_ansi(c: char) -> u8 {
     }
 }
 
+/// Objects a font resource takes: the CID font also has its descendant font and font descriptor,
+/// a Latin Extended-A face its font descriptor.
+fn font_objects(slot: usize) -> u32 {
+    if slot == CID_FONT {
+        3
+    } else if slot >= EXT_FONT {
+        2
+    } else {
+        1
+    }
+}
+
+/// Writes the Latin Extended-A resource of `face` as object `id`, with its font descriptor as
+/// `id + 1`.
+fn write_ext_font(out: &mut craft_pdf::classic::Writer, id: u32, face: Font) -> Result<(), Error> {
+    let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
+    // Not every glyph name here is in the standard fonts' metrics (Ccircumflex
+    // isn't), so the resource states each width: without one a reader can give
+    // the glyph no advance and set the next letter on top of it. The PDF reference
+    // asks for /FirstChar, /LastChar, /Widths and /FontDescriptor together.
+    let widths: Vec<String> = (0x100u32..0x180).map(|u| char::from_u32(u).map_or(0, |c| face.char_width(c)).to_string()).collect();
+    let last = 127 + widths.len();
+    let desc_id = id + 1;
+    out.object(
+        id,
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /Encoding << /Type /Encoding /Differences [128 /{}] >> /FirstChar 128 /LastChar {last} /Widths [{}] /FontDescriptor {desc_id} 0 R >>",
+            face.base_name(),
+            names.join(" /"),
+            widths.join(" ")
+        ),
+    )?;
+    out.object(desc_id, &font_descriptor(face))?;
+    Ok(())
+}
+
+/// The font descriptor of a standard face (values from its Adobe AFM), for a resource that states
+/// its own widths.
+fn font_descriptor(face: Font) -> String {
+    // (flags, bbox, italic angle, ascent, descent, cap height, StemV)
+    let (flags, bbox, italic, ascent, descent, cap, stem) = match face {
+        Font::Helvetica => (32, "-166 -225 1000 931", 0.0, 718, -207, 718, 88),
+        Font::HelveticaOblique => (96, "-170 -225 1116 931", -12.0, 718, -207, 718, 88),
+        Font::HelveticaBold => (32, "-170 -228 1003 962", 0.0, 718, -207, 718, 140),
+        Font::HelveticaBoldOblique => (96, "-174 -228 1114 962", -12.0, 718, -207, 718, 140),
+        Font::TimesRoman => (34, "-168 -218 1000 898", 0.0, 683, -217, 662, 84),
+        Font::TimesBold => (34, "-168 -218 1000 935", 0.0, 683, -217, 676, 139),
+        Font::TimesItalic => (98, "-169 -217 1010 883", -15.5, 683, -217, 653, 76),
+        Font::TimesBoldItalic => (98, "-200 -218 996 921", -15.0, 683, -217, 669, 121),
+        Font::Courier => (35, "-23 -250 715 805", 0.0, 629, -157, 562, 51),
+        Font::CourierBold => (35, "-113 -250 749 801", 0.0, 629, -157, 562, 106),
+        Font::CourierOblique => (99, "-27 -250 849 805", -12.0, 629, -157, 562, 51),
+        Font::CourierBoldOblique => (99, "-57 -250 869 801", -12.0, 629, -157, 562, 106),
+        Font::Symbol => (4, "-180 -293 1090 1010", 0.0, 1010, -293, 1010, 85),
+    };
+    format!(
+        "<< /Type /FontDescriptor /FontName /{} /Flags {flags} /FontBBox [{bbox}] /ItalicAngle {italic} /Ascent {ascent} /Descent {descent} /CapHeight {cap} /StemV {stem} >>",
+        face.base_name()
+    )
+}
+
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the first Latin Extended-A face (one per [`Font::ALL`] face, after the CID font).
+const EXT_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
+const FONT_SLOTS: usize = EXT_FONT + Font::ALL.len();
 /// Base font of the CID font used for characters WinAnsiEncoding lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
@@ -259,7 +402,44 @@ const CID_WIDTH: u16 = 1000;
 
 /// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
-    !c.is_control() && c != '?' && win_ansi(c) == b'?'
+    !c.is_control() && c != '?' && win_ansi(c) == b'?' && ext_code(c).is_none()
+}
+
+/// The byte of `c` in the Latin Extended-A encoding (U+0100..=U+017F at 0x80..=0xFF), for
+/// characters WinAnsiEncoding lacks. These are set in the standard face with a `/Differences`
+/// encoding of standard glyph names, not in the CID font.
+fn ext_code(c: char) -> Option<u8> {
+    let u = c as u32;
+    ((0x100..=0x17F).contains(&u) && win_ansi(c) == b'?').then(|| (u - 0x80) as u8)
+}
+
+/// How a character is encoded in a text run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Ansi,
+    Ext,
+    Cid,
+}
+
+fn run_kind(c: char) -> Run {
+    if ext_code(c).is_some() {
+        Run::Ext
+    } else if needs_cid(c) {
+        Run::Cid
+    } else {
+        Run::Ansi
+    }
+}
+
+/// A PDF hex string `< … >` of `text` in the Latin Extended-A encoding of [`ext_code`].
+fn pdf_ext_string(text: &str) -> String {
+    let mut s = String::with_capacity(text.len() * 2 + 2);
+    s.push('<');
+    for c in text.chars() {
+        let _ = write!(s, "{:02X}", ext_code(c).unwrap_or(b'?'));
+    }
+    s.push('>');
+    s
 }
 
 /// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
@@ -434,6 +614,11 @@ pub struct Page {
     content: String,
     fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
+    /// Image bytes this page may still keep before the document's image budget is spent. Set by
+    /// [`PdfDoc::add_page`] and [`PdfDoc::page_mut`], which hand out one page at a time.
+    image_room: u64,
+    /// Bytes of image data this page keeps, counted as images are added.
+    image_kept: u64,
     /// Indexes into `images`, by content hash; a hash match is confirmed with [`ImageData::same`].
     image_index: HashMap<u64, Vec<usize>>,
     /// Pixel comparisons made while looking up duplicate pictures (test instrumentation).
@@ -446,6 +631,9 @@ pub struct Page {
     /// `save` calls refused at the nesting limit; the same number of `restore` calls are ignored.
     refused: u32,
     links: Vec<LinkAnnotation>,
+    arabic: arabic::Subset,
+    error: Option<Error>,
+    missing_arabic_font: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -453,6 +641,10 @@ pub struct Page {
 const MAX_PAGE_CONTENT: usize = 64 * 1024 * 1024;
 /// Largest image (pixels) embedded.
 const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+/// Most bytes of image data (RGB plus alpha planes) one document keeps across all its pages.
+/// Each [`Page::image_rgba`] call keeps its own copy, so a picture repeated on every page of a
+/// long export would otherwise grow without bound; images past the budget are left out.
+pub const MAX_DOC_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 /// Deepest `q` nesting a PDF consumer must support (the PDF specification's implementation limits).
 const MAX_SAVE_DEPTH: usize = 28;
 /// Line join styles, as the `j` operator takes them.
@@ -474,6 +666,22 @@ impl Page {
     fn full(&self) -> bool {
         self.content.len() > MAX_PAGE_CONTENT
     }
+
+    /// Bytes of image data this page may still add before the document's image budget
+    /// ([`MAX_DOC_IMAGE_BYTES`]) is spent. An image of `pw`×`ph` pixels needs up to `pw * ph * 4`;
+    /// callers can skip decoding pictures that cannot fit (the room never grows back while a
+    /// document is built).
+    pub fn image_room(&self) -> u64 {
+        self.image_room
+    }
+
+    /// Bytes of image data kept by this page, summed from its images (tests check the running
+    /// [`Page::image_kept`] count against it).
+    #[cfg(test)]
+    fn image_bytes(&self) -> u64 {
+        self.images.iter().fold(0u64, |acc, i| acc.saturating_add(i.rgb.len() as u64).saturating_add(i.alpha.as_ref().map_or(0, |a| a.len() as u64)))
+    }
+
     fn op(&mut self, s: &str) {
         if !self.full() {
             self.content.push_str(s);
@@ -706,68 +914,142 @@ impl Page {
         self.op(&s);
     }
 
+    /// Arabic ink extents above and below the baseline, in points. Standard font text returns
+    /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
+    pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
+        self.text_vertical_extents_with_direction(font, size, text, TextDirection::Auto)
+    }
+
+    /// Arabic ink extents with an explicit paragraph base direction.
+    pub fn text_vertical_extents_with_direction(&mut self, font: Font, size: f32, text: &str, direction: TextDirection) -> Option<(f32, f32)> {
+        if !arabic::shaped(font, text) {
+            return None;
+        }
+        match arabic::vertical_extents(font, text, direction) {
+            Ok((ascent, descent)) => Some((ascent * size / 1000.0, descent * size / 1000.0)),
+            Err(error) => {
+                self.error.get_or_insert(error);
+                None
+            }
+        }
+    }
+
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
-        self.text_rotated(Point::new(x, y), size, font, color, text, 0.0);
+        self.text_with_direction(Point::new(x, y), size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Text drawn with an explicit paragraph base direction.
+    pub fn text_with_direction(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        self.text_rotated_with_direction(Baseline { origin, angle: 0.0 }, size, font, color, text, direction);
     }
 
     /// Text rotated by `angle` radians (clockwise on the page, like the y-down coordinate
     /// system) about its baseline origin.
     pub fn text_rotated(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        self.text_rotated_with_direction(Baseline { origin, angle }, size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Rotated text with an explicit paragraph base direction.
+    pub fn text_rotated_with_direction(&mut self, baseline: Baseline, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        let Baseline { origin, angle } = baseline;
         if text.is_empty() || !extent(size) || !finite(&[origin.x, origin.y]) {
             return;
         }
-        let fi = font.index();
-        let size = n(size.min(10_000.0));
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
-        let tm = format!("{} {} {} {} {} {} Tm\n", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
-        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
-        if font == Font::Symbol {
-            if let Some(f) = self.fonts.get_mut(fi) {
-                *f = true;
-            }
-            if self.full() {
-                return;
-            }
-            let mut s = String::new();
-            self.set_fill(&mut s, color);
-            let _ = write!(s, "BT\n{tm}/F{} {} Tf\n{} Tj\nET", fi + 1, size, pdf_string_in(text, true));
-            self.op(&s);
+        let matrix = format!("{} {} {} {} {} {}", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        let size = size.min(10_000.0);
+        let shaping = arabic::shaping(font, text);
+        self.missing_arabic_font |= shaping == arabic::Shaping::NoFont;
+        if shaping == arabic::Shaping::Shaped {
+            self.shaped_text(&matrix, size, font, color, text, direction);
+        } else {
+            self.standard_text(&matrix, size, font, color, text, direction);
+        }
+    }
+
+    fn shaped_text(&mut self, matrix: &str, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        if self.saved.len() >= MAX_SAVE_DEPTH {
             return;
         }
+        let body = match self.arabic.text(font, text, size, direction) {
+            Ok(body) => body,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
+        let ext = self.arabic.uses_ext.get(font.index()).copied().unwrap_or(false).then_some(EXT_FONT + font.index());
+        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT), ext].into_iter().flatten() {
+            if let Some(f) = self.fonts.get_mut(slot) {
+                *f = true;
+            }
+        }
+        let mut s = format!("q\n{matrix} cm\n");
+        push_rgb(&mut s, color, false);
+        s.push(' ');
+        push_rgb(&mut s, color, true);
+        let _ = write!(s, "\n{body}\nQ");
+        self.text_op(&s);
+    }
+
+    fn standard_text(&mut self, matrix: &str, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        let visual = match arabic::latin_visual(text, direction) {
+            Ok(visual) => visual,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
+        let fi = font.index();
+        let size = n(size);
+        let mut runs = String::new();
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
         // advances the text position, so the runs follow each other on the baseline.
-        let mut runs = String::new();
-        let mut rest = text;
+        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        let symbol = font == Font::Symbol;
+        let kind_of = |c: char| if symbol { Run::Ansi } else { run_kind(c) };
+        let mut rest: &str = &visual;
         while let Some(first) = rest.chars().next() {
-            let cid = needs_cid(first);
-            let end = rest.char_indices().find(|(_, c)| needs_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let kind = kind_of(first);
+            let end = rest.char_indices().find(|(_, c)| kind_of(*c) != kind).map_or(rest.len(), |(i, _)| i);
             let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string(run)) };
+            let (slot, string) = match kind {
+                Run::Cid => (CID_FONT, pdf_utf16_string(run)),
+                Run::Ext => (EXT_FONT + fi, pdf_ext_string(run)),
+                Run::Ansi => (fi, pdf_string_in(run, symbol)),
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
             let first_run = runs.is_empty();
             let _ = writeln!(runs, "/F{} {} Tf", slot + 1, size);
             if first_run {
-                runs.push_str(&tm);
+                let _ = writeln!(runs, "{matrix} Tm");
             }
             let _ = writeln!(runs, "{string} Tj");
             rest = tail;
         }
-        if self.full() {
-            return;
+        let mut s = String::new();
+        self.set_fill(&mut s, color);
+        let _ = write!(s, "BT\n{runs}ET");
+        let s = if visual != text { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
+        self.text_op(&s);
+    }
+
+    fn text_op(&mut self, s: &str) {
+        if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
+            self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+        } else {
+            self.op(s);
         }
-        // The colour goes in front of the text object, so it is tracked like any other style.
-        let mut colour = String::new();
-        self.set_fill(&mut colour, color);
-        let s = format!("{colour}BT\n{runs}ET");
-        self.op(&s);
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
-    /// `(x, y, w, h)`. Malformed or oversized buffers are ignored.
+    /// `(x, y, w, h)`. Malformed or oversized buffers are ignored, and so are images that do not
+    /// fit in what is left of the document's image budget ([`Page::image_room`]).
     pub fn image_rgba(&mut self, destination: Rect, rgba: &[u8], pixel_size: [u32; 2]) {
         let Rect { x, y, width: w, height: h } = destination;
         let [pw, ph] = pixel_size;
@@ -777,6 +1059,16 @@ impl Page {
         }
         // The image is drawn inside its own q/Q, which counts towards the nesting limit.
         if self.saved.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
+        // Room for the worst case (RGB plus an alpha plane) is checked before anything is
+        // allocated, so the document's image bytes stay bounded however many pages it has. Past
+        // the budget, a picture this page already holds can still be drawn again: it is only
+        // built for the lookup when the page holds one of the same size, so the temporary copy
+        // made to compare is bounded by pixel dimensions the page already accepted (up to
+        // `px * 4` bytes) and is dropped when nothing matches.
+        let over_budget = px * 4 > self.image_room;
+        if over_budget && !self.images.iter().any(|o| o.width == pw && o.height == ph) {
             return;
         }
         let px = px as usize;
@@ -797,23 +1089,33 @@ impl Page {
             }
         }
         let img = ImageData::new(pw, ph, rgb, alpha);
-        // The same picture drawn again on this page shares one XObject.
-        let candidates = self.image_index.entry(img.hash).or_default();
+        // The same picture drawn again on this page shares one XObject. The lookup does not
+        // insert: only an accepted picture gets an index entry, so refused pictures past the
+        // budget don't grow the index.
         #[cfg(test)]
         let comparisons = &mut self.image_comparisons;
-        let known = candidates.iter().copied().find(|&i| {
-            #[cfg(test)]
-            {
-                *comparisons += 1;
-            }
-            self.images.get(i).is_some_and(|o| o.same(&img))
+        let images = &self.images;
+        let known = self.image_index.get(&img.hash).and_then(|candidates| {
+            candidates.iter().copied().find(|&i| {
+                #[cfg(test)]
+                {
+                    *comparisons += 1;
+                }
+                images.get(i).is_some_and(|o| o.same(&img))
+            })
         });
         let idx = match known {
             Some(i) => i,
+            None if over_budget => return,
             None => {
-                candidates.push(self.images.len());
+                // Only a picture this page doesn't hold yet spends the document's image budget.
+                let kept = (img.rgb.len() as u64).saturating_add(img.alpha.as_ref().map_or(0, |a| a.len() as u64));
+                self.image_room = self.image_room.saturating_sub(kept);
+                self.image_kept = self.image_kept.saturating_add(kept);
+                let idx = self.images.len();
+                self.image_index.entry(img.hash).or_default().push(idx);
                 self.images.push(img);
-                self.images.len() - 1
+                idx
             }
         };
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
@@ -834,43 +1136,19 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// Image budget lowered by [`PdfDoc::set_image_budget`]; `None` = [`MAX_DOC_IMAGE_BYTES`].
+    image_budget: Option<u64>,
+    /// Image bytes kept by every page except [`PdfDoc::open_page`], kept up to date as pages are
+    /// handed out so the remaining room is found without scanning every page.
+    image_used: u64,
+    /// The page last handed out by [`PdfDoc::add_page`] or [`PdfDoc::page_mut`], whose images
+    /// may have grown since; its bytes are folded into `image_used` when another page is handed out.
+    open_page: Option<usize>,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
 fn run_length(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() / 2 + 16);
-    let mut i = 0;
-    while i < data.len() {
-        let b = data[i];
-        let mut run = 1;
-        while i + run < data.len() && run < 128 && data[i + run] == b {
-            run += 1;
-        }
-        if run >= 2 {
-            out.push((257 - run) as u8);
-            out.push(b);
-            i += run;
-            continue;
-        }
-        // Literal run until the next repeat of 3+ or 128 bytes.
-        let start = i;
-        let mut len = 0;
-        while i < data.len() && len < 128 {
-            if i + 2 < data.len() && data[i] == data[i + 1] && data[i] == data[i + 2] {
-                break;
-            }
-            i += 1;
-            len += 1;
-        }
-        if len == 0 {
-            // Next is a repeat; loop will handle it.
-            continue;
-        }
-        out.push((len - 1) as u8);
-        out.extend_from_slice(&data[start..start + len]);
-    }
-    out.push(128);
-    out
+    craft_stream_codecs::runlength::encode(data)
 }
 
 /// Longest Info string written, in characters; longer values are cut on a character boundary.
@@ -892,49 +1170,6 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
-/// Starts object `id` at the current end of `out` and records its offset for the xref table.
-fn begin_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32) {
-    let i = id as usize;
-    if offsets.len() <= i {
-        offsets.resize(i + 1, 0);
-    }
-    if let Some(slot) = offsets.get_mut(i) {
-        *slot = out.len();
-    }
-    let _ = writeln!(Utf8(out), "{id} 0 obj");
-}
-
-/// Writes `id 0 obj <body> endobj`.
-fn dict_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, body: &str) {
-    begin_obj(out, offsets, id);
-    out.extend_from_slice(body.as_bytes());
-    out.extend_from_slice(b"\nendobj\n");
-}
-
-/// Writes a stream object: `dict` (the dictionary entries without `<<`, `>>` and `/Length`, may be
-/// empty) and `data` as the stream body.
-fn stream_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, dict: &str, data: &[u8]) {
-    begin_obj(out, offsets, id);
-    out.extend_from_slice(b"<<");
-    if !dict.is_empty() {
-        out.push(b' ');
-        out.extend_from_slice(dict.as_bytes());
-    }
-    let _ = write!(Utf8(out), " /Length {} >>\nstream\n", data.len());
-    out.extend_from_slice(data);
-    out.extend_from_slice(b"\nendstream\nendobj\n");
-}
-
-/// Lets `write!` append text to a byte buffer.
-struct Utf8<'a>(&'a mut Vec<u8>);
-
-impl std::fmt::Write for Utf8<'_> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.0.extend_from_slice(s.as_bytes());
-        Ok(())
-    }
-}
-
 impl PdfDoc {
     pub fn new() -> PdfDoc {
         PdfDoc::default()
@@ -944,12 +1179,17 @@ impl PdfDoc {
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
+        self.close_open_page();
+        let image_room = self.image_room(0);
+        self.open_page = Some(self.pages.len());
         self.pages.push(Page {
             width,
             height,
             content: String::new(),
             fonts: [false; FONT_SLOTS],
             images: Vec::new(),
+            image_room,
+            image_kept: 0,
             image_index: HashMap::new(),
             #[cfg(test)]
             image_comparisons: 0,
@@ -957,9 +1197,32 @@ impl PdfDoc {
             style: Style::default(),
             saved: Vec::new(),
             refused: 0,
+            arabic: arabic::Subset::default(),
+            error: None,
+            missing_arabic_font: false,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
+    }
+
+    /// Lowers the bytes of image data the whole document keeps (never above
+    /// [`MAX_DOC_IMAGE_BYTES`], nor above a budget set before); images drawn past it are left out.
+    pub fn set_image_budget(&mut self, bytes: u64) {
+        let cap = self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES);
+        self.image_budget = Some(bytes.min(cap));
+    }
+
+    /// Image bytes the document may still keep: its budget minus what every closed page holds
+    /// and the `open_kept` bytes of the page being handed out.
+    fn image_room(&self, open_kept: u64) -> u64 {
+        self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES).saturating_sub(self.image_used.saturating_add(open_kept))
+    }
+
+    /// Folds the images the open page added since it was handed out into the document's count.
+    fn close_open_page(&mut self) {
+        if let Some(kept) = self.open_page.take().and_then(|i| self.pages.get(i)).map(|p| p.image_kept) {
+            self.image_used = self.image_used.saturating_add(kept);
+        }
     }
 
     pub fn page_count(&self) -> usize {
@@ -968,7 +1231,24 @@ impl PdfDoc {
 
     /// The page at `i`, to keep drawing on it.
     pub fn page_mut(&mut self, i: usize) -> Option<&mut Page> {
-        self.pages.get_mut(i)
+        if i >= self.pages.len() {
+            return None;
+        }
+        self.close_open_page();
+        let kept = self.pages.get(i)?.image_kept;
+        // Page `i` is open again: its bytes leave the closed count until the next hand-out.
+        self.image_used = self.image_used.saturating_sub(kept);
+        let room = self.image_room(kept);
+        self.open_page = Some(i);
+        let page = self.pages.get_mut(i)?;
+        page.image_room = room;
+        Some(page)
+    }
+
+    /// Whether some Arabic text was set in the standard and CID fonts, which have no Arabic glyphs,
+    /// because no Arabic face was found for its weight.
+    pub fn missing_arabic_font(&self) -> bool {
+        self.pages.iter().any(|page| page.missing_arabic_font)
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.
@@ -978,7 +1258,13 @@ impl PdfDoc {
     /// the ids are contiguous from 1. Objects are therefore in the file in the order they are
     /// numbered during writing (fonts, then per page its new images, content stream and page
     /// dictionary), with the catalog, page tree and info dictionary last.
-    pub fn finish(mut self) -> Vec<u8> {
+    ///
+    /// Returns an error if the Arabic font is unusable, text exceeds a size limit, or the
+    /// shared envelope writer refuses object counts, offsets or an allocation.
+    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+        if let Some(error) = self.pages.iter().find_map(|page| page.error.clone()) {
+            return Err(error);
+        }
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
         }
@@ -1000,17 +1286,16 @@ impl PdfDoc {
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;
-                // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
+                // The CID font also needs its descendant font and font descriptor; a Latin
+                // Extended-A face its font descriptor.
+                next += font_objects(i);
             }
         }
         // Page contents are moved out so each one is freed as soon as it is in the output.
         let contents: Vec<String> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.content)).collect();
         let page_links: Vec<Vec<LinkAnnotation>> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.links)).collect();
         let reserve = contents.iter().fold(4096usize, |acc, c| acc.saturating_add(c.len()).saturating_add(1024));
-        let mut out: Vec<u8> = Vec::with_capacity(reserve);
-        out.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
-        let mut offsets: Vec<usize> = vec![0; 4];
+        let mut out = craft_pdf::classic::Writer::with_capacity(reserve)?;
         let mut kids = Vec::new();
         let mut annotations = Vec::new();
         let page_count = self.pages.len();
@@ -1020,41 +1305,39 @@ impl PdfDoc {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
                 if i == CID_FONT {
                     let (cid_id, desc_id) = (id + 1, id + 2);
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
+                    out.object(
                         *id,
                         &format!(
                             "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
                         ),
-                    );
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
-                        cid_id,
+                    )?;
+                    out.object(cid_id,
                         &format!(
                             "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
                         ),
-                    );
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
-                        desc_id,
+                    )?;
+                    out.object(desc_id,
                         &format!(
                             "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
                         ),
-                    );
+                    )?;
+                    continue;
+                }
+                if let Some(face) = i.checked_sub(EXT_FONT).and_then(|f| Font::ALL.get(f)) {
+                    write_ext_font(&mut out, *id, *face)?;
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
                 let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
-                dict_obj(&mut out, &mut offsets, *id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"));
+                out.object(*id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"))?;
             }
         }
         // Images already written, by content hash: (page, image, object id). A hash match is
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
         for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
+            let arabic_fonts = page.arabic.write_objects(&mut next, &mut out)?;
+            let page_fonts = format!("{font_dict}{arabic_fonts}");
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
                 let known = written.get(&img.hash).and_then(|c| {
@@ -1079,13 +1362,13 @@ impl PdfDoc {
                             let _ = write!(dict, " /SMask {id} 0 R");
                         }
                         dict.push_str(" /Filter /RunLengthDecode");
-                        stream_obj(&mut out, &mut offsets, img_id, &dict, &run_length(&img.rgb));
+                        out.stream(img_id, &dict, &run_length(&img.rgb))?;
                         if let (Some(id), Some(a)) = (smask_id, &img.alpha) {
                             let dict = format!(
                                 "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode",
                                 img.width, img.height
                             );
-                            stream_obj(&mut out, &mut offsets, id, &dict, &run_length(a));
+                            out.stream(id, &dict, &run_length(a))?;
                         }
                         written.entry(img.hash).or_default().push((pi, k, img_id));
                         img_id
@@ -1096,7 +1379,7 @@ impl PdfDoc {
             let content_id = next;
             let page_id = next + 1;
             next += 2;
-            stream_obj(&mut out, &mut offsets, content_id, "", content.as_bytes());
+            out.stream(content_id, "", content.as_bytes())?;
             drop(content);
             let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
             let mut link_refs = String::new();
@@ -1110,20 +1393,18 @@ impl PdfDoc {
                 annotations.push((id, link));
             }
             let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
-            dict_obj(
-                &mut out,
-                &mut offsets,
+            out.object(
                 page_id,
                 &format!(
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
-                    font_dict,
+                    page_fonts,
                     xo,
                     content_id,
                     annots
                 ),
-            );
+            )?;
             kids.push(page_id);
         }
         for (id, link) in annotations {
@@ -1136,16 +1417,11 @@ impl PdfDoc {
                     format!("/Dest [{page_id} 0 R /XYZ {} {} null]", n(x), n(height - y))
                 }
             };
-            dict_obj(
-                &mut out,
-                &mut offsets,
-                id,
-                &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)),
-            );
+            out.object(id, &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)))?;
         }
-        dict_obj(&mut out, &mut offsets, 1, "<< /Type /Catalog /Pages 2 0 R >>");
+        out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
         let kids_s: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
-        dict_obj(&mut out, &mut offsets, 2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()));
+        out.object(2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()))?;
         let creator = if self.info.creator.is_empty() { "GridCraft" } else { &self.info.creator };
         let mut info = format!("<< /Producer {} /Creator {}", pdf_text_string("GridCraft PDF"), pdf_text_string(creator));
         if !self.info.title.is_empty() {
@@ -1155,15 +1431,9 @@ impl PdfDoc {
             let _ = write!(info, " /Author {}", pdf_text_string(&self.info.author));
         }
         info.push_str(" >>");
-        dict_obj(&mut out, &mut offsets, 3, &info);
+        out.object(3, &info)?;
 
-        let xref = out.len();
-        let _ = write!(Utf8(&mut out), "xref\n0 {}\n0000000000 65535 f \n", next);
-        for off in offsets.iter().skip(1) {
-            let _ = writeln!(Utf8(&mut out), "{off:010} 00000 n ");
-        }
-        let _ = write!(Utf8(&mut out), "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
-        out
+        out.finish(1, Some(3)).map_err(Error::from)
     }
 }
 

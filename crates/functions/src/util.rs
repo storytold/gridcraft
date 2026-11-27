@@ -11,7 +11,7 @@ pub(crate) type R<T> = Result<T, CellError>;
 
 /// Largest array a function may build.
 pub(crate) const MAX_CELLS: usize = 10_000_000;
-/// Longest text a cell can hold.
+/// Longest text a cell can hold, in UTF-16 code units.
 pub(crate) const MAX_TEXT: usize = 32_767;
 
 /// Scalar-position lifting tables.
@@ -20,11 +20,11 @@ pub(crate) const S: &[bool] = &[true];
 pub(crate) const A: &[bool] = &[false];
 
 /// Turns an implementation result into a cell value: errors become error values, non-finite
-/// numbers become `#NUM!`, text longer than 32,767 characters becomes `#VALUE!`.
+/// numbers become `#NUM!`, text longer than 32,767 UTF-16 code units becomes `#VALUE!`.
 pub(crate) fn finish(r: R<Value>) -> Value {
     match r {
         Ok(Value::Number(n)) => Value::number(n),
-        Ok(Value::Text(t)) if t.len() > MAX_TEXT && t.chars().count() > MAX_TEXT => Value::Error(CellError::Value),
+        Ok(Value::Text(t)) if t.len() > MAX_TEXT && t.encode_utf16().count() > MAX_TEXT => Value::Error(CellError::Value),
         Ok(v) => v,
         Err(e) => Value::Error(e),
     }
