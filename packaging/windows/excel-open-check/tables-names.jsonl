@@ -1,0 +1,13 @@
+# Table style and total row, defined names, merged cells, frozen panes, hyperlink-free cell notes
+selection.set={"cell":"C5"}
+table.totalRow={}
+table.style={"style":"TableStyleLight9"}
+formulas.defineName={"name":"NorthQ1","refersTo":"=Sales!$C$5"}
+formulas.defineName={"name":"AllRegions","refersTo":"=Sales!$B$5:$B$8"}
+formulas.defineName={"name":"Rate","refersTo":"=0.2","comment":"tax rate"}
+cell.set={"cell":"K14","input":"=SUM(AllRegions)"}
+cell.set={"cell":"K15","input":"=NorthQ1*Rate"}
+home.mergeCells={"range":"K16:M16"}
+view.freezePanes={"cell":"C5"}
+review.newNote={"cell":"C5","text":"checked"}
+review.newComment={"cell":"D5","text":"threaded"}

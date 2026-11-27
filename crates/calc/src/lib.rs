@@ -4,11 +4,15 @@
 #![forbid(unsafe_code)]
 
 pub mod eval;
+mod pivotdata;
+mod precision;
 pub mod recalc;
+mod spill_index;
 mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
-pub use recalc::{Calc, Key, evaluate, now_serial};
+pub use precision::DisplayedPrecision;
+pub use recalc::{Bounded, Calc, Key, evaluate, evaluate_bounded, evaluate_expr, now_serial};
 
 #[cfg(test)]
 mod tests;
