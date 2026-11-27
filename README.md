@@ -165,6 +165,10 @@ directives, e.g. `RUST_LOG=debug` or `RUST_LOG=warn,gridcraft_engine=debug` (a t
 matches a prefix: `gridcraft*=debug`). Runs with `GRIDCRAFT_NO_PREFS` set (no saved settings)
 log to standard error only.
 
+The `nightly-v1` channel keeps all of that in its own profile instead, which the Launcher names
+(`--launch-profile nightly-v1 --profile-root <dir>`); a nightly build refuses to start without one,
+so a Nightly run never touches the stable app's settings, prefs or logs.
+
 ## For agents: MCP, CLI and the control channel
 
 ```sh

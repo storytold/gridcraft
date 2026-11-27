@@ -87,8 +87,20 @@ fn workbook() -> Workbook {
         name: "Sales by Region".into(),
         source: "Data!$A$1:$F$9".into(),
         anchor: at("A4"),
-        rows: vec![PivotField { source_col: "Region".into(), sort: PivotSort::Asc, collapsed_items: vec!["East".into()], ..PivotField::default() }],
-        columns: vec![PivotField { sort: PivotSort::None, ..field("Product") }],
+        rows: vec![PivotField {
+            source_col: "Region".into(),
+            sort: PivotSort::Desc,
+            collapsed_items: vec!["East".into()],
+            caption: Some("Area".into()),
+            sort_by: Some("Sum of Sales".into()),
+            sort_scope: vec![PivotScopeItem { source_col: "Product".into(), item: "B".into(), ..PivotScopeItem::default() }],
+            item_captions: vec![("West".into(), "**West".into())],
+            subtotal: Some(true),
+            repeat_labels: true,
+            number_format: Some("0.0".into()),
+            ..PivotField::default()
+        }],
+        columns: vec![PivotField { sort: PivotSort::None, item_order: vec!["C".into(), "A".into(), "B".into()], ..field("Product") }],
         values: vec![
             PivotValue {
                 source_col: "Sales".into(),
@@ -115,6 +127,13 @@ fn workbook() -> Workbook {
         style: "PivotStyleMedium9".into(),
         show_headers: false,
         last_range: Some(rr("A2:H12")),
+        row_header_caption: Some("Vehicle".into()),
+        col_header_caption: Some("Type".into()),
+        data_caption: Some("Data".into()),
+        grand_total_caption: Some("Days".into()),
+        empty_caption: Some("0".into()),
+        show_values_row: false,
+        classic_layout: true,
         calculated_fields: vec![],
         data_index: Default::default(),
         values_on_rows: false,
@@ -128,8 +147,14 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                ..PivotField::default()
+            },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, ..PivotField::default() },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -176,10 +201,7 @@ fn workbook() -> Workbook {
         style: "PivotStyleDark3".into(),
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
-        calculated_fields: vec![],
-        data_index: Default::default(),
-        values_on_rows: false,
-        values_position: None,
+        ..PivotTable::default()
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -210,7 +232,7 @@ fn unzip(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        m.insert(f.name().to_string(), b);
+        m.insert(f.name().unwrap().to_string(), b);
     }
     m
 }
@@ -362,6 +384,11 @@ fn pivot_xml_details() {
         "{t1}"
     );
     assert!(t1.contains("<field x=\"-2\"/>"));
+    // Sort by the values in the "B" column: Product's item B sits third in its `<items>`.
+    assert!(
+        t1.contains("<references count=\"2\"><reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference><reference field=\"1\" count=\"1\" selected=\"0\"><x v=\"2\"/></reference></references>"),
+        "{t1}"
+    );
     assert!(t1.contains("subtotal=\"count\""));
     assert!(t1.contains("numFmtId=\"4\""));
     assert!(t1.contains("axis=\"axisPage\""));
@@ -775,6 +802,57 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
 
+#[test]
+fn manual_order_in_cache_order_is_kept() {
+    // Not auto-sorted, items written in cache order: the order is still the file's, so a
+    // refresh over reordered source rows keeps it.
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots[0].columns[0].item_order.clear();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots[0].columns[0].item_order, ["A", "B", "C"]);
+}
+
+#[test]
+fn early_dates_in_caches_count_real_days() {
+    // Excel writes serial 1 as 1899-12-31 (ISO dates count days from 1899-12-30), not as the
+    // 1900 calendar's 1900-01-01, which it reads as serial 2.
+    let mut wb = workbook();
+    let date_style = wb.sheet(0).unwrap().cells.get(at("C2")).unwrap().style;
+    wb.sheet_mut(0).unwrap().cells.set(at("C2"), Cell { value: Value::number(1.5), formula: None, style: date_style, py: None });
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let caches: String =
+        parts.iter().filter(|(k, _)| k.contains("pivotCacheDefinition")).map(|(_, v)| String::from_utf8_lossy(v).into_owned()).collect();
+    assert!(caches.contains("minDate=\"1899-12-31T12:00:00\"") && caches.contains("startDate=\"1899-12-31T00:00:00\""), "{caches}");
+    assert!(!caches.contains("1900-01-01T"), "{caches}");
+}
+
+#[test]
+fn location_without_field_headers_has_no_values_row() {
+    let mut wb = workbook();
+    {
+        let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+        p.values.push(PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() });
+        p.layout = PivotLayout::Outline;
+        p.show_headers = false;
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"1\" firstDataRow=\"1\""), "{t3}");
+    wb.sheet_mut(1).unwrap().pivots[2].show_headers = true;
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"1\" firstDataRow=\"2\""), "{t3}");
+    {
+        let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+        p.values.push(PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() });
+        p.show_values_row = false;
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"0\""), "{t3}");
+    assert!(t3.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t3}");
+}
+
 const SIMPLE_TABLE: &str = r#"<pivotTableDefinition name="Sales"><location ref="C1:D4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
 const CACHE_PART: &str = "xl/pivotCache/pivotCacheDefinition1.xml";
 
@@ -860,7 +938,7 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     });
     let t = &two["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"0\" firstDataRow=\"1\""), "{t}");
-    assert!(t.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t}");
+    assert!(!t.contains("hideValuesRow"), "{t}");
     let one = small_pivot(&cols, |p| {
         p.rows = vec![field("Region")];
         p.values = vec![value("Sales")];
@@ -868,6 +946,16 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+
+    let mut wb = workbook();
+    let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+    p.filters.clear();
+    p.layout = PivotLayout::Outline;
+    p.show_headers = true;
+    p.show_values_row = true;
+    p.values.push(value("Sales"));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(back.sheet(1).unwrap().pivots[2].show_values_row);
 }
 
 /// The "Trend" pivot of [`workbook`] with `values` as its value fields, written; returns the file

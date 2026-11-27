@@ -270,7 +270,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                             ed.request_focus();
                                         }
                                         if ed.lost_focus() {
-                                            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
+                                            if !crate::framework::escape_pressed(ui.ctx()) && text != name {
                                                 app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
                                             }
                                             app.grid.renaming_tab = None;
@@ -382,6 +382,23 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// How many statistics, given their widths left to right, fit when drawn from the right end of
+/// `room` points with `gap` points of space after each. The leftmost (lowest-priority) labels are
+/// the ones left out; a label wider than the whole room leaves none.
+fn fitting_statistics(widths: &[f32], room: f32, gap: f32) -> usize {
+    let mut used = 0.0;
+    let mut kept = 0;
+    for w in widths.iter().rev() {
+        let need = w + gap;
+        if used + need > room {
+            break;
+        }
+        used += need;
+        kept += 1;
+    }
+    kept
+}
+
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -403,6 +420,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                // F8 / Shift+F8 selection mode.
+                if let Some(label) = app.grid.selection_mode.status_text() {
+                    ui.add_space(12.0);
+                    text(ui, egui::RichText::new(app.ui.language.tr(label)).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
                 crate::macro_ui::status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
@@ -479,7 +501,17 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
-                    for p in selection_statistics(app).into_iter().rev() {
+                    // Only the rightmost statistics that fit are drawn: on a narrow window the rest
+                    // would paint over the mode text such as "Ready" at the left end (#4187).
+                    let stats = selection_statistics(app);
+                    let font = theme::ui_font(12.5);
+                    let widths: Vec<f32> = stats.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), font.clone(), t.text_dim).size().x).collect();
+                    // Each label is followed by egui's automatic item spacing as well as the
+                    // explicit 10 points of `add_space` below.
+                    let gap = 10.0 + ui.spacing().item_spacing.x;
+                    let keep = fitting_statistics(&widths, ui.available_width(), gap);
+                    let span = stats.len();
+                    for p in stats.into_iter().skip(span - keep).rev() {
                         let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
@@ -608,6 +640,16 @@ mod tests {
         let italian: Vec<String> = parts.iter().map(|(label, value)| format!("{}: {value}", Language::It.tr(label))).collect();
         assert_eq!(super::selection_statistics(&app), italian, "each label as the right-click menu shows it");
         assert!(italian.iter().zip(&english).all(|(it, en)| it != en), "the Italian catalog translates every label: {italian:?}");
+    }
+
+    #[test]
+    fn statistics_that_do_not_fit_are_left_out() {
+        // Widths left to right (Average, Count, Sum), 10 points of gap after each. Only a suffix fits.
+        let widths = [60.0, 50.0, 40.0];
+        assert_eq!(super::fitting_statistics(&widths, 300.0, 10.0), 3);
+        assert_eq!(super::fitting_statistics(&widths, 159.0, 10.0), 2);
+        assert_eq!(super::fitting_statistics(&widths, 100.0, 10.0), 1);
+        assert_eq!(super::fitting_statistics(&widths, 49.0, 10.0), 0);
     }
 
     #[test]

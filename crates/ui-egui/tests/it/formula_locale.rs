@@ -182,15 +182,23 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
     }
 }
 
+/// Whether typing `text` into A1 stored a formula.
+fn is_formula(app: &mut SheetApp, text: &str) -> bool {
+    assert!(enter(app, text), "{text}");
+    app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_some())
+}
+
 #[test]
-fn spanish_signed_accented_text_stays_text() {
-    let mut app = app();
-    app.run("app.language.set", json!({"language":"es"})).unwrap();
-    assert_eq!(app.ui.language, Language::Es);
-    for text in ["+Árbol", "-Árbol", "+ſUMA(1;2)"] {
-        assert!(enter(&mut app, text), "{text}");
-        let cell = app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().clone();
-        assert!(cell.formula.is_none(), "{text} became a formula");
+fn signed_accented_words_are_read_like_unaccented_ones() {
+    // After `+` or `-`, an accented word is a formula exactly when the same word without the
+    // accent is one (#2023's rule), in Spanish and in Brazilian Portuguese.
+    for (language, pairs) in [("es", [("+Árbol", "+Arbol"), ("-Árbol", "-Arbol")]), ("pt", [("+Ótimo", "+Otimo"), ("-Árvore", "-Arvore")])] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language": language})).unwrap();
+        assert_eq!(app.ui.language.code(), language);
+        for (accented, plain) in pairs {
+            assert_eq!(is_formula(&mut app, accented), is_formula(&mut app, plain), "{language}: {accented} vs {plain}");
+        }
     }
 }
 
@@ -216,12 +224,6 @@ fn portuguese_formulas_use_brazilian_names_and_separators() {
     assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
     assert!(enter(&mut app, "+INDICE({1\\2};1;2)"));
     assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
-    // A signed accented word that is not a function call stays text.
-    for text in ["+Ótimo", "-Árvore"] {
-        assert!(enter(&mut app, text), "{text}");
-        let cell = app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().clone();
-        assert!(cell.formula.is_none(), "{text} became a formula");
-    }
     assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
     // The API keeps English syntax.
     assert!(app.run("cell.set", json!({"cell":"B1","input":"=SOMA(1;2)"})).is_err());
