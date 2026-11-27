@@ -31,6 +31,9 @@ use font_fallback::{
 };
 #[cfg(all(test, unix, not(target_os = "macos")))]
 use font_fallback::{covers_arabic, fontconfig_arabic, parse_fc_match};
+#[cfg(test)]
+pub(crate) use font_setup::drop_unparseable_fonts;
+pub(crate) use font_setup::font_parses;
 use font_setup::pick;
 pub use font_setup::{
     CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
@@ -39,8 +42,6 @@ pub use font_setup::{
 };
 #[cfg(test)]
 use font_setup::{candidates, craft_font_faces, font_definitions_impl, try_load};
-#[cfg(test)]
-pub(crate) use font_setup::{drop_unparseable_fonts, font_parses};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tokens {
