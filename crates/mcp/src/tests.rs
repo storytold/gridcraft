@@ -359,6 +359,71 @@ fn serve_loop_over_buffers() {
     assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("42"));
 }
 
+/// Streams `len` bytes of `a` from one reused buffer, then `tail`: a huge line costs no memory to
+/// produce, so only the server can make it expensive.
+struct HugeLine {
+    left: u64,
+    tail: &'static [u8],
+    chunk: Vec<u8>,
+}
+
+impl std::io::Read for HugeLine {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let buf = std::io::BufRead::fill_buf(self)?;
+        let n = buf.len().min(out.len());
+        out[..n].copy_from_slice(&buf[..n]);
+        std::io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl std::io::BufRead for HugeLine {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.left > 0 {
+            let n = self.chunk.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+            return Ok(&self.chunk[..n]);
+        }
+        Ok(self.tail)
+    }
+    fn consume(&mut self, n: usize) {
+        if self.left > 0 {
+            self.left -= n as u64;
+        } else {
+            self.tail = &self.tail[n..];
+        }
+    }
+}
+
+#[test]
+fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
+    // #2164: the whole line was buffered before its size was checked (4 GiB here; any size a
+    // client cares to send).
+    let mut input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    assert!(matches!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), Some(craft_mcp_server::Incoming::Refused(_))));
+    match craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap() {
+        Some(craft_mcp_server::Incoming::Line(line)) => assert!(line.starts_with(r#"{"jsonrpc""#)),
+        other => panic!("expected Line, got {other:?}"),
+    }
+    assert_eq!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), None);
+}
+
+#[test]
+fn serve_loop_bounds_a_line_without_newline() {
+    // #2164: a 4 GiB line was read whole before its size was checked. Now the server keeps at
+    // most 16 MB of it, answers that it is too large, and reads the next message normally.
+    let input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut out = Vec::new();
+    server().serve(input, &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert!(lines[0]["error"]["message"].as_str().unwrap().contains("too large"));
+    assert_eq!(lines[1]["id"], 7);
+    assert!(lines[1].get("result").is_some(), "{}", lines[1]);
+}
+
 #[test]
 fn cell_set_without_input_is_error() {
     let mut s = server();
@@ -417,6 +482,9 @@ fn remote_backend_over_tcp() {
     drop(s);
     handle.join().unwrap();
     assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+    // A network address is refused before anything, the token included, is sent.
+    let err = Remote::connect_with_token("192.0.2.1:7979", "x".into()).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
 }
 
 #[test]
@@ -442,6 +510,15 @@ fn control_auth_handshake_and_compare() {
     assert!(!constant_time_eq(b"abc", b"abd"));
     assert!(!constant_time_eq(b"abc", b"abcd"));
     assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+}
+
+#[test]
+fn a_relative_token_root_is_refused_before_it_is_selected() {
+    // The app may point the tokens at its own private profile, but only at an absolute folder: a
+    // relative one would resolve against whatever directory the process was started in. (A
+    // successful selection is process-wide, so this test only exercises the refusal.)
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("relative/tokens")).is_err());
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("")).is_err());
 }
 
 #[cfg(unix)]
@@ -639,4 +716,30 @@ fn a_window_argument_routes_tools_to_that_window() {
     let titles: Vec<String> =
         ok(&mut s, "list_windows", json!({})).as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect();
     assert_eq!(titles, ["Book1:1", "Book2", "Book1:2"]);
+}
+
+#[test]
+fn stdio_cancel_and_batch_transcript() {
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"client\"}}\n",
+        "[]\n",
+        "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}]\n",
+        "[{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}]\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\",\"params\":{}}\n"
+    );
+    let mut s = server();
+    let mut out = Vec::new();
+    s.serve(input.as_bytes(), &mut out).unwrap();
+    assert!(s.is_initialized());
+
+    let replies: Vec<Value> = std::str::from_utf8(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "gridcraft");
+    assert_eq!(replies[1]["id"], Value::Null);
+    assert_eq!(replies[1]["error"]["code"], -32600);
+    assert_eq!(replies[2], json!([{"jsonrpc": "2.0", "id": 2, "result": {}}]));
+    assert_eq!(replies[3], json!({"jsonrpc": "2.0", "id": 3, "result": {}}));
 }

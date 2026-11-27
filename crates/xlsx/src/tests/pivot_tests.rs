@@ -87,8 +87,20 @@ fn workbook() -> Workbook {
         name: "Sales by Region".into(),
         source: "Data!$A$1:$F$9".into(),
         anchor: at("A4"),
-        rows: vec![PivotField { source_col: "Region".into(), sort: PivotSort::Asc, collapsed_items: vec!["East".into()], ..PivotField::default() }],
-        columns: vec![PivotField { sort: PivotSort::None, ..field("Product") }],
+        rows: vec![PivotField {
+            source_col: "Region".into(),
+            sort: PivotSort::Desc,
+            collapsed_items: vec!["East".into()],
+            caption: Some("Area".into()),
+            sort_by: Some("Sum of Sales".into()),
+            sort_scope: vec![PivotScopeItem { source_col: "Product".into(), item: "B".into(), ..PivotScopeItem::default() }],
+            item_captions: vec![("West".into(), "**West".into())],
+            subtotal: Some(true),
+            repeat_labels: true,
+            number_format: Some("0.0".into()),
+            ..PivotField::default()
+        }],
+        columns: vec![PivotField { sort: PivotSort::None, item_order: vec!["C".into(), "A".into(), "B".into()], ..field("Product") }],
         values: vec![
             PivotValue {
                 source_col: "Sales".into(),
@@ -115,7 +127,15 @@ fn workbook() -> Workbook {
         style: "PivotStyleMedium9".into(),
         show_headers: false,
         last_range: Some(rr("A2:H12")),
+        row_header_caption: Some("Vehicle".into()),
+        col_header_caption: Some("Type".into()),
+        data_caption: Some("Data".into()),
+        grand_total_caption: Some("Days".into()),
+        empty_caption: Some("0".into()),
+        show_values_row: false,
+        classic_layout: true,
         calculated_fields: vec![],
+        data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
     };
@@ -127,8 +147,14 @@ fn workbook() -> Workbook {
         source: "SalesTbl".into(),
         anchor: at("K4"),
         rows: vec![
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Years, sort: PivotSort::None, collapsed_items: vec!["2024".into()] },
-            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, collapsed_items: vec![] },
+            PivotField {
+                source_col: "Date".into(),
+                date_group: PivotDateGroup::Years,
+                sort: PivotSort::None,
+                collapsed_items: vec!["2024".into()],
+                ..PivotField::default()
+            },
+            PivotField { source_col: "Date".into(), date_group: PivotDateGroup::Months, sort: PivotSort::Asc, ..PivotField::default() },
         ],
         columns: vec![PivotField { sort: PivotSort::Desc, ..field("Product") }],
         values: vec![
@@ -175,9 +201,7 @@ fn workbook() -> Workbook {
         style: "PivotStyleDark3".into(),
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
-        calculated_fields: vec![],
-        values_on_rows: false,
-        values_position: None,
+        ..PivotTable::default()
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -208,7 +232,7 @@ fn unzip(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        m.insert(f.name().to_string(), b);
+        m.insert(f.name().unwrap().to_string(), b);
     }
     m
 }
@@ -360,6 +384,11 @@ fn pivot_xml_details() {
         "{t1}"
     );
     assert!(t1.contains("<field x=\"-2\"/>"));
+    // Sort by the values in the "B" column: Product's item B sits third in its `<items>`.
+    assert!(
+        t1.contains("<references count=\"2\"><reference field=\"4294967294\" count=\"1\" selected=\"0\"><x v=\"0\"/></reference><reference field=\"1\" count=\"1\" selected=\"0\"><x v=\"2\"/></reference></references>"),
+        "{t1}"
+    );
     assert!(t1.contains("subtotal=\"count\""));
     assert!(t1.contains("numFmtId=\"4\""));
     assert!(t1.contains("axis=\"axisPage\""));
@@ -543,6 +572,68 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
 }
 
+/// #2159: a field repeated on the axes or as a page field is used once (each use walks the
+/// field's items and copied its labels), and the lists are capped.
+#[test]
+fn repeated_pivot_fields_are_used_once() {
+    let items: String = (0..2_000).map(|_| r#"<item x="0" sd="0"/>"#).collect();
+    let rows = r#"<field x="0"/>"#.repeat(20_000);
+    let pages = r#"<pageField fld="0"/>"#.repeat(20_000);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField axis="axisRow"><items>{items}</items></pivotField></pivotFields><rowFields>{rows}<field x="-2"/></rowFields><colFields>{rows}</colFields><pageFields>{pages}</pageFields></pivotTableDefinition>"#
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!(pt.rows.len(), 1, "{:?}", report.warnings);
+    assert!(pt.columns.is_empty());
+    assert_eq!(pt.rows[0].collapsed_items.len(), 2_000);
+    assert_eq!(pt.filters.iter().filter(|f| f.source_col == "K").count(), 1);
+    // One page field: the table's range starts two rows above its location.
+    assert_eq!(pt.last_range, Some(rr("D3:F9")));
+}
+
+/// #2159: a field list cut at the 16,384-entry cap is reported, so an incomplete PivotTable can be
+/// told apart from a complete one.
+#[test]
+fn capped_pivot_field_lists_warn() {
+    let fields = r#"<pivotField/>"#.repeat(16_385);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="16385">{fields}</pivotFields></pivotTableDefinition>"#
+    );
+    let (_, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("field lists past 16384 entries")), "{:?}", report.warnings);
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("field lists past")), "{:?}", report.warnings);
+}
+
+/// #2159: a cache cut at 16,384 fields is reported too, as the table field lists are.
+#[test]
+fn capped_cache_fields_warn() {
+    let fields = r#"<cacheField name="F"><sharedItems/></cacheField>"#.repeat(16_385);
+    let cache = format!(
+        r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="16385">{fields}</cacheFields></pivotCacheDefinition>"#
+    );
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(&cache))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("cache fields past 16384")), "{:?}", report.warnings);
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("cache fields past")), "{:?}", report.warnings);
+}
+
+/// #2159: axis filters and calculated fields are deduplicated through a set of lower-cased names;
+/// the first of names equal but for case still wins, as with the scan it replaced.
+#[test]
+fn axis_filters_and_calculated_fields_dedupe_ignoring_case() {
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="4"><cacheField name="K"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="k"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="Price" formula="1" databaseField="0"/><cacheField name="PRICE" formula="2" databaseField="0"/></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1" h="1"/></items></pivotField><pivotField axis="axisCol"><items><item x="0" h="1"/><item x="1"/></items></pivotField></pivotFields><rowFields><field x="0"/></rowFields><colFields><field x="1"/></colFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!((pt.rows.len(), pt.columns.len()), (1, 1), "{:?}", report.warnings);
+    assert_eq!(pt.filters, vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]) }]);
+    assert_eq!(pt.calculated_fields, vec![PivotCalcField { name: "Price".into(), formula: "=1".into() }]);
+}
+
 #[test]
 fn cache_found_by_workbook_cache_id() {
     let rels_extra = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>"#;
@@ -711,6 +802,102 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
 
+#[test]
+fn manual_order_in_cache_order_is_kept() {
+    // Not auto-sorted, items written in cache order: the order is still the file's, so a
+    // refresh over reordered source rows keeps it.
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots[0].columns[0].item_order.clear();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots[0].columns[0].item_order, ["A", "B", "C"]);
+}
+
+#[test]
+fn early_dates_in_caches_count_real_days() {
+    // Excel writes serial 1 as 1899-12-31 (ISO dates count days from 1899-12-30), not as the
+    // 1900 calendar's 1900-01-01, which it reads as serial 2.
+    let mut wb = workbook();
+    let date_style = wb.sheet(0).unwrap().cells.get(at("C2")).unwrap().style;
+    wb.sheet_mut(0).unwrap().cells.set(at("C2"), Cell { value: Value::number(1.5), formula: None, style: date_style, py: None });
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let caches: String =
+        parts.iter().filter(|(k, _)| k.contains("pivotCacheDefinition")).map(|(_, v)| String::from_utf8_lossy(v).into_owned()).collect();
+    assert!(caches.contains("minDate=\"1899-12-31T12:00:00\"") && caches.contains("startDate=\"1899-12-31T00:00:00\""), "{caches}");
+    assert!(!caches.contains("1900-01-01T"), "{caches}");
+}
+
+#[test]
+fn location_without_field_headers_has_no_values_row() {
+    let mut wb = workbook();
+    {
+        let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+        p.values.push(PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() });
+        p.layout = PivotLayout::Outline;
+        p.show_headers = false;
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"1\" firstDataRow=\"1\""), "{t3}");
+    wb.sheet_mut(1).unwrap().pivots[2].show_headers = true;
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"1\" firstDataRow=\"2\""), "{t3}");
+    {
+        let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+        p.values.push(PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() });
+        p.show_values_row = false;
+    }
+    let parts = unzip(&write_xlsx(&wb).unwrap());
+    let t3 = String::from_utf8(parts.get("xl/pivotTables/pivotTable3.xml").unwrap().clone()).unwrap();
+    assert!(t3.contains("firstHeaderRow=\"0\""), "{t3}");
+    assert!(t3.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t3}");
+}
+
+const SIMPLE_TABLE: &str = r#"<pivotTableDefinition name="Sales"><location ref="C1:D4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
+const CACHE_PART: &str = "xl/pivotCache/pivotCacheDefinition1.xml";
+
+/// Rewrites the uncompressed size a zip's central directory declares for `name`.
+fn declare_size(mut zip: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
+    let at = (0..zip.len().saturating_sub(46))
+        .find(|&i| {
+            zip[i..i + 4] == [0x50, 0x4b, 0x01, 0x02] && {
+                let len = u16::from_le_bytes([zip[i + 28], zip[i + 29]]) as usize;
+                zip.get(i + 46..i + 46 + len) == Some(name.as_bytes())
+            }
+        })
+        .unwrap();
+    zip[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+    zip
+}
+
+#[test]
+fn unreadable_pivot_cache_warns() {
+    // Control: a readable cache gives a PivotTable and no cache warning.
+    let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().pivots.len(), 1, "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w.contains("PivotTable's cache")), "{:?}", report.warnings);
+    // Malformed and missing caches: the workbook opens and the lost PivotTable is reported.
+    let lost = format!("a PivotTable's cache {CACHE_PART} is missing or could not be read; kept as plain cells");
+    for cache in [Some("garbage <<<"), None] {
+        let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, cache)).unwrap();
+        assert!(wb.sheet(0).unwrap().pivots.is_empty());
+        assert!(report.warnings.contains(&lost), "{cache:?}: {:?}", report.warnings);
+    }
+}
+
+#[test]
+fn oversized_pivot_cache_warns() {
+    // The cache declares more than the per-part limit, so it is refused before it inflates.
+    let declared = u32::try_from(crate::package::MAX_PART + 1).unwrap();
+    let bytes = declare_size(with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE)), CACHE_PART, declared);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().name, "Data");
+    assert!(wb.sheet(0).unwrap().pivots.is_empty());
+    let limit = crate::package::MAX_PART;
+    let lost = format!("a PivotTable's cache is too large to read ({CACHE_PART} expands to more than {limit} bytes); kept as plain cells");
+    assert!(report.warnings.contains(&lost), "{:?}", report.warnings);
+}
+
 /// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
 /// (header, values), `pt` the pivot built on `Data!A1:<last>`.
 fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
@@ -751,7 +938,7 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     });
     let t = &two["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"0\" firstDataRow=\"1\""), "{t}");
-    assert!(t.contains("<x14:pivotTableDefinition hideValuesRow=\"1\"/>"), "{t}");
+    assert!(!t.contains("hideValuesRow"), "{t}");
     let one = small_pivot(&cols, |p| {
         p.rows = vec![field("Region")];
         p.values = vec![value("Sales")];
@@ -759,4 +946,88 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+
+    let mut wb = workbook();
+    let p = &mut wb.sheet_mut(1).unwrap().pivots[2];
+    p.filters.clear();
+    p.layout = PivotLayout::Outline;
+    p.show_headers = true;
+    p.show_values_row = true;
+    p.values.push(value("Sales"));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(back.sheet(1).unwrap().pivots[2].show_values_row);
+}
+
+/// The "Trend" pivot of [`workbook`] with `values` as its value fields, written; returns the file
+/// and its PivotTable and cache parts.
+fn trend_with(values: impl FnOnce(&PivotValue) -> Vec<PivotValue>) -> (Vec<u8>, String, String) {
+    let mut wb = workbook();
+    let pivot = wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "Trend").unwrap();
+    pivot.values = values(&pivot.values[0]);
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let (path, table) = parts
+        .iter()
+        .filter(|(path, _)| path.starts_with("xl/pivotTables/pivotTable"))
+        .map(|(path, xml)| (path.clone(), String::from_utf8_lossy(xml).into_owned()))
+        .find(|(_, xml)| xml.contains("name=\"Trend\""))
+        .unwrap();
+    let n = path.trim_start_matches("xl/pivotTables/pivotTable").trim_end_matches(".xml");
+    let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+    let rels = String::from_utf8_lossy(&parts[&format!("xl/pivotTables/_rels/pivotTable{n}.xml.rels")]).into_owned();
+    assert!(rels.contains(&format!("../pivotCache/pivotCacheDefinition{n}.xml")), "{rels}");
+    let cache = String::from_utf8_lossy(&parts[&cache_part]).into_owned();
+    (bytes, table, cache)
+}
+
+fn trend_values(bytes: &[u8]) -> Vec<PivotValue> {
+    let (back, report) = read_xlsx(bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values.clone()
+}
+
+const GC_DISTINCT: &str = "<ext uri=\"{80B1AD42-0C9F-45FF-B109-D57FB0F4F0B4}\" xmlns:gc=\"https://github.com/storytold/gridcraft/ns/pivot/2026\"><gc:summary func=\"distinctCount\"/></ext>";
+
+#[test]
+fn distinct_count_round_trips_through_a_gridcraft_extension() {
+    // The file format's subtotal list has no distinct count: the field is written as Count, which
+    // other readers use, with a GridCraft marker that brings Distinct Count back on open.
+    let (bytes, table, cache) =
+        trend_with(|v| vec![PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..v.clone() }]);
+    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
+    assert!(table.contains(&format!("<extLst>{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    // A refresh on open would recompute it as Count in Excel, over the values on the sheet.
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].name.as_str()), (PivotFunc::DistinctCount, "Distinct Count of Sales"));
+}
+
+#[test]
+fn rank_and_distinct_count_write_one_extension_each() {
+    let (bytes, table, _) = trend_with(|v| {
+        vec![PivotValue { func: PivotFunc::DistinctCount, show_as: PivotShowAs::Rank, name: "Rank of Distinct Sales".into(), ..v.clone() }]
+    });
+    let rank = "<ext uri=\"{E15A36E0-9728-4e99-A89B-3F7291B0FE68}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext>";
+    assert!(table.contains(&format!("<extLst>{rank}{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].show_as), (PivotFunc::DistinctCount, PivotShowAs::Rank));
+}
+
+#[test]
+fn count_without_the_gridcraft_extension_reads_as_count() {
+    // Plain `subtotal="count"`, as Excel writes it, stays Count; so does a stale marker on a field
+    // whose function was changed to something else.
+    let (bytes, table, cache) = trend_with(|v| vec![PivotValue { func: PivotFunc::Count, name: "Count of Sales".into(), ..v.clone() }]);
+    assert!(!table.contains("extLst"), "{table}");
+    assert!(cache.contains("refreshOnLoad=\"1\""), "{cache}");
+    assert_eq!(trend_values(&bytes)[0].func, PivotFunc::Count);
+    let marked = |subtotal: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields><pivotField/><pivotField dataField="1"/></pivotFields><dataFields><dataField name="V" fld="1"{subtotal}><extLst>{GC_DISTINCT}</extLst></dataField></dataFields></pivotTableDefinition>"#
+        )
+    };
+    let func = |table: &str| read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap().0.sheet(0).unwrap().pivots[0].values[0].func;
+    assert_eq!(func(&marked(" subtotal=\"count\"")), PivotFunc::DistinctCount);
+    assert_eq!(func(&marked("")), PivotFunc::Sum);
+    assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }

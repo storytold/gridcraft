@@ -5,9 +5,10 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
+mod budget;
 mod data_table;
 
-const ALL_KINDS: [ChartKind; 26] = [
+const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -17,6 +18,8 @@ const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::Line,
     ChartKind::LineMarkers,
     ChartKind::LineStacked,
+    ChartKind::LineStacked100,
+    ChartKind::LineStacked100Markers,
     ChartKind::Pie,
     ChartKind::Doughnut,
     ChartKind::Area,
@@ -548,6 +551,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            // References use their cells' format, whatever the series says.
+            number_format: Some("0%".into()),
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -560,6 +566,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: Some("Literal".into()),
@@ -572,6 +580,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: Some("0.0%".into()),
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -591,6 +601,7 @@ fn resolve_from_workbook() {
     assert!(s1.secondary);
     assert_eq!(d.series[2].name, "Literal");
     assert_eq!(d.series[2].values.len(), 4);
+    assert_eq!(d.series[2].number_format, "0.0%");
 
     // Default categories.
     c.series.remove(0);
@@ -611,6 +622,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -623,6 +636,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -640,6 +655,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -658,6 +675,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -1363,6 +1382,8 @@ fn pie_points_follow_workbook_theme() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1419,6 +1440,80 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 }
 
 #[test]
+fn a_multi_level_category_block_draws_its_innermost_level() {
+    // A PivotChart's two levels of row labels in A1:B4, the outer one (country) on the left:
+    // one label per point, from the innermost column.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Graph".into();
+        for (r, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+            if !outer.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*outer));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*inner));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64 + 1.0));
+            s.set_value(CellRef::new(5, r as u32), Value::from(*inner));
+            s.set_value(CellRef::new(6, r as u32), Value::from(*outer));
+        }
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        categories: Some("Graph!$A$1:$B$4".into()),
+        values: "Graph!$C$1:$C$4".into(),
+        innermost_categories: true,
+        ..Series::default()
+    }];
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // A block with a column per point: its last row is the innermost level.
+    c.series[0].categories = Some("Graph!$A$6:$D$7".into());
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Canada", "", "USA", ""]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // Without the flag, every cell is a label, as for any other chart.
+    c.series[0].categories = Some("Graph!$A$1:$B$4".into());
+    c.series[0].innermost_categories = false;
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert_eq!(data.category_levels, vec![vec!["Canada", "", "USA", ""]]);
+}
+
+#[test]
+fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
+    // Resolved series carry `Chart::series_kind`, the kind drawing uses: for every chart kind,
+    // series kind (or none) and series index it is never a combo, and outside a combo it is the
+    // chart's kind or one of its family.
+    let wb = Workbook::new();
+    let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
+    for ck in ALL_KINDS {
+        for sk in series_kinds.clone() {
+            for i in 0..3 {
+                let mut c = chart(ck);
+                c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
+                let resolved: Vec<ChartKind> = resolve(&wb, 0, &c).series.iter().map(|s| s.kind).collect();
+                assert_eq!(resolved, c.series_kinds(), "{ck:?} {sk:?} {i}");
+                if ck != ChartKind::Combo {
+                    assert!(gridcraft_model::same_family(ck, resolved[i]), "{ck:?} {sk:?} {i}");
+                } else {
+                    assert_ne!(resolved[i], ChartKind::Combo);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
+    let s = Scale { min: 3.0, max: 7.0, step: 4.0 };
+    assert_eq!(s.ticks(), vec![3.0, 7.0]);
+    // Aligned scales still snap float error away.
+    let s = Scale { min: 0.0, max: 1.0, step: 0.1 };
+    assert!((s.ticks()[3] - 0.3).abs() < 1e-12 && s.ticks()[0] == 0.0);
+}
+
+#[test]
 fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     let d = ChartData {
         category_levels: vec![],
@@ -1455,6 +1550,62 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     }
     // A category whose total is zero stays on the baseline.
     assert!(frac(top(south, 2)).abs() < 1e-3, "Q3: South reaches {}", frac(top(south, 2)));
+}
+
+#[test]
+fn hundred_percent_stacked_lines_end_each_category_at_its_total() {
+    let (north_color, south_color) = ([20, 96, 130, 255], [25, 107, 36, 255]);
+    for kind in [ChartKind::LineStacked100, ChartKind::LineStacked100Markers] {
+        let d = ChartData {
+            category_levels: vec![],
+            palette: vec![],
+            categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
+            series: vec![series("North", &[10.0, 30.0, 0.0, 5.0], north_color, kind), series("South", &[30.0, 10.0, 0.0, 15.0], south_color, kind)],
+        };
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let t = texts(&p);
+        assert!(t.contains(&"100%") && t.contains(&"0%"), "{kind:?}: {t:?}");
+        assert!(!t.contains(&"40"), "{kind:?}: {t:?}");
+        // The value axis labels sit on their gridlines.
+        let label_y = |s: &str| {
+            p.iter()
+                .find_map(|p| match p {
+                    Prim::Text { text, y, .. } if text == s => Some(*y),
+                    _ => None,
+                })
+                .unwrap_or(f32::NAN)
+        };
+        let (y0, y100) = (label_y("0%"), label_y("100%"));
+        assert!(y0 > y100, "{kind:?}: {y0} {y100}");
+        let frac = |y: f32| (y0 - y) / (y0 - y100);
+        let line = |color: Rgba| {
+            p.iter()
+                .find_map(|p| match p {
+                    // The series line is 2.25 wide; its legend swatch is 2.0.
+                    Prim::Line { pts, color: c, width, .. } if *c == color && *width > 2.1 => {
+                        Some(pts.iter().map(|q| frac(q[1])).collect::<Vec<f32>>())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let (north, south) = (line(north_color), line(south_color));
+        assert_eq!((north.len(), south.len()), (4, 4), "{kind:?}: {north:?} {south:?}");
+        // A category whose total is zero stays on the baseline.
+        for (j, (n, s)) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.0), (0.25, 1.0)].into_iter().enumerate() {
+            assert!((north[j] - n).abs() < 1e-3 && (south[j] - s).abs() < 1e-3, "{kind:?} Q{}: {} {}", j + 1, north[j], south[j]);
+        }
+        // Point markers have a white outline; the legend's marker swatches have none.
+        let circles = |outlined: bool| {
+            p.iter()
+                .filter(|p| matches!(p, Prim::Circle { fill: Some(f), stroke, .. } if (*f == north_color || *f == south_color) && stroke.is_some() == outlined))
+                .count()
+        };
+        let with_markers = kind == ChartKind::LineStacked100Markers;
+        assert_eq!((circles(true), circles(false)), if with_markers { (8, 2) } else { (0, 0) }, "{kind:?}");
+    }
 }
 
 #[test]
@@ -1529,6 +1680,22 @@ fn two_level_categories_resolve_and_draw() {
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.categories, months);
     assert!(d.category_levels.is_empty());
+}
+
+#[test]
+fn square_category_blocks_keep_their_declared_orientation_on_ties() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.name = "Data".into();
+    for (i, value) in ["A1", "B1", "A2", "B2", "A3", "B3"].iter().enumerate() {
+        s.set_value(CellRef::parse(value).unwrap(), Value::from(*value));
+        s.set_value(CellRef::new(3, i as u32), Value::Number(i as f64 + 1.0));
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Data!$A$1:$B$2".into()), values: "Data!$A$3:$B$3".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["A2", "B2"]);
+    assert_eq!(d.category_levels, vec![vec!["A1", "B1"]]);
 }
 
 #[test]
@@ -1607,6 +1774,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        ..Series::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
@@ -1643,7 +1811,105 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        ..Series::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+#[test]
+fn volatile_series_formulas_are_detected() {
+    let wb = Workbook::new();
+    let with = |values: &str, name: Option<&str>| {
+        let mut c = chart(ChartKind::Line);
+        c.series.push(Series {
+            name: name.map(Into::into),
+            categories: None,
+            values: values.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            quartiles: Default::default(),
+            trendlines: vec![],
+            innermost_categories: false,
+            number_format: None,
+        });
+        c
+    };
+    assert!(has_volatile_series(&wb, 0, &with("=NOW()", None)));
+    assert!(has_volatile_series(&wb, 0, &with("=SUM(A1:A3)*rand ()", None)));
+    assert!(has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("=TODAY()"))));
+    assert!(has_volatile_series(&wb, 0, &with("=RANDARRAY(5)", None)));
+    assert!(has_volatile_series(&wb, 0, &with("=_xlfn.RANDARRAY(5)", None)));
+    assert!(!has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("Sheet1!$B$1"))));
+    assert!(!has_volatile_series(&wb, 0, &with("=MYRAND(A1)", None)));
+    assert!(!has_volatile_series(&wb, 0, &with("=Sheet1!$NOW", None)));
+    assert!(!has_volatile_series(&wb, 0, &chart(ChartKind::Line)));
+}
+
+#[test]
+fn volatile_defined_names_are_followed() {
+    let with = |values: &str| {
+        let mut c = chart(ChartKind::Line);
+        c.series.push(Series {
+            name: None,
+            categories: None,
+            values: values.into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            quartiles: Default::default(),
+            trendlines: vec![],
+            innermost_categories: false,
+            number_format: None,
+        });
+        c
+    };
+    let name = |name: &str, scope: Option<usize>, formula: &str| gridcraft_model::DefinedName {
+        name: name.into(),
+        scope,
+        formula: formula.into(),
+        comment: String::new(),
+        hidden: false,
+    };
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().name = "Bob's".into();
+    wb.names.push(name("FreshClock", None, "NOW()"));
+    wb.names.push(name("Later", None, "FreshClock+1"));
+    wb.names.push(name("Dice", Some(0), "RANDBETWEEN(1,6)"));
+    wb.names.push(name("Rates", None, "'Bob''s'!$A$1:$A$3"));
+    wb.names.push(name("Loop", None, "Loop+1"));
+    wb.names.push(name("Spin", None, "Spin+NOW()"));
+    wb.names.push(name("Roll", None, "LAMBDA(n,n*RAND())"));
+    // A workbook-scoped name, a name used inside another, and a sheet-scoped one, bare or qualified.
+    assert!(has_volatile_series(&wb, 0, &with("=FreshClock")));
+    assert!(has_volatile_series(&wb, 0, &with("=SUM(Later, 1)")));
+    assert!(has_volatile_series(&wb, 0, &with("=Dice*2")));
+    assert!(has_volatile_series(&wb, 0, &with("='Bob''s'!Dice")));
+    assert!(has_volatile_series(&wb, 0, &with("=Roll(3)")));
+    // A self-referencing name ends (it evaluates to an error, not a changing value); one that
+    // also calls NOW is volatile.
+    assert!(!has_volatile_series(&wb, 0, &with("=Loop")));
+    assert!(has_volatile_series(&wb, 0, &with("=Spin")));
+    // Many series over the same stable name stay cacheable: each name is followed once.
+    let mut many = with("=Rates");
+    let first = many.series[0].clone();
+    many.series.extend(std::iter::repeat_n(first, 100));
+    assert!(!has_volatile_series(&wb, 0, &many));
+    // Names nested deeper than the limit are not known to be stable.
+    for i in 0..10 {
+        wb.names.push(name(&format!("Deep{i}"), None, &format!("Deep{}", i + 1)));
+    }
+    assert!(has_volatile_series(&wb, 0, &with("=Deep0")));
+    // A name that refers to cells, a name inside a string and a name of another scope are stable.
+    assert!(!has_volatile_series(&wb, 0, &with("=Rates")));
+    assert!(!has_volatile_series(&wb, 0, &with("=\"FreshClock\"")));
+    // Dice belongs to sheet 0: seen from another sheet it isn't defined.
+    wb.sheets.push(Arc::new(gridcraft_model::Sheet::new("Other")));
+    assert!(!has_volatile_series(&wb, 1, &with("=Dice")));
+    assert!(has_volatile_series(&wb, 1, &with("=FreshClock")));
 }

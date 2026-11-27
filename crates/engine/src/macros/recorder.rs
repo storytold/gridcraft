@@ -440,7 +440,7 @@ pub fn infer_input(wb: &Workbook, sheet: usize, r: RangeRef) -> NamedInput {
         Some(match v {
             Value::Empty => return None,
             Value::Text(t) if t.is_empty() => return None,
-            Value::Number(_) if crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date() => ColType::Date,
+            Value::Number(_) if crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).is_date() => ColType::Date,
             Value::Number(_) => ColType::Number,
             Value::Text(_) => ColType::Text,
             Value::Bool(_) => ColType::Bool,

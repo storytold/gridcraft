@@ -111,6 +111,8 @@ fn sales(s: &mut Session) -> bool {
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             }];
         }
     }

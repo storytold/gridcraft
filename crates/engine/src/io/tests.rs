@@ -51,12 +51,59 @@ fn save_keeps_the_destination_access_restrictions() {
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+    // The mode is set outright from the old file's, not through the umask: group and other access
+    // it had stay as they were.
+    for old in [0o640, 0o664] {
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(old)).unwrap();
+        write_file(dest.to_str().unwrap(), b"v3").unwrap();
+        assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
+    }
+    assert!(!dir.join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
     let fresh = dir.join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
     let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
     assert!(mode & 0o022 == 0, "mode {mode:o}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
+    assert_eq!(super::restored_mode(0o100_664, true), 0o664);
+    assert_eq!(super::restored_mode(0o100_664, false), 0o604);
+    assert_eq!(super::restored_mode(0o102_444, false), 0o404, "an original read-only file stays read-only, setgid is dropped");
+    assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn fresh_save_drops_group_and_other_write_under_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("GRIDCRAFT_UMASK_CHILD").is_none() {
+        // Re-run this test in a child shell whose umask is 0002.
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("umask 0002 && exec \"$0\" --exact io::tests::fresh_save_drops_group_and_other_write_under_a_permissive_umask")
+            .arg(exe)
+            .env("GRIDCRAFT_UMASK_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-umask-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fresh = dir.join("new.xlsx");
+    write_file(fresh.to_str().unwrap(), b"v").unwrap();
+    let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(mode & 0o022 == 0, "mode {mode:o}");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -325,6 +372,68 @@ fn failed_save_leaves_no_temporary_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A save replaces an existing workbook with exactly the new bytes, and a save into a folder
+/// that doesn't exist fails without creating anything. The flush to disk before the rename is
+/// not covered: a power loss can't be simulated in a unit test.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_writes_exact_bytes_and_fails_cleanly_without_a_folder() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-write-exact-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join("Book.xlsx");
+    std::fs::write(&dest, b"old workbook that is longer than the new one").unwrap();
+    let bytes: Vec<u8> = (0..=255u8).cycle().take(100_000).collect();
+    write_file(dest.to_str().unwrap(), &bytes).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    assert!(!dir.join("Book.xlsx.sctmp").exists());
+    let missing = dir.join("no-such-folder").join("Book.xlsx");
+    assert!(write_file(missing.to_str().unwrap(), b"x").is_err());
+    assert!(!dir.join("no-such-folder").exists());
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes, "the existing workbook is untouched");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only "this file system cannot flush" errors are tolerated when syncing a saved file.
+/// The fallback on a real network mount is not tested.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_only_unsupported_errors() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!(full_sync_unsupported(&Error::from_raw_os_error(25)), cfg!(unix));
+    assert!(full_sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(28)), "ENOSPC on Linux");
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+}
+
+/// Apple's ENOTSUP is 45 (EOPNOTSUPP is 102), and std maps only the latter to
+/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. On Linux, 45 is
+/// EL2NSYNC and stays a failed save. On FreeBSD and other BSDs, 45 is ENOTSUP (the same value as
+/// EOPNOTSUPP), so this host's std reports `ErrorKind::Unsupported` and the flush is tolerated
+/// even when the `apple` flag is false — which is the real helper's behaviour on those systems.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_apple_enotsup() {
+    use std::io::{Error, ErrorKind};
+    let enotsup = Error::from_raw_os_error(45);
+    assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
+    let host_maps_45_unsupported = enotsup.kind() == ErrorKind::Unsupported;
+    assert_eq!(flush_unsupported_on(&enotsup, true, false), host_maps_45_unsupported, "45 on other Unix");
+    assert_eq!(flush_unsupported_on(&enotsup, false, false), host_maps_45_unsupported, "45 on Windows");
+    assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
+}
+
+/// The real helper on an Apple host: a raw ENOTSUP from F_FULLFSYNC is tolerated.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn full_sync_tolerates_raw_enotsup_on_apple() {
+    assert!(full_sync_unsupported(&std::io::Error::from_raw_os_error(45)));
+}
+
 /// While a script runs (#2178), file reads and writes are refused whatever command or
 /// parameter asked for them; nesting and dropping the sandbox restore access.
 #[cfg(not(target_arch = "wasm32"))]
@@ -349,6 +458,19 @@ fn script_sandbox_refuses_file_access_until_dropped() {
     assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
     write_file(&out, b"ok").unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The guard's drop lowers the counter of the thread it runs on, so it must not move between threads:
+/// naming the trait's method is ambiguous (a compile error) if `ScriptSandbox` is `Send`.
+#[test]
+fn script_sandbox_is_not_send() {
+    trait AmbiguousIfSend<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct IsSend;
+    impl<T: ?Sized + Send> AmbiguousIfSend<IsSend> for T {}
+    <ScriptSandbox as AmbiguousIfSend<_>>::check();
 }
 
 /// A minimal compound (CFB/OLE2) file — FAT in sector 0, directory in sector 1 — holding a
@@ -394,6 +516,64 @@ fn csv_save_keeps_the_separator_it_was_opened_with() {
     let tabs = "a\tb\r\n1\t2\r\n";
     let (wb, _) = open_bytes("tabs.csv", tabs.as_bytes()).unwrap();
     assert_eq!(String::from_utf8(save_bytes(&wb, "tabs.csv").unwrap()).unwrap(), tabs);
+}
+
+/// #1446: File › Open honours Excel's `sep=` first line; saved again, the file opens in the same
+/// columns. A `.txt` file is read with tabs, so its `sep=` line stays data.
+#[test]
+fn csv_open_honours_a_sep_line_and_saves_a_file_that_reopens_in_columns() {
+    let (wb, _) = open_bytes("parts.csv", b"sep=|\r\nPart|Note\r\n1|a,b\r\n").unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let text = |a: &str| sh.value(CellRef::parse(a).unwrap()).as_text().map(str::to_string);
+    assert_eq!((text("A1"), text("B1"), text("B2")), (Some("Part".into()), Some("Note".into()), Some("a,b".into())));
+    let saved = save_bytes(&wb, "parts.csv").unwrap();
+    assert_eq!(String::from_utf8(saved.clone()).unwrap(), "Part,Note\r\n1,\"a,b\"\r\n");
+    let (again, _) = open_bytes("parts.csv", &saved).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()).as_text(), Some("a,b"));
+    // `sep=;` keeps its semicolons, as a semicolon file does.
+    let (semi, _) = open_bytes("semi.csv", b"sep=;\r\na;b\r\n").unwrap();
+    assert_eq!(save_bytes(&semi, "semi.csv").unwrap(), b"a;b\r\n");
+    let (txt, _) = open_bytes("list.txt", b"sep=|\r\na\tb\r\n").unwrap();
+    assert_eq!(txt.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=|"));
+}
+
+/// A first cell that reads like a `sep=` line needs one of its own only in a CSV. A `.tsv` is read
+/// with tabs given, so a `sep=` line there would come back as an extra row above the data.
+#[test]
+fn csv_save_names_its_delimiter_when_reopening_would_pick_another() {
+    let cells = |wb: &Workbook| {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).map(|c| sh.value(CellRef::new(0, c)).as_text().map(str::to_string)).collect::<Vec<_>>()
+    };
+    // Read with `;`; saved, `a,b` loses its quotes and the line has one comma and one semicolon,
+    // which detection alone would read as comma-separated.
+    let (wb, _) = open_bytes("tie.csv", b"sep=;\r\n\"a,b\";x\r\n").unwrap();
+    let saved = save_bytes(&wb, "tie.csv").unwrap();
+    assert_eq!(saved, b"sep=;\r\na,b;x\r\n");
+    assert_eq!(cells(&open_bytes("tie.csv", &saved).unwrap().0), [Some("a,b".into()), Some("x".into())]);
+    // `|` is saved as commas; semicolons in the values would make detection pick `;`.
+    let (wb, _) = open_bytes("pipe.csv", b"sep=|\r\na;b;c|d;e;f\r\n").unwrap();
+    let saved = save_bytes(&wb, "pipe.csv").unwrap();
+    assert_eq!(saved, b"sep=,\r\na;b;c,d;e;f\r\n");
+    assert_eq!(cells(&open_bytes("pipe.csv", &saved).unwrap().0), [Some("a;b;c".into()), Some("d;e;f".into())]);
+}
+
+#[test]
+fn tsv_save_writes_no_sep_line_and_reopens_in_place() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("sep=;"));
+    sh.set_value(CellRef::new(1, 0), gridcraft_core::Value::text("x"));
+    let saved = save_bytes(&wb, "list.tsv").unwrap();
+    assert_eq!(saved, b"sep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.tsv", &saved).unwrap();
+    let text = |r: u32| again.sheet(0).unwrap().value(CellRef::new(r, 0)).as_text().map(str::to_string);
+    assert_eq!((text(0), text(1)), (Some("sep=;".into()), Some("x".into())));
+    // Saved as CSV, the same sheet keeps its protective line, which reading drops again.
+    let csv = save_bytes(&wb, "list.csv").unwrap();
+    assert_eq!(csv, b"sep=,\r\nsep=;\r\nx\r\n");
+    let (again, _) = open_bytes("list.csv", &csv).unwrap();
+    assert_eq!(again.sheet(0).unwrap().value(CellRef::new(0, 0)).as_text(), Some("sep=;"));
 }
 
 #[test]
@@ -495,9 +675,80 @@ fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     sheet.set_cell(CellRef::new(0, 0), Cell { value: Value::Number(124412140710.0), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(1.23456789012345), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 2), Cell { value: Value::Number(124412140710.0), style: scientific, ..Default::default() });
+    // Every integer below 1e16 that f64 holds (also 2^53 and the even integers above it) keeps
+    // every digit; larger numbers keep the shortest digits that read back as the same value,
+    // and a number `&` would write with an exponent is written out in full, so reopening the
+    // file can't give it a scientific format that then rounds it on the next save.
+    let cells = [
+        (1234567890123456.0, "1234567890123456"),
+        (-9007199254740991.0, "-9007199254740991"),
+        (9007199254740992.0, "9007199254740992"),
+        (9007199254740994.0, "9007199254740994"),
+        (9123456789012346.0, "9123456789012346"),
+        (-9999999999999998.0, "-9999999999999998"),
+        (12345678901234567.0, "12345678901234568"),
+        (1e20, "100000000000000000000"),
+        (1e15 - 0.5, "999999999999999.5"),
+        (1.0 / 3.0 * 1e-6, "0.000000333333333333333"),
+        (1.23456789012346e-10, "0.000000000123456789012346"),
+    ];
+    for (col, (n, _)) in cells.iter().enumerate() {
+        sheet.set_cell(CellRef::new(0, col as u32 + 3), Cell { value: Value::Number(*n), ..Default::default() });
+    }
     for (path, separator) in [("data.csv", ","), ("data.tsv", "\t")] {
         let output = String::from_utf8(save_bytes(&workbook, path).unwrap()).unwrap();
-        assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11\r\n"));
+        let tail: Vec<&str> = cells.iter().map(|(_, text)| *text).collect();
+        assert_eq!(output, format!("124412140710{s}1.23456789012345{s}1.24E+11{s}{}\r\n", tail.join(separator), s = separator));
+        // Reopening the file and saving it again changes nothing.
+        let (reopened, _) = open_bytes(path, output.as_bytes()).unwrap();
+        assert_eq!(String::from_utf8(save_bytes(&reopened, path).unwrap()).unwrap(), output);
+    }
+}
+
+/// A number shown as General is written as `&` converts it (15 significant digits), whatever
+/// colour, sections or literals the format adds, and in a Text cell. Excel writes the cell
+/// display (`1.24412E+11`, `0.333333333`); GridCraft keeps the digits so part codes survive
+/// (integers below 1e16 keep all their digits, and nothing gets an exponent; see the test above).
+#[test]
+fn delimited_exports_write_general_numbers_as_text_converts_them() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, NumFmt, StyleId};
+    let mut wb = Workbook::new();
+    let mut styled = |code: &str| wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+    let (blue, signed, red, text, unit) =
+        (styled("[Blue]General"), styled("General;-General"), styled("General;[Red]-General"), styled("@"), styled("General\" mm\""));
+    let code = 124412140710.0;
+    let sh = wb.sheet_mut(0).unwrap();
+    let cells = [
+        (Value::Number(1.0 / 3.0), StyleId::DEFAULT),
+        (Value::Number(0.1 + 0.2), StyleId::DEFAULT),
+        (Value::Number(1e20), StyleId::DEFAULT),
+        (Value::Number(code), blue),
+        (Value::Number(9007199254740994.0), blue),
+        (Value::Number(-1.0 / 3.0), blue),
+        (Value::Number(-code), signed),
+        (Value::Number(-code), red),
+        (Value::Number(code), text),
+        (Value::Number(code), unit),
+    ];
+    for (col, (value, style)) in cells.into_iter().enumerate() {
+        sh.set_cell(CellRef::new(0, col as u32), Cell { value, formula: None, py: None, style });
+    }
+    for (path, sep) in [("out.csv", ","), ("out.txt", "\t")] {
+        let output = String::from_utf8(save_bytes(&wb, path).unwrap()).unwrap();
+        let expected = [
+            "0.333333333333333",
+            "0.3",
+            "100000000000000000000",
+            "124412140710",
+            "9007199254740994",
+            "-0.333333333333333",
+            "-124412140710",
+            "-124412140710",
+            "124412140710",
+            "124412140710 mm",
+        ];
+        assert_eq!(output, format!("{}\r\n", expected.join(sep)));
     }
 }
 
@@ -731,7 +982,7 @@ fn sylk_r1c1_formulas_become_a1() {
         ("R[-5]C", "#REF!"),
         ("\"RC\"&R1C1", "\"RC\"&$A$1"),
     ] {
-        assert_eq!(sylk::r1c1_formula_to_a1(r1c1, b2), a1, "{r1c1}");
+        assert_eq!(craft_csv::sylk::r1c1_formula_to_a1(r1c1, (b2.row, b2.col)), a1, "{r1c1}");
     }
 }
 
@@ -760,4 +1011,92 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+/// A FIFO with no writer would block an open forever: it is refused before it is opened.
+#[cfg(unix)]
+#[test]
+fn reading_a_fifo_is_refused_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe.xlsx");
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // no mkfifo here
+    }
+    let err = read_file(fifo.to_str().unwrap()).unwrap_err().to_string();
+    assert!(err.contains("only regular files"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Merges far from what is copied or exported, in a hostile number, are indexed once instead of
+/// being scanned for every cell; a merge running past the table is clipped to it.
+#[test]
+fn html_merge_lookups_and_spans_stay_bounded() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for i in 0..200_000u32 {
+        sh.merges.push(RangeRef::new(CellRef::new(500_000 + i * 2, 5), CellRef::new(500_000 + i * 2, 6)));
+    }
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, 1)));
+    sh.set_value(CellRef::new(2, 1), gridcraft_core::Value::Number(2.0));
+    let html = copied(&wb, "A1:C50");
+    assert!(html.contains("rowspan=\"50\" colspan=\"2\""), "{html}");
+    let page = to_html(&wb, 0).unwrap();
+    // The table is A1:B3 (the used range): the whole-height merge spans its three rows only.
+    assert!(page.contains("rowspan=\"3\" colspan=\"2\""), "{page}");
+    // Merges stacked over one another past a few per cell are refused, not walked.
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 1)); 100];
+    assert!(to_html(&wb, 0).is_err());
+    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "").is_none());
+}
+
+/// Thousands of pictures over thousands of custom rows: each is placed through a row index.
+#[test]
+fn html_export_places_many_pictures_over_many_custom_rows() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 0..50_000 {
+        sh.rows.insert(row, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
+    }
+    let image = sh.images[0].clone();
+    for i in 0..5_000u32 {
+        let mut im = image.clone();
+        im.anchor.cell = CellRef::new(40_000 + i, 0);
+        sh.images.push(im);
+    }
+    let page = to_html(&wb, 0).unwrap();
+    assert!(page.contains(&format!("top:{}px", 30 * 44_999)), "last picture placed by the index");
+}
+
+/// One long text shown by many cells: the page fails at its byte limit instead of growing on.
+#[test]
+fn html_export_refuses_a_page_past_its_byte_limit() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = gridcraft_core::Value::text("x".repeat(32_000));
+    for row in 0..10_000 {
+        sh.set_value(CellRef::new(row, 0), text.clone());
+    }
+    let err = to_html(&wb, 0).unwrap_err();
+    assert!(err.to_string().contains("MiB"), "{err}");
+}
+
+#[test]
+fn escaping_stops_at_the_room_left() {
+    assert_eq!(esc_within("a&b<c>\"d", 100).as_deref(), Some(esc("a&b<c>\"d").as_str()));
+    assert_eq!(esc_within("&&&", 14), None, "three `&amp;` are 15 bytes");
+    assert_eq!(esc_within("&&&", 15).as_deref(), Some("&amp;&amp;&amp;"));
+}
+
+#[test]
+fn the_merge_index_holds_a_bounded_number_of_cells() {
+    let mut sh = Sheet::new("S");
+    let rect = RangeRef::new(CellRef::new(0, 0), CellRef::new(1_100_000, 0));
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(999_999, 0)));
+    assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
+    assert!(merge_index(&sh, rect).is_none());
 }

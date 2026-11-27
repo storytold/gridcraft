@@ -68,10 +68,26 @@ pub fn check_first_line(line: &str, token: &str) -> Result<Value, Value> {
     }
 }
 
-/// Where the app writes the token it made for `port`, and where clients look for it: a folder
-/// only the user can open (`$XDG_RUNTIME_DIR/gridcraft`, else `~/.cache/gridcraft`; on Windows
-/// `%USERPROFILE%\.gridcraft`), file `control-<port>.token`. `None` when no such folder is known.
-pub fn token_path(port: u16) -> Option<PathBuf> {
+/// An app-selected folder for the tokens, set once before any window exists. The nightly channel
+/// points it at its own private profile, so a nightly control server can never write the stable
+/// app's token (and two channels can never authenticate each other).
+static TOKEN_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Choose the token folder for this process. Only a desktop app that owns its data root calls
+/// this; a client (`gridcraft-cli`, the MCP bridge) keeps reading the app's own folder.
+pub fn set_token_root(dir: PathBuf) -> Result<(), String> {
+    if !dir.is_absolute() {
+        return Err("the control token folder must be absolute".into());
+    }
+    TOKEN_ROOT.set(dir).map_err(|_| "the control token folder was already selected".to_string())
+}
+
+/// The folder tokens go in: [`set_token_root`]'s when an app chose one, else the user's own.
+pub fn token_root() -> Option<PathBuf> {
+    TOKEN_ROOT.get().cloned().or_else(default_token_root)
+}
+
+fn default_token_root() -> Option<PathBuf> {
     let dir = if cfg!(windows) {
         PathBuf::from(std::env::var_os("USERPROFILE").filter(|v| !v.is_empty())?).join(".gridcraft")
     } else if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
@@ -79,7 +95,14 @@ pub fn token_path(port: u16) -> Option<PathBuf> {
     } else {
         PathBuf::from(std::env::var_os("HOME").filter(|v| !v.is_empty())?).join(".cache").join("gridcraft")
     };
-    Some(dir.join(format!("control-{port}.token")))
+    Some(dir)
+}
+
+/// Where the app writes the token it made for `port`, and where clients look for it: a folder
+/// only the user can open (`$XDG_RUNTIME_DIR/gridcraft`, else `~/.cache/gridcraft`; on Windows
+/// `%USERPROFILE%\.gridcraft`), file `control-<port>.token`. `None` when no such folder is known.
+pub fn token_path(port: u16) -> Option<PathBuf> {
+    Some(token_root()?.join(format!("control-{port}.token")))
 }
 
 /// The port of a control address (`127.0.0.1:7979` → 7979).
