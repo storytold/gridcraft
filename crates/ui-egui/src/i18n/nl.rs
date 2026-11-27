@@ -419,6 +419,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "De werkmap onder een andere naam of in een andere map opslaan.",
         "Print Active Sheets" => "Actieve bladen afdrukken",
         "Print Entire Workbook" => "Hele werkmap afdrukken",
+        "Print Selection" => "Selectie afdrukken",
         "Fit Sheet on One Page" => "Blad op één pagina passen",
         "Page Setup…" => "Pagina-instelling…",
         "Page {page} of {pages}" => "Pagina {page} van {pages}",

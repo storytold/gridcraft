@@ -425,6 +425,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Sačuvaj radnu svesku pod drugim imenom ili u drugoj fascikli.",
         "Print Active Sheets" => "Štampaj aktivne listove",
         "Print Entire Workbook" => "Štampaj celu radnu svesku",
+        "Print Selection" => "Štampaj izbor",
         "Fit Sheet on One Page" => "Uklopi list na jednu stranicu",
         "Page Setup…" => "Podešavanje stranice…",
         "Page {page} of {pages}" => "Stranica {page} od {pages}",

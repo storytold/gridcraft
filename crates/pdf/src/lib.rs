@@ -1,7 +1,9 @@
 //! PDF 1.7 drawing for GridCraft print/export, with shared object and xref framing.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
+//!   ([`text_width`]) so callers can measure, align and wrap text. Latin Extended-A letters
+//!   WinAnsiEncoding lacks (ő, ű, ł, č, …) are set in the same face through a second resource with
+//!   a `/Differences` encoding of standard glyph names. Other characters outside
 //!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
 //!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
 //!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
@@ -326,10 +328,73 @@ pub fn win_ansi(c: char) -> u8 {
     }
 }
 
+/// Objects a font resource takes: the CID font also has its descendant font and font descriptor,
+/// a Latin Extended-A face its font descriptor.
+fn font_objects(slot: usize) -> u32 {
+    if slot == CID_FONT {
+        3
+    } else if slot >= EXT_FONT {
+        2
+    } else {
+        1
+    }
+}
+
+/// Writes the Latin Extended-A resource of `face` as object `id`, with its font descriptor as
+/// `id + 1`.
+fn write_ext_font(out: &mut craft_pdf::classic::Writer, id: u32, face: Font) -> Result<(), Error> {
+    let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
+    // Not every glyph name here is in the standard fonts' metrics (Ccircumflex
+    // isn't), so the resource states each width: without one a reader can give
+    // the glyph no advance and set the next letter on top of it. The PDF reference
+    // asks for /FirstChar, /LastChar, /Widths and /FontDescriptor together.
+    let widths: Vec<String> = (0x100u32..0x180).map(|u| char::from_u32(u).map_or(0, |c| face.char_width(c)).to_string()).collect();
+    let last = 127 + widths.len();
+    let desc_id = id + 1;
+    out.object(
+        id,
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /Encoding << /Type /Encoding /Differences [128 /{}] >> /FirstChar 128 /LastChar {last} /Widths [{}] /FontDescriptor {desc_id} 0 R >>",
+            face.base_name(),
+            names.join(" /"),
+            widths.join(" ")
+        ),
+    )?;
+    out.object(desc_id, &font_descriptor(face))?;
+    Ok(())
+}
+
+/// The font descriptor of a standard face (values from its Adobe AFM), for a resource that states
+/// its own widths.
+fn font_descriptor(face: Font) -> String {
+    // (flags, bbox, italic angle, ascent, descent, cap height, StemV)
+    let (flags, bbox, italic, ascent, descent, cap, stem) = match face {
+        Font::Helvetica => (32, "-166 -225 1000 931", 0.0, 718, -207, 718, 88),
+        Font::HelveticaOblique => (96, "-170 -225 1116 931", -12.0, 718, -207, 718, 88),
+        Font::HelveticaBold => (32, "-170 -228 1003 962", 0.0, 718, -207, 718, 140),
+        Font::HelveticaBoldOblique => (96, "-174 -228 1114 962", -12.0, 718, -207, 718, 140),
+        Font::TimesRoman => (34, "-168 -218 1000 898", 0.0, 683, -217, 662, 84),
+        Font::TimesBold => (34, "-168 -218 1000 935", 0.0, 683, -217, 676, 139),
+        Font::TimesItalic => (98, "-169 -217 1010 883", -15.5, 683, -217, 653, 76),
+        Font::TimesBoldItalic => (98, "-200 -218 996 921", -15.0, 683, -217, 669, 121),
+        Font::Courier => (35, "-23 -250 715 805", 0.0, 629, -157, 562, 51),
+        Font::CourierBold => (35, "-113 -250 749 801", 0.0, 629, -157, 562, 106),
+        Font::CourierOblique => (99, "-27 -250 849 805", -12.0, 629, -157, 562, 51),
+        Font::CourierBoldOblique => (99, "-57 -250 869 801", -12.0, 629, -157, 562, 106),
+        Font::Symbol => (4, "-180 -293 1090 1010", 0.0, 1010, -293, 1010, 85),
+    };
+    format!(
+        "<< /Type /FontDescriptor /FontName /{} /Flags {flags} /FontBBox [{bbox}] /ItalicAngle {italic} /Ascent {ascent} /Descent {descent} /CapHeight {cap} /StemV {stem} >>",
+        face.base_name()
+    )
+}
+
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
+/// Index of the first Latin Extended-A face (one per [`Font::ALL`] face, after the CID font).
+const EXT_FONT: usize = CID_FONT + 1;
 /// Number of font resources a page can use.
-const FONT_SLOTS: usize = CID_FONT + 1;
+const FONT_SLOTS: usize = EXT_FONT + Font::ALL.len();
 /// Base font of the CID font used for characters WinAnsiEncoding lacks.
 const CID_BASE_FONT: &str = "STSong-Light";
 /// Default glyph width of the CID font (full-width), in 1/1000 em.
@@ -337,7 +402,44 @@ const CID_WIDTH: u16 = 1000;
 
 /// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
-    !c.is_control() && c != '?' && win_ansi(c) == b'?'
+    !c.is_control() && c != '?' && win_ansi(c) == b'?' && ext_code(c).is_none()
+}
+
+/// The byte of `c` in the Latin Extended-A encoding (U+0100..=U+017F at 0x80..=0xFF), for
+/// characters WinAnsiEncoding lacks. These are set in the standard face with a `/Differences`
+/// encoding of standard glyph names, not in the CID font.
+fn ext_code(c: char) -> Option<u8> {
+    let u = c as u32;
+    ((0x100..=0x17F).contains(&u) && win_ansi(c) == b'?').then(|| (u - 0x80) as u8)
+}
+
+/// How a character is encoded in a text run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Ansi,
+    Ext,
+    Cid,
+}
+
+fn run_kind(c: char) -> Run {
+    if ext_code(c).is_some() {
+        Run::Ext
+    } else if needs_cid(c) {
+        Run::Cid
+    } else {
+        Run::Ansi
+    }
+}
+
+/// A PDF hex string `< … >` of `text` in the Latin Extended-A encoding of [`ext_code`].
+fn pdf_ext_string(text: &str) -> String {
+    let mut s = String::with_capacity(text.len() * 2 + 2);
+    s.push('<');
+    for c in text.chars() {
+        let _ = write!(s, "{:02X}", ext_code(c).unwrap_or(b'?'));
+    }
+    s.push('>');
+    s
 }
 
 /// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
@@ -879,7 +981,8 @@ impl Page {
                 return;
             }
         };
-        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
+        let ext = self.arabic.uses_ext.get(font.index()).copied().unwrap_or(false).then_some(EXT_FONT + font.index());
+        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT), ext].into_iter().flatten() {
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
@@ -907,13 +1010,17 @@ impl Page {
         // advances the text position, so the runs follow each other on the baseline.
         // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
         let symbol = font == Font::Symbol;
-        let uses_cid = |c: char| !symbol && needs_cid(c);
+        let kind_of = |c: char| if symbol { Run::Ansi } else { run_kind(c) };
         let mut rest: &str = &visual;
         while let Some(first) = rest.chars().next() {
-            let cid = uses_cid(first);
-            let end = rest.char_indices().find(|(_, c)| uses_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
+            let kind = kind_of(first);
+            let end = rest.char_indices().find(|(_, c)| kind_of(*c) != kind).map_or(rest.len(), |(i, _)| i);
             let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string_in(run, symbol)) };
+            let (slot, string) = match kind {
+                Run::Cid => (CID_FONT, pdf_utf16_string(run)),
+                Run::Ext => (EXT_FONT + fi, pdf_ext_string(run)),
+                Run::Ansi => (fi, pdf_string_in(run, symbol)),
+            };
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
@@ -1179,8 +1286,9 @@ impl PdfDoc {
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;
-                // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
+                // The CID font also needs its descendant font and font descriptor; a Latin
+                // Extended-A face its font descriptor.
+                next += font_objects(i);
             }
         }
         // Page contents are moved out so each one is freed as soon as it is in the output.
@@ -1213,6 +1321,10 @@ impl PdfDoc {
                             "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
                         ),
                     )?;
+                    continue;
+                }
+                if let Some(face) = i.checked_sub(EXT_FONT).and_then(|f| Font::ALL.get(f)) {
+                    write_ext_font(&mut out, *id, *face)?;
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();

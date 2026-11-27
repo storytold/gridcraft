@@ -343,6 +343,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Guarda el libro con otro nombre o en otra carpeta.",
         "Print Active Sheets" => "Imprimir hojas activas",
         "Print Entire Workbook" => "Imprimir todo el libro",
+        "Print Selection" => "Imprimir selección",
         "Fit Sheet on One Page" => "Ajustar hoja en una página",
         "Page Setup…" => "Configurar página…",
         "Page {page} of {pages}" => "Página {page} de {pages}",

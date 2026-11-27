@@ -248,7 +248,7 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
         color: Color::rgb(255, 0, 0),
         markers: false,
     });
-    let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
+    let options = PrintOptions { ranges: RangeRef::parse("A1:B2").into_iter().collect(), ..PrintOptions::default() };
     let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
     wb.sheet_mut(0).unwrap().right_to_left = true;
     let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
@@ -1385,6 +1385,38 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     pics.chart_prims = MAX_CHART_PRIMS - 10;
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
+
+fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+    let r = s.execute("file.printPreview", p).unwrap();
+    r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+    assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+    // Several areas, like a multi-area selection: one run of pages each, in the order given.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+    let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+    assert_eq!(pages, 2);
+    for bad in ["A1:B2,", "A1:B2,nope", ","] {
+        assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+    let mut s = s();
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    // A comma inside a quoted sheet name is not an area separator.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
 }
 
 /// XLSX id 34 is ISO B5 (176 × 250 mm), not the Letter fallback of the old name.
