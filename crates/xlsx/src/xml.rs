@@ -19,6 +19,16 @@ pub const MAX_DEPTH: usize = 256;
 /// matter (worksheet rows, shared strings) are streamed instead and never hold this tree.
 pub const MAX_XML_NODES: usize = 1_000_000;
 
+/// Most attributes one element may carry. A real SpreadsheetML element has a handful; a tag that
+/// repeats the same name without end is refused before every one of its values is kept.
+pub const MAX_ELEMENT_ATTRS: usize = 4096;
+
+/// Most attributes kept in one part's parsed XML tree. Each is two owned strings (dozens of bytes
+/// plus their values), so [`MAX_XML_NODES`] bounds the tree's elements but not its attributes: a
+/// tag of repeated `a=""` pairs could still grow the tree past memory. Like the element count,
+/// this one is given back when a streamed element hands its children out.
+pub const MAX_XML_ATTRS: usize = 1_000_000;
+
 /// An element: local name (namespace prefix dropped), attributes by local name, children and
 /// its direct text content.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -180,7 +190,7 @@ fn local(name: &[u8]) -> String {
     String::from_utf8_lossy(n).into_owned()
 }
 
-fn start_el(e: &BytesStart<'_>) -> El {
+fn start_el(e: &BytesStart<'_>, attrs: &mut usize) -> Result<El, IoError> {
     let mut el = El { name: local(e.name().as_ref()), ..Default::default() };
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
@@ -188,13 +198,29 @@ fn start_el(e: &BytesStart<'_>) -> El {
         if key == b"xmlns" || key.starts_with(b"xmlns:") {
             continue;
         }
+        if el.attrs.len() >= MAX_ELEMENT_ATTRS {
+            return Err(IoError::Xml(format!("an element holds more than {MAX_ELEMENT_ATTRS} attributes")));
+        }
         let v = match a.normalized_value(XmlVersion::Explicit1_0) {
             Ok(v) => v.into_owned(),
             Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
         };
         el.attrs.push((local(key), v));
     }
-    el
+    *attrs = attrs.saturating_add(el.attrs.len());
+    if *attrs > MAX_XML_ATTRS {
+        return Err(IoError::Xml(format!("the part holds more than {MAX_XML_ATTRS} attributes")));
+    }
+    Ok(el)
+}
+
+/// The elements and attributes held in the tree so far, and both counts when each open element
+/// began: a streamed element hands its children out, so their budget goes back.
+#[derive(Default)]
+struct Kept {
+    nodes: usize,
+    attrs: usize,
+    at_start: Vec<(usize, usize)>,
 }
 
 fn named_entity(name: &str) -> Option<char> {
@@ -226,9 +252,10 @@ pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
         cfg.allow_dangling_amp = true;
     }
     let mut buf = Vec::new();
+    let mut attrs = 0usize;
     loop {
         match reader.read_event_into(&mut buf).ok()? {
-            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == local_name => return Some(start_el(&e)),
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == local_name => return start_el(&e, &mut attrs).ok(),
             Event::Eof => return None,
             _ => {}
         }
@@ -254,12 +281,12 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
-    // Elements kept in the tree so far, so a pathological part that passes the byte limits can
-    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
-    // are handed out with it and do not stay in the tree, so a streamed worksheet or shared-string
-    // table of any size passes: `kept_at_start` remembers the count when each open element began.
-    let mut kept = 0usize;
-    let mut kept_at_start: Vec<usize> = Vec::new();
+    // Elements and attributes kept in the tree so far, so a pathological part that passes the byte
+    // limits can still be refused before the tree itself outgrows memory. Elements inside a
+    // `split` element are handed out with it and do not stay in the tree, so a streamed worksheet
+    // or shared-string table of any size passes: `at_start` remembers both counts when each open
+    // element began.
+    let mut kept = Kept::default();
     // Attach a finished element to its parent (or emit it / make it the root).
     fn finish(
         stack: &mut [El],
@@ -267,8 +294,8 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         el: El,
         split: &[&str],
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
-        kept: &mut usize,
-        kept_at_start: Option<usize>,
+        kept: &mut Kept,
+        at_start: Option<(usize, usize)>,
     ) -> Result<(), IoError> {
         let shallow = stack.len() <= 2;
         match stack.last_mut() {
@@ -276,12 +303,13 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                 if shallow && split.contains(&el.name.as_str()) {
                     cb(el)?;
                     // The element and everything parsed inside it have left the tree.
-                    if let Some(k) = kept_at_start {
-                        *kept = k;
+                    if let Some((nodes, attrs)) = at_start {
+                        kept.nodes = nodes;
+                        kept.attrs = attrs;
                     }
                 } else {
-                    *kept = kept.saturating_add(1);
-                    if *kept > MAX_XML_NODES {
+                    kept.nodes = kept.nodes.saturating_add(1);
+                    if kept.nodes > MAX_XML_NODES {
                         return Err(IoError::Xml(format!("the part holds more than {MAX_XML_NODES} elements")));
                     }
                     parent.children.push(el);
@@ -302,16 +330,17 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                 if stack.len() >= MAX_DEPTH {
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
-                stack.push(start_el(&e));
-                kept_at_start.push(kept);
+                let at_start = (kept.nodes, kept.attrs);
+                stack.push(start_el(&e, &mut kept.attrs)?);
+                kept.at_start.push(at_start);
             }
             Event::Empty(e) => {
-                let el = start_el(&e);
+                let el = start_el(&e, &mut kept.attrs)?;
                 finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    let at_start = kept_at_start.pop();
+                    let at_start = kept.at_start.pop();
                     finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
                 }
             }
@@ -351,7 +380,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        let at_start = kept_at_start.pop();
+        let at_start = kept.at_start.pop();
         finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
@@ -517,6 +546,42 @@ mod tests {
         let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
         let err = parse(xml.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    fn an_element_with_too_many_attributes_is_refused() {
+        let attrs = |n: usize| " a=\"\"".repeat(n);
+        // The cap is generous: a real element has a handful of attributes.
+        assert!(parse(format!("<r{}>x</r>", attrs(MAX_ELEMENT_ATTRS)).as_bytes()).is_ok());
+        let err = parse(format!("<r{}>x</r>", attrs(MAX_ELEMENT_ATTRS + 1)).as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("attributes"), "{err}");
+    }
+
+    #[test]
+    fn a_part_of_endless_attributes_is_refused() {
+        // A tag may hold the per-element cap, so the part's own budget is what stops a long run of
+        // such tags: each retained attribute costs an owned key and value, not part of the element
+        // count.
+        let el = format!("<x{} />", " a=\"\"".repeat(MAX_ELEMENT_ATTRS));
+        let xml = format!("<r>{}</r>", el.repeat(MAX_XML_ATTRS / MAX_ELEMENT_ATTRS + 1));
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("attributes"), "{err}");
+    }
+
+    #[test]
+    fn a_streamed_part_may_hold_more_attributes_than_the_cap() {
+        // Each row is handed out and releases its attributes, as it does its elements, so a
+        // worksheet's cells may carry more attributes in total than one part's tree may hold.
+        let row = format!("<row>{}</row>", "<c r=\"A1\"><v>1</v></c>".repeat(100));
+        let xml = format!("<sheetData>{}</sheetData>", row.repeat(10_001));
+        let mut rows = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |_| {
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 10_001);
+        assert!(root.children.is_empty());
     }
 
     #[test]
