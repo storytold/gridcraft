@@ -87,6 +87,19 @@ fn dashes_and_two_digit_years_follow_the_column_order() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
+/// With date conversion off, the column's date order doesn't turn day-first dates back into dates,
+/// and there is no order to warn about: every date stays the text it was written as.
+#[test]
+fn date_columns_stay_text_when_date_conversion_is_off() {
+    let conversion = gridcraft_core::parse::DataConversion { convert_dates: false, ..Default::default() };
+    let opts = CsvOptions { conversion, ..Default::default() };
+    let (wb, report) = read_csv_with_report(b"When,Mixed\n31/05/2026,31/05/2026\n03/04/2026,12/31/2026\n", &opts).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::text("31/05/2026"));
+    assert_eq!(v(&wb, 2, 0), Value::text("03/04/2026"));
+    assert_eq!(v(&wb, 2, 1), Value::text("12/31/2026"));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
 #[test]
 fn a_day_first_date_and_time_is_read_day_first() {
     let (wb, report) = read_csv_with_report(b"When\n31/05/2026 10:30\n03/04/2026 10:30\n", &CsvOptions::default()).unwrap();
@@ -125,6 +138,48 @@ fn values_and_formats() {
     // parse_values off keeps text.
     let wb3 = read_csv(b"1,TRUE", &CsvOptions { parse_values: false, ..Default::default() }).unwrap();
     assert_eq!(v(&wb3, 0, 0), Value::text("1"));
+}
+
+#[test]
+fn data_conversion_options_apply_to_fields() {
+    use gridcraft_core::parse::DataConversion;
+    // Cut-list rows: 12-character part codes that are all digits, digits-E-digits, or hex.
+    let src = "1;511.0;83.0;P3_L2_led;2162PE;16.0;;;;;124412140710;\r\n\
+               1;562.0;510.0;P3_pod;2162PE;19.0;;;;;1244121406E6;0042\r\n\
+               1;511.0;184.0;P3_L1_led;2162PE;16.0;;;;;1244121406FB;\r\n";
+    let read = |conversion| read_csv(src.as_bytes(), &CsvOptions { delimiter: 0, conversion, ..Default::default() }).unwrap();
+    // Default: converted as before.
+    let wb = read(DataConversion::default());
+    assert_eq!(v(&wb, 0, 10), Value::Number(124412140710.0));
+    assert_eq!(v(&wb, 1, 10), Value::Number(1.244121406e15));
+    assert_eq!(v(&wb, 1, 11), Value::Number(42.0));
+    // E off, long numbers over 11 digits as text, leading zeros kept: every code stays as written.
+    let wb = read(DataConversion {
+        remove_leading_zeros: false,
+        keep_first_15_digits: false,
+        long_number_digits: 11,
+        digits_around_e: false,
+        remove_trailing_zeros: true,
+        convert_dates: true,
+    });
+    assert_eq!(v(&wb, 0, 10), Value::text("124412140710"));
+    assert_eq!(v(&wb, 1, 10), Value::text("1244121406E6"));
+    assert_eq!(v(&wb, 1, 11), Value::text("0042"));
+    assert_eq!(v(&wb, 2, 10), Value::text("1244121406FB"));
+    assert_eq!(v(&wb, 0, 1), Value::Number(511.0));
+    let sh = wb.sheet(0).unwrap();
+    let raw = |c: CellRef| match sh.value(c) {
+        Value::Number(n) => gridcraft_core::number_to_text(n),
+        Value::Text(t) => t.to_string(),
+        _ => String::new(),
+    };
+    let out = String::from_utf8(write_csv(sh, b';', raw).unwrap()).unwrap();
+    assert_eq!(
+        out,
+        "1;511;83;P3_L2_led;2162PE;16;;;;;124412140710;\r\n\
+         1;562;510;P3_pod;2162PE;19;;;;;1244121406E6;0042\r\n\
+         1;511;184;P3_L1_led;2162PE;16;;;;;1244121406FB;\r\n"
+    );
 }
 
 #[test]
