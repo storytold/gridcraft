@@ -50,7 +50,7 @@ fn filtered(af_range: &str, af_col: u32) -> Workbook {
     s.tables.push(t);
     s.autofilter = Some(AutoFilter {
         range: rr(af_range),
-        criteria: vec![(af_col, FilterCriterion::Values { values: vec!["a".into(), "c".into()], blanks: false })],
+        criteria: vec![(af_col, FilterCriterion::Values { values: vec!["a".into(), "c".into()], blanks: false, identities: vec![] })],
     });
     for row in [3, 5] {
         s.rows.entry(row).or_default().hidden = true;
@@ -82,7 +82,7 @@ fn sheet_autofilter_starting_left_of_the_table_maps_its_columns() {
     // filter and column 0 of the table; a criterion on the column outside the table is dropped.
     let mut wb = filtered("A2:C6", 1);
     if let Some(af) = wb.sheet_mut(0).unwrap().autofilter.as_mut() {
-        af.criteria.push((0, FilterCriterion::Values { values: vec!["zz".into()], blanks: true }));
+        af.criteria.push((0, FilterCriterion::Values { values: vec!["zz".into()], blanks: true, identities: vec![] }));
     }
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     let t = &back.sheet(0).unwrap().tables[0];
