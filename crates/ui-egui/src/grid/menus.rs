@@ -182,10 +182,8 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
                         "ui:pasteData" => {
-                            let at = app.session.active().and_then(|d| {
-                                let sheet = d.wb.active()?;
-                                Some(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&sheet.name), d.selection.active.a1()))
-                            });
+                            // Where Paste pastes: the selection's top-left cell.
+                            let at = app.session.active().map(|d| d.selection.current().start.a1());
                             app.open_dialog("fromClipboard", json!({"at": at}));
                         }
                         "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),

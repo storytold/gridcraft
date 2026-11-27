@@ -635,15 +635,17 @@ fn paste_data_in_the_cell_menu_splits_the_clipboard_text_into_columns_at_the_cel
     h.get_by_role_and_label(Role::Button, "Paste Data…").click();
     h.run_steps(3);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.title.as_str()), Some("Paste Data"));
-    // Another sheet is active by OK (the sheet tabs work while the dialog is open).
-    h.state_mut().session.execute("home.insertSheet", json!({})).unwrap();
+    // By OK its sheet is renamed and another sheet, now active, has its old name (the sheet tabs
+    // and the control channel work while the dialog is open).
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Sheet1"})).unwrap();
     h.run_steps(2);
     h.get_by_label_contains("OK").click();
     h.run_steps(3);
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let wb = &h.state().session.active().unwrap().wb;
     assert_eq!(wb.sheets.len(), sheets + 1, "no sheet of its own");
-    assert_eq!(wb.active().unwrap().name, "Sheet1", "the paste goes to the sheet it was asked on");
+    assert_eq!(wb.active().unwrap().name, "Renamed", "the paste goes to the sheet it was asked on");
     assert!(wb.active().unwrap().tables.is_empty(), "no table either");
     assert_eq!(value_at(&h, "C3"), Some(Value::from("x")));
     assert_eq!(value_at(&h, "D3"), Some(Value::from("y")));

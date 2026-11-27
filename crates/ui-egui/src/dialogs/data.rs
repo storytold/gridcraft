@@ -8,7 +8,7 @@ use super::{Dialog, Field, Json, SheetApp, json, vec2};
 /// read now is the text OK imports, whatever the clipboard holds by then. With no text to import
 /// that is said now, not after OK.
 pub(super) fn from_clipboard_form(app: &mut SheetApp, at: Option<&str>) -> Option<Dialog> {
-    use Field::{Choice, Note, Text};
+    use Field::{Choice, Note, Ref, Text};
     let text = match app.clipboard_text_to_import() {
         Ok(text) => text,
         Err(e) => {
@@ -21,23 +21,19 @@ pub(super) fn from_clipboard_form(app: &mut SheetApp, at: Option<&str>) -> Optio
         ';' => "semicolon",
         _ => "comma",
     };
-    // From Paste Data… the columns go in at the cell; from Get Data, into a new sheet.
+    // From Paste Data… the columns go in at the cell; from Get Data, into a new sheet. As a
+    // reference box the cell means the sheet the dialog opened on, whichever is shown by OK.
     let mut fields = Vec::new();
-    if let Some(at) = at {
-        fields.push(Note(app.ui.language.tr_fill("The columns start at {cell}, replacing what is there.", &[("cell", at)])));
+    if at.is_some() {
+        fields.push(Note("The columns replace what is there.".into()));
+        fields.push(Ref { key: "at", label: "Paste at:" });
     }
     fields.extend([
         Choice {
             key: "separator",
             label: "Separator",
             // Keyed as Text to Columns keys it: the separator, not the Comma cell style.
-            options: vec![
-                ("comma", "Text to Columns|Comma"),
-                ("semicolon", "Semicolon"),
-                ("tab", "Tab"),
-                ("space", "Space"),
-                ("other", "Other"),
-            ],
+            options: vec![("comma", "Text to Columns|Comma"), ("semicolon", "Semicolon"), ("tab", "Tab"), ("space", "Space"), ("other", "Other")],
         },
         Text { key: "other", label: "Other separator:" },
     ]);

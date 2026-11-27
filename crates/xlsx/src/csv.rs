@@ -351,10 +351,12 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
     let mut too_many = false;
+    let mut widest = 0;
     parse_records(body, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
         }
+        widest = widest.max(rec.len().min(MAX_COLS as usize));
         // A blank line is an empty row.
         for (col, f) in rec.into_iter().enumerate() {
             if col as u32 >= MAX_COLS {
@@ -401,6 +403,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
+    report.records = row;
+    report.fields = u32::try_from(widest).unwrap_or(MAX_COLS);
     Ok((wb, report))
 }
 

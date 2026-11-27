@@ -175,17 +175,29 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         let rows = json_rows(&text)?;
         return write_json_rows(s, p, at, rows);
     }
-    // With no separator given (0) the reader picks comma, semicolon or tab by the text.
-    let opts = gridcraft_xlsx::CsvOptions { delimiter: delimiter.unwrap_or(0), max_used_cells: Some(MAX_IMPORT_CELLS), ..Default::default() };
+    // With no separator given (0) the reader picks comma, semicolon or tab by the text. Dates are
+    // read as serials of the workbook they go into.
+    let opts = gridcraft_xlsx::CsvOptions {
+        delimiter: delimiter.unwrap_or(0),
+        date_system: s.doc()?.wb.date_system,
+        max_used_cells: Some(MAX_IMPORT_CELLS),
+        ..Default::default()
+    };
     // The cell limit is enforced while parsing, before an oversized file is stored.
-    let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| match e {
+    let (wb, report) = gridcraft_xlsx::read_csv_with_report(&bytes, &opts).map_err(|e| match e {
         gridcraft_xlsx::IoError::TooLarge(_) => too_many_cells(),
         e => EngineError::Other(e.to_string()),
     })?;
     let Some(u) = wb.sheet(0).and_then(|sh| sh.used_range()) else { return Err(EngineError::Other("The file is empty.".into())) };
-    // Pasted at a cell, the text keeps its blank leading rows and columns in place; imported into
-    // a sheet of its own, it starts at its first cell with data.
-    let src = RangeRef::new(if at.is_some() { CellRef::new(0, 0) } else { u.start }, u.end);
+    // Pasted at a cell, the text covers every field it has, blank ones at either end included, so
+    // they clear what is under them; imported into a sheet of its own, it is its cells with data.
+    let src = match at {
+        Some(_) => {
+            let end = CellRef::new(report.records.saturating_sub(1).max(u.end.row), report.fields.saturating_sub(1).max(u.end.col));
+            RangeRef::new(CellRef::new(0, 0), end)
+        }
+        None => u,
+    };
     if src.count() > MAX_IMPORT_CELLS {
         return Err(too_many_cells());
     }
@@ -214,8 +226,8 @@ fn delimiter_param(p: &Json) -> Result<Option<u8>> {
     }
 }
 
-/// Paste Data's `at`: a cell on the sheet it names (`'My Sheet'!C5`), else on the active sheet.
-/// Naming the sheet keeps the paste where it was asked for when another sheet is active by OK.
+/// Paste Data's `at`: a cell (or a range's top-left cell, as Paste takes a selection) on the sheet
+/// it names (`'My Sheet'!C5`), else on the active sheet.
 fn paste_target(s: &Session, p: &Json) -> Result<Option<(usize, CellRef)>> {
     let t = match p.get("at") {
         None | Some(Json::Null) => return Ok(None),
@@ -228,7 +240,8 @@ fn paste_target(s: &Session, p: &Json) -> Result<Option<(usize, CellRef)>> {
         Some(n) => wb.sheet_index(&n).ok_or_else(|| bad("at", format!("no sheet named `{n}`")))?,
         None => wb.active_sheet(),
     };
-    let cell = CellRef::parse(body).ok_or_else(|| bad("at", format!("invalid cell reference `{t}`")))?;
+    let cell =
+        CellRef::parse(body).or_else(|| RangeRef::parse(body).map(|r| r.start)).ok_or_else(|| bad("at", format!("invalid cell reference `{t}`")))?;
     Ok(Some((sheet, cell)))
 }
 
@@ -398,6 +411,29 @@ mod tests {
         }
         let other = d.wb.sheet(d.wb.sheet_index("Other").unwrap()).unwrap();
         assert!(other.used_range().is_none(), "the active sheet at OK is left alone");
+    }
+
+    #[test]
+    fn a_paste_clears_under_trailing_blanks_and_dates_follow_the_workbooks_date_system() {
+        use gridcraft_core::{CellRef, DateSystem, Value};
+        let at = |a1: &str| CellRef::parse(a1).unwrap();
+        let pasted = |system: DateSystem| {
+            let mut s = s();
+            std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = system;
+            s.execute("range.setValues", json!({"range": "B1", "values": [["x", "y"], ["z", "w"]]})).unwrap();
+            // The second field and the second record are blank: they clear C1 and B2:C2.
+            s.execute("data.fromTextCsv", json!({"text": "2026-01-15,\n,\n", "delimiter": ",", "at": "B1"})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap().clone();
+            for a1 in ["C1", "B2", "C2"] {
+                assert_eq!(sh.value(at(a1)), Value::Empty, "{a1}");
+            }
+            match sh.value(at("B1")) {
+                Value::Number(n) => n,
+                v => panic!("{v:?}"),
+            }
+        };
+        // The same day is 1,462 serials lower in the 1904 date system.
+        assert_eq!(pasted(DateSystem::D1900) - pasted(DateSystem::D1904), 1462.0);
     }
 
     #[test]

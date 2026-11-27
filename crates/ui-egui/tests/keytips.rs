@@ -832,6 +832,11 @@ fn borders_keytip_opens_the_borders_menu() {
 fn get_data_key_tips_open_its_menu_and_arrows_move_through_it() {
     let mut h = harness(blank());
     let focused = |h: &Harness, label: &str| h.get_by_label(label).is_focused();
+    // A ribbon button has keyboard focus first, so egui would act on the arrow too.
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.run_steps(2);
+    h.get_by_label("Filter").focus();
+    h.run_steps(2);
     // Alt, A, P, N opens the menu; Down then moves keyboard focus onto its items, wrapping.
     sequence(&mut h, &[Key::A, Key::P, Key::N], false);
     assert_eq!(h.state().keytips.prefix(), Some("APN"));

@@ -316,6 +316,9 @@ fn menu_focus(app: &mut SheetApp, ui: &Ui, buttons: &[egui::Response]) {
         app.keytips.clear();
         let target = if key == egui::Key::ArrowUp { last } else { first };
         target.request_focus();
+        // egui read the arrow before key tips took it: with a widget focused, it would move on
+        // from the item just focused.
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         return;
     }
     let focused = buttons.iter().position(egui::Response::has_focus);
