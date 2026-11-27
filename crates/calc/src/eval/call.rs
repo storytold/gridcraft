@@ -415,11 +415,10 @@ impl<'h> Evaluator<'h> {
         if !a.range.is_single() {
             // Adding the block's remembered sum to anything but +0.0 would add in another order.
             // COUNT never reads the sum, so it may reuse every block.
-            if (kind == Agg::Count || acc.sum.to_bits() == 0)
+            if (kind == Agg::Count || acc.is_empty())
                 && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
             {
-                acc.sum = sum;
-                acc.count = acc.count.saturating_add(count);
+                acc.add_range_sum(sum, count);
                 return Ok(());
             }
             // Folded without building an array, but still walked: the part inside the used

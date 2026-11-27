@@ -459,7 +459,7 @@ impl<'h> Evaluator<'h> {
             return Err(CellError::Num);
         }
         if !self.spend(1) {
-            return err(CellError::Calc);
+            return Err(CellError::Calc);
         }
         self.depth += 1;
         if self.depth > MAX_DEPTH {

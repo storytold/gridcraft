@@ -36,6 +36,18 @@ impl Acc {
         }
     }
 
+    /// True when no number has been added yet, so a precomputed block sum may be taken
+    /// without changing addition order or the last-add snap.
+    pub(super) fn is_empty(&self) -> bool {
+        self.last.is_none() && self.sum.to_bits() == 0
+    }
+
+    /// Fold a precomputed range sum into an empty accumulator.
+    pub(super) fn add_range_sum(&mut self, sum: f64, count: u64) {
+        self.sum = sum;
+        self.count = self.count.saturating_add(count);
+    }
+
     /// Takes a value found inside a reference: only numbers count. `Err` is an error value that
     /// ends `SUM` and `AVERAGE`; `COUNT` skips errors.
     pub(super) fn add_cell(&mut self, kind: Agg, v: &Value) -> Result<(), CellError> {
