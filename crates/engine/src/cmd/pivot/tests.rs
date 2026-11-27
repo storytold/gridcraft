@@ -2630,6 +2630,28 @@ fn each_older_name_takes_the_column_whichever_way_places_it() {
     assert_eq!(grand_total(&s, 1), Value::Number(420.0));
 }
 
+/// A sort by value names the other axis's field too: its scope takes the field's new name, so the
+/// rows still sort by the Apples column.
+#[test]
+fn an_older_sort_scope_follows_its_fields_new_name() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=\"Product\""})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.sort", json!({"field": "Region", "order": "desc", "by": "Sum of Sales"})).unwrap();
+    let regions = ["East", "West", "North"];
+    // By the grand total, before any scope.
+    assert_eq!(first_col(&s.doc().unwrap().wb, &regions), ["East", "West", "North"]);
+    reopen_as_older(&mut s, |pt| {
+        pt.columns[0].source_col = "=\"Product\"".into();
+        pt.rows[0].sort_scope =
+            vec![gridcraft_model::PivotScopeItem { source_col: "=\"Product\"".into(), item: "Apples".into(), ..Default::default() }];
+    });
+    let p = pt(&s);
+    assert_eq!((p.columns[0].source_col.as_str(), p.rows[0].sort_scope[0].source_col.as_str()), ("Product", "Product"));
+    // Apples: West 170, East 160, North 90.
+    assert_eq!(first_col(&s.doc().unwrap().wb, &regions), ["West", "East", "North"]);
+}
+
 /// Two saved names that the two ways of showing the headers would both put on column A: the way
 /// that places more of the fields wins, and the other name is left as it is rather than reading
 /// A a second time.

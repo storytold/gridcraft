@@ -209,7 +209,7 @@ pub fn migrate_older_names(wb: &mut Workbook) -> Vec<(usize, CellRef)> {
 /// - a name neither places is left as it is.
 ///
 /// Each field then takes the current name of its column, and so does each field a calculated
-/// formula or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header
+/// formula, a sort by value's scope or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header
 /// is renamed (`Margin2`), with the values that show it, as Excel doesn't allow the two to share a
 /// name. Worksheet formulas are not rewritten: GETPIVOTDATA knows a field by its current name only.
 fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotTable> {
@@ -264,6 +264,11 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
     for f in new.rows.iter_mut().chain(new.columns.iter_mut()) {
         if let Some(n) = column(&f.source_col) {
             f.source_col = n;
+        }
+        for e in &mut f.sort_scope {
+            if let Some(n) = column(&e.source_col) {
+                e.source_col = n;
+            }
         }
     }
     for f in &mut new.filters {
