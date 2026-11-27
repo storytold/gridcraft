@@ -196,8 +196,11 @@ pub(super) fn transfer(s: &mut Session, p: &Json) -> Result<Json> {
     if from.cells.iter_range(v.src).any(|(_, c)| c.formula.as_ref().is_some_and(|f| f.with_expr(|_| ()).is_none())) {
         return Err(bad(TRANSFER, "An unsupported source formula cannot be relocated without loss."));
     }
-    if cut && v.from != v.to {
-        bindings::guard(&d.wb, &v)?;
+    if cut {
+        bindings::guard_callers(&d.wb, &v)?;
+        if v.from != v.to || !d.wb.names.is_empty() {
+            bindings::guard(&d.wb, &v)?;
+        }
     }
     if v.from == v.to && dest == v.src && !transpose {
         return Err(bad(TRANSFER, "Source and destination are the same block."));
@@ -371,6 +374,23 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
     }
 
+    #[test]
+    fn moves_preserve_unmoved_callers_of_local_relative_names() {
+        let mut s = setup();
+        for (cell, input) in [("B1", "9"), ("D3", "11"), ("E3", "22")] {
+            s.execute("cell.set", json!({"cell":cell,"input":input})).unwrap();
+        }
+        s.execute("formulas.defineName", json!({"name":"Relative","scope":"Input","refersTo":"B1"})).unwrap();
+        s.execute("cell.set", json!({"cell":"C3","input":"=Relative"})).unwrap();
+        s.execute("home.insertSheet", json!({"name":"Output"})).unwrap();
+        for target in ["Input", "Output"] {
+            let before = s.doc().unwrap().wb.clone();
+            let request = json!({"sheet":"Input","source":"B1","at":"C1","destinationSheet":target,"operation":"move"});
+            assert!(s.execute(TRANSFER, request).unwrap_err().to_string().contains("caller-relative"));
+            assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+            assert_eq!(get(&mut s, "Input", "C3")["value"], 11.0);
+        }
+    }
     #[test]
     fn moved_name_bindings_and_untouched_callers_are_preserved_or_refused_before_editing() {
         for separate_destination_binding in [false, true] {

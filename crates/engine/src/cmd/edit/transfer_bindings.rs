@@ -21,7 +21,7 @@ impl Names<'_> {
             }
             result = match e {
                 Expr::Name(n) => self.name(n, from, to, depth),
-                Expr::Call(n, _) if n.eq_ignore_ascii_case("INDIRECT") || n.eq_ignore_ascii_case("SHEET") => {
+                Expr::Call(n, _) if from != to && (n.eq_ignore_ascii_case("INDIRECT") || n.eq_ignore_ascii_case("SHEET")) => {
                     Err(bad(TRANSFER, "This formula resolves its worksheet at evaluation time; it cannot safely move between sheets."))
                 }
                 Expr::Call(n, _) => self.name(n, from, to, depth), // named LAMBDAs resolve in the same scope
@@ -70,7 +70,7 @@ pub(super) fn guard(wb: &Workbook, v: &Request) -> Result<()> {
     let sh = &wb.sheets[v.from];
     let mut names = Names { wb, checked: BTreeSet::new(), shifted: v.src.start != v.at };
     for (_, cell) in sh.cells.iter_range(v.src) {
-        if cell.py.is_some() {
+        if v.from != v.to && cell.py.is_some() {
             return Err(bad(TRANSFER, "Python cells can resolve workbook names at runtime and cannot safely move between sheets."));
         }
         if let Some(f) = &cell.formula {
@@ -91,22 +91,32 @@ pub(super) fn guard(wb: &Workbook, v: &Request) -> Result<()> {
             names.expression(&e, v.from, v.to, false, 0)?;
         }
     }
-    // Structural rewriting gives global names no host sheet. A global, unqualified A1
-    // pointing into the cut can mean this sheet to one outside caller and another sheet to
-    // another caller. There is no single rewrite that preserves both. Absolute qualified
-    // global names and sheet-scoped names remain on the native reference-rewrite path.
-    for n in wb.names.iter().filter(|n| n.scope.is_none()) {
+    Ok(())
+}
+
+pub(super) fn guard_callers(wb: &Workbook, v: &Request) -> Result<()> {
+    // A single rewritten definition cannot preserve the meanings at multiple callers of a
+    // relative name. This applies even when none of those callers is in the moved block.
+    // Global unqualified absolute references also lack one unambiguous host sheet.
+    for n in &wb.names {
         let Ok(e) = gridcraft_formula::parse_name(&n.formula) else { continue };
         let mut ambiguous = false;
         e.walk(&mut |e| {
-            if let Expr::Ref(r) = e
-                && r.sheet == SheetSel::Current
-            {
-                ambiguous |= r.range().intersects(&v.src) || gridcraft_formula::adjust::has_relative_refs(e);
+            if let Expr::Ref(r) = e {
+                let on_source = match &r.sheet {
+                    SheetSel::Current => n.scope.is_none_or(|i| i == v.from),
+                    SheetSel::Named(sheet) => wb.sheet_index(sheet) == Some(v.from),
+                    SheetSel::Span(first, last) => {
+                        wb.sheet_index(first).zip(wb.sheet_index(last)).is_some_and(|(a, b)| (a.min(b)..=a.max(b)).contains(&v.from))
+                    }
+                };
+                ambiguous |= on_source
+                    && (gridcraft_formula::adjust::has_relative_refs(e)
+                        || (n.scope.is_none() && r.sheet == SheetSel::Current && r.range().intersects(&v.src)));
             }
         });
         if ambiguous {
-            return Err(bad(TRANSFER, "A workbook-scoped name has a caller-relative reference that may read the moved cells."));
+            return Err(bad(TRANSFER, "A defined name has a caller-relative reference that may read the moved cells."));
         }
     }
     Ok(())
