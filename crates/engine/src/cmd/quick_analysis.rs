@@ -213,9 +213,10 @@ fn add_total(s: &mut Session, p: &Json) -> Result<Json> {
     let out = writes.iter().fold(None::<RangeRef>, |acc, (t, _)| Some(acc.map_or(RangeRef::cell(*t), |a| a.union(&RangeRef::cell(*t)))));
     let percent = func == Func::Percent;
     let count = writes.len();
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (t, f) in &writes {
-            let cell = super::edit::input_to_cell(f, sheet, *t, &mut cx.wb)?.unwrap_or_default();
+            let cell = super::edit::input_to_cell(f, sheet, *t, &mut cx.wb, &conv)?.unwrap_or_default();
             cx.sheet_mut(sheet)?.set_cell(*t, cell);
             if percent {
                 let cur = cx.wb.sheet(sheet).map(|sh| sh.style_id(*t)).unwrap_or_default();
