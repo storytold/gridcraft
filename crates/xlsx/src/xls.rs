@@ -227,11 +227,13 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
         let px = col_width_to_px(f64::from(c.width) / 256.0);
         let info = LineInfo {
             size: (c.custom_width || px != sheet.default_col_width).then_some(px),
+            // fUserSet. craft-xls does not expose fBestFit, so a width AutoFit stored with both
+            // flags also counts as set by hand here (#1077).
+            custom: c.custom_width,
             hidden: c.hidden,
             outline: c.outline,
             collapsed: c.collapsed,
             style: c.format.map(|f| style(Some(f))).filter(|&id| id != StyleId::DEFAULT),
-            ..LineInfo::default()
         };
         if info != LineInfo::default() {
             sheet.cols.insert(u32::from(col), info);
@@ -443,6 +445,7 @@ fn style_of(f: &x::CellFormat) -> Style {
             indent: a.indent,
             rotation: a.rotation,
             reading_order: None,
+            padding: [None; 4],
         },
         borders: Borders {
             left: line(b.left),

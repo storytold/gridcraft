@@ -1,0 +1,12 @@
+# One chart of each common kind over the sales table
+insert.chart={"range":"B4:F8","type":"bar","at":"K36"}
+insert.chart={"range":"B4:F8","type":"line","subtype":"markers","at":"S3"}
+insert.chart={"range":"B4:F8","type":"area","subtype":"stacked","at":"S19"}
+insert.chart={"range":"C5:D8","type":"scatter","at":"S36"}
+insert.chart={"range":"B4:F8","type":"radar","at":"AA3"}
+insert.chart={"range":"B4:C8","type":"doughnut","at":"AA19"}
+insert.chart={"range":"B4:C8","type":"waterfall","at":"AA36"}
+insert.chart={"range":"B4:C8","type":"treemap","at":"AI3"}
+insert.chart={"range":"B4:C8","type":"histogram","at":"AI19"}
+insert.sparkline={"range":"C5:F5","location":"J5","type":"line"}
+insert.sparkline={"range":"C6:F6","location":"J6","type":"column"}
