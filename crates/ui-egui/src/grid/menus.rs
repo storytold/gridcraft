@@ -134,6 +134,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ("Copy", "edit.copy"),
                 ("Paste", "edit.paste"),
                 ("Paste Special…", "ui:pasteSpecial"),
+                ("Paste Data…", "ui:pasteData"),
                 ("-", ""),
                 ("Insert…", "ui:insertCells"),
                 ("Delete…", "ui:deleteCells"),
@@ -151,8 +152,10 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ("Define Name…", "ui:defineName"),
                 ("Link…", "ui:insertLink"),
             ];
-            if let Some(item) = insert_copied {
-                items.insert(6, item);
+            if let Some(item) = insert_copied
+                && let Some(i) = items.iter().position(|(_, id)| *id == "ui:insertCells")
+            {
+                items.insert(i + 1, item);
             }
             if link.is_some()
                 && let Some(i) = items.iter().position(|(_, id)| *id == "ui:insertLink")
@@ -178,6 +181,13 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
+                        "ui:pasteData" => {
+                            let at = app.session.active().and_then(|d| {
+                                let sheet = d.wb.active()?;
+                                Some(format!("{}!{}", gridcraft_engine::formula::quote_sheet(&sheet.name), d.selection.active.a1()))
+                            });
+                            app.open_dialog("fromClipboard", json!({"at": at}));
+                        }
                         "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
                         "ui:insertCells" => app.open_dialog("insertCells", json!({})),
                         "ui:deleteCells" => app.open_dialog("deleteCells", json!({})),

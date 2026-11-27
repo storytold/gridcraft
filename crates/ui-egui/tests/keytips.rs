@@ -827,3 +827,34 @@ fn borders_keytip_opens_the_borders_menu() {
     assert_eq!(h.state().keytips.prefix(), Some("H"), "Esc backs out to the Home letters");
     assert!(!egui::Popup::is_any_open(&h.ctx), "and closes the menu");
 }
+
+#[test]
+fn get_data_key_tips_open_its_menu_and_arrows_move_through_it() {
+    let mut h = harness(blank());
+    let focused = |h: &Harness, label: &str| h.get_by_label(label).is_focused();
+    // Alt, A, P, N opens the menu; Down then moves keyboard focus onto its items, wrapping.
+    sequence(&mut h, &[Key::A, Key::P, Key::N], false);
+    assert_eq!(h.state().keytips.prefix(), Some("APN"));
+    key(&mut h, Key::ArrowDown);
+    assert_eq!(h.state().keytips.prefix(), None, "an arrow ends key tips");
+    assert!(focused(&h, "From Text/CSV…"));
+    key(&mut h, Key::ArrowDown);
+    assert!(focused(&h, "From Clipboard…"));
+    key(&mut h, Key::ArrowDown);
+    assert!(focused(&h, "From Text/CSV…"), "Down on the last item wraps to the first");
+    key(&mut h, Key::ArrowUp);
+    assert!(focused(&h, "From Clipboard…"), "Up on the first item wraps to the last");
+    // Enter runs the focused item and closes the menu, and doesn't also dismiss what the item
+    // shows: this harness has no system clipboard, which From Clipboard says.
+    key(&mut h, Key::Enter);
+    let message = format!("{:?}", h.state().message);
+    assert!(message.contains("can't read the clipboard"), "{message}");
+    assert!(h.query_by_label("From Clipboard…").is_none(), "the menu closed");
+
+    // C runs From Clipboard straight from the key tips.
+    h.state_mut().message = None;
+    h.run_steps(2);
+    sequence(&mut h, &[Key::A, Key::P, Key::N, Key::C], false);
+    let message = format!("{:?}", h.state().message);
+    assert!(message.contains("can't read the clipboard"), "{message}");
+}

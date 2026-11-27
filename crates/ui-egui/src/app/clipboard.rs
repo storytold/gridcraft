@@ -62,6 +62,22 @@ impl SheetApp {
         }
     }
 
+    /// `data.fromClipboard {delimiter?, at?}`: the text on the system clipboard, imported as
+    /// `data.fromTextCsv` imports text: into a new sheet as a table, or at the cell `at`. Without
+    /// a `delimiter` the engine picks comma, semicolon or tab by the text.
+    pub(super) fn import_clipboard_text(&mut self, p: &Json) -> Result<Json, String> {
+        let text = self.clipboard_text_to_import()?;
+        self.run_command("data.fromTextCsv", json!({"text": text, "delimiter": p.get("delimiter"), "at": p.get("at")}))
+    }
+
+    /// The text From Clipboard imports, or why there is none.
+    pub(crate) fn clipboard_text_to_import(&mut self) -> Result<String, String> {
+        if self.services.paste_text.is_none() {
+            return Err("GridCraft can't read the clipboard here. Paste the text into a cell, then use Text to Columns.".into());
+        }
+        self.system_clipboard_text().filter(|t| !t.trim().is_empty()).ok_or_else(|| "There's no text on the clipboard to import.".into())
+    }
+
     /// Paste a picture from the system clipboard (a screenshot, an image copied in a browser) as
     /// a floating picture whose top-left corner is the active cell, as Excel does.
     pub fn paste_picture(&mut self, image: image::RgbaImage) {

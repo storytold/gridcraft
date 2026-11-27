@@ -2094,6 +2094,16 @@ fn keytip_apn_() {
 }
 
 #[test]
+fn keytip_apnc_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "APNC", false);
+    assert!(
+        h.state().message.as_ref().is_some_and(|(_, m)| m.contains("clipboard")),
+        "APNC must open From Clipboard, which says there is no clipboard here"
+    );
+}
+
+#[test]
 fn keytip_apnd_() {
     let mut h = harness(blank());
     sequence(&mut h, "APND", false);
@@ -3086,7 +3096,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 414;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

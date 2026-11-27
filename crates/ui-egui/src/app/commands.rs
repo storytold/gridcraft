@@ -217,6 +217,7 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "data.fromClipboard" => self.import_clipboard_text(p),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {

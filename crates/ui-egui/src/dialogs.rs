@@ -32,7 +32,7 @@ mod zoom;
 
 use analysis::toolpak_defaults;
 use charts::select_chart;
-use data::{abs, data_validation_fields, remove_duplicates_range, validation_defaults};
+use data::{abs, data_validation_fields, from_clipboard_form, remove_duplicates_range, validation_defaults};
 use find::go_to_entries;
 pub(crate) use names::insert_name;
 use names::pasteable_names;
@@ -137,6 +137,10 @@ impl Dialog {
                 }
                 _ => {}
             }
+        }
+        // Typing a separator in From Clipboard's Other box chooses Other.
+        if self.name == "fromClipboard" && key == "other" && value.as_str().is_some_and(|s| !s.is_empty()) {
+            self.values.insert("separator".into(), json!("other"));
         }
         self.values.insert(key.into(), value);
     }
@@ -687,6 +691,7 @@ impl Dialog {
                 ],
                 json!({"tab": true, "comma": true, "destination": active}),
             ),
+            "fromClipboard" => from_clipboard_form(app, p("at").as_str())?,
             "removeDuplicates" => Dialog::form(
                 "removeDuplicates",
                 "Remove Duplicates",

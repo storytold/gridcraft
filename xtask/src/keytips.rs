@@ -331,6 +331,12 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().backstage.is_some(), \"{seq} must open the Options page\");",
                 seq = e.seq,
             ),
+            // From Clipboard first reads the clipboard, which the test harness doesn't have: it
+            // says so rather than opening a dialog with nothing to import.
+            "dialog" if e.target == "fromClipboard" => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().message.as_ref().is_some_and(|(_, m)| m.contains(\"clipboard\")), \"{seq} must open From Clipboard, which says there is no clipboard here\");",
+                seq = e.seq,
+            ),
             "dialog" => format!(
                 "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().dialog.is_some(), \"{seq} must open the {dialog} dialog\");",
                 seq = e.seq,

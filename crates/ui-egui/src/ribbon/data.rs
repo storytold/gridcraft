@@ -1,12 +1,21 @@
-use super::controls::{act, control_keytip, keytip, menu_items, sep};
-use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
+use super::controls::{act, control_keytip, keytip, menu_items, popup_command, sep};
+use super::{Icon, SheetApp, Ui, big_button, big_split_button, json, keytip_table, small_button};
 
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
-    let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
-    control_keytip(app, ui, &gd, "data.getData");
+    // The button opens a text or CSV file; its menu can also import the text on the clipboard.
+    let (gd, gd_menu) = big_split_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file");
+    // Alt, A, P, N opens the menu with its item letters, G for a file and C for the clipboard,
+    // which the button's own badge would repeat.
+    let keyed = keytip_table::opens_menu(app.keytips.prefix().unwrap_or_default(), "data.getData");
+    if !keyed {
+        control_keytip(app, ui, &gd_menu, "data.getData");
+    }
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    egui::Popup::menu(&gd_menu).open_memory(popup_command(keyed, gd_menu.clicked())).show(|ui| {
+        menu_items(app, ui, &[("From Text/CSV…", "data.getData", json!({})), ("From Clipboard…", "dialog:fromClipboard", json!({}))]);
+    });
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

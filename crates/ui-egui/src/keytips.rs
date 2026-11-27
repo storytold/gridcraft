@@ -33,6 +33,9 @@ pub struct KeyTips {
     alt_held: bool,
     // Keep consuming a held mnemonic after its action closes keytips.
     held: Vec<Key>,
+    // Up or Down pressed this frame while a sequence was under way, for a menu that key tips
+    // opened to take (`take_menu_arrow`).
+    menu_arrow: Option<Key>,
 }
 
 impl KeyTips {
@@ -45,6 +48,13 @@ impl KeyTips {
         self.alt_armed = false;
         self.alt_held = false;
         self.held.clear();
+        self.menu_arrow = None;
+    }
+
+    /// Up or Down pressed this frame during a sequence: a menu that key tips opened (Alt, H, V)
+    /// takes it to move keyboard focus onto its items. Unclaimed, it is dropped next frame.
+    pub fn take_menu_arrow(&mut self) -> Option<Key> {
+        self.menu_arrow.take()
     }
 
     fn toggle(&mut self) {
@@ -54,6 +64,7 @@ impl KeyTips {
 
     /// Remove only handled events before any text editors or the grid see them.
     pub fn process(&mut self, ctx: &Context, enabled: bool) -> Vec<Action> {
+        self.menu_arrow = None;
         if !enabled || !ctx.input(|i| i.focused) {
             self.clear();
             return Vec::new();
@@ -121,6 +132,8 @@ impl KeyTips {
                         handled = true;
                         if *key == Key::Escape {
                             self.back();
+                        } else if matches!(key, Key::ArrowDown | Key::ArrowUp) {
+                            self.menu_arrow = Some(*key);
                         } else if key.name().len() == 1 {
                             let next = format!("{}{key_name}", self.prefix.as_deref().unwrap_or_default(), key_name = key.name());
                             match keytip_table::lookup(&next) {

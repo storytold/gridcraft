@@ -1973,6 +1973,13 @@
    "note": "group level: Power Query variants = GAP"
   },
   {
+   "seq": "APNC",
+   "kind": "dialog",
+   "target": "fromClipboard",
+   "excel": "(none)",
+   "note": "From Clipboard… item GridCraft adds to the Get Data menu (Excel's has none); C is free under APN"
+  },
+  {
    "seq": "APND",
    "kind": "command",
    "target": "data.fromDatabase",
