@@ -6377,6 +6377,58 @@ fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
 }
 
 #[test]
+fn a_multi_level_pivot_chart_draws_one_label_per_point_after_saves() {
+    use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Workbook};
+    // Two levels of row labels in A4:B7, the outer one (country) on the left, as a PivotChart
+    // opened from a file keeps them when the innermost column holds its cache.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.name = "Graph".into();
+    sh.set_value(CellRef::new(2, 2), Value::from("Total"));
+    for (i, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+        let r = 3 + i as u32;
+        if !outer.is_empty() {
+            sh.set_value(CellRef::new(r, 0), Value::from(*outer));
+        }
+        sh.set_value(CellRef::new(r, 1), Value::from(*inner));
+        sh.set_value(CellRef::new(r, 2), Value::Number(i as f64 + 1.0));
+    }
+    sh.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: CellRef::new(0, 5), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: vec![Series {
+            name: Some("Graph!$C$3".into()),
+            categories: Some("Graph!$A$4:$B$7".into()),
+            values: "Graph!$C$4:$C$7".into(),
+            innermost_categories: true,
+            ..Series::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        data_table: None,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: Some("Graph!PivotTable1".into()),
+        first_slice_angle: 0,
+        hole_size: 50,
+    });
+    let labels = ["Ottawa", "Toronto", "Boston", "NYC"];
+    for _ in 0..2 {
+        wb = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap().0;
+        let ch = &wb.sheet(0).unwrap().charts[0];
+        let s = &ch.series[0];
+        assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.innermost_categories), (Some("Graph!$C$3"), Some("Graph!$A$4:$B$7"), true));
+        assert_eq!(gridcraft_chart::resolve(&wb, 0, ch).categories, labels);
+    }
+}
+
+#[test]
 fn object_move_refuses_to_rotate_ink() {
     let mut s = s();
     let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
@@ -6448,7 +6500,6 @@ fn editing_quote_prefixed_text_keeps_it_text() {
     let d = s.doc().unwrap();
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B1").unwrap()), "hello");
 }
-
 #[test]
 fn csv_as_text_keeps_identifier_columns_as_written() {
     let csv = "gtin,zip,flag,day\n8435392892278,01234,TRUE,2026-03-04\n";
@@ -8170,6 +8221,68 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+#[test]
+fn tables_never_hold_merged_cells() {
+    // Excel removes a table that contains a merged cell when it opens the file. Merging in a
+    // table is refused; making or resizing a table over merged cells unmerges them; pasting into
+    // a table skips the merges.
+    let base = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:D4", "values": [["A", "B", "C", "D"], [1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]}))
+            .unwrap();
+        s
+    };
+    let merges = |s: &Session| s.doc().unwrap().wb.active().unwrap().merges.clone();
+
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    for id in ["home.mergeCells", "home.mergeCenter", "home.mergeAcross"] {
+        for range in ["A2:B2", "A1:B1", "C3:D3"] {
+            let e = s.execute(id, json!({"range": range})).unwrap_err().to_string();
+            assert!(e.contains("can't merge cells in a table"), "{id} {range}: {e}");
+        }
+    }
+    assert!(merges(&s).is_empty());
+    s.execute("home.mergeCells", json!({"range": "E2:F2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F2").unwrap()]);
+
+    // A table over merged cells unmerges them; undo brings them back.
+    let mut s = base();
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C3:D4"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:G1"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("F1:G1").unwrap()]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(merges(&s).len(), 3);
+    s.execute("edit.redo", json!({})).unwrap();
+
+    // Resizing a table over merged cells is refused, as in Excel; the merge stays.
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    let e = s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap_err().to_string();
+    assert!(e.contains("can't overlap merged cells"), "{e}");
+    s.execute("home.unmergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
+
+    // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
+    s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F3").unwrap(), gridcraft_core::RangeRef::parse("H2:I3").unwrap()]);
+
+    // The saved file has no merge inside the table.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = crate::io::open_bytes("t.xlsx", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    assert_eq!(sh.tables.len(), 1);
+    assert_eq!(sh.tables[0].range, gridcraft_core::RangeRef::parse("A1:C4").unwrap());
+    assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
 }
 
 #[test]

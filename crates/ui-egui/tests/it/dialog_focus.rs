@@ -247,3 +247,212 @@ fn command_search_hides_disabled_and_handles_missing_shortcuts() {
         h.get_by_label_contains("Align Right    Home");
     }
 }
+
+/// #2189: A failed rename must not dismiss its own error on Enter.
+#[test]
+fn failed_rename_enter_keeps_error_visible() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_some(), "failed dialog stays open");
+    assert!(
+        h.state().message.as_ref().is_some_and(|(_, text)| text.contains("A sheet name can't contain any of these characters: : \\ / ? * [ ]")),
+        "Enter must leave the invalid-sheet-name error visible: {:?}",
+        h.state().message
+    );
+
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1", "invalid rename must not change the sheet");
+
+    // The next Enter dismisses the error, not the dialog.
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "second Enter dismisses error");
+    assert!(h.state().dialog.is_some(), "rename dialog stays editable");
+
+    // After dismissing the error, the dialog remains usable for a valid rename.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("Renamed"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "valid rename confirms and closes dialog");
+    assert!(h.state().message.is_none(), "valid rename leaves no error");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Renamed");
+}
+
+/// Mouse OK still shows the error; Escape dismisses only the message.
+#[test]
+fn failed_rename_click_keeps_error_until_escape() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "mouse OK shows error");
+    assert!(h.state().dialog.is_some());
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Escape dismisses error");
+    assert!(h.state().dialog.is_some(), "Escape keeps dialog open");
+}
+
+/// #2189: Clicking the message box's OK button dismisses only the error and leaves the dialog usable.
+#[test]
+fn failed_rename_message_box_ok_dismisses_error_and_recovers() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "invalid rename shows message box");
+    assert!(h.state().dialog.is_some(), "rename dialog remains open behind message box");
+
+    // `message_box` renders `"  OK  "` while `dialogs::show::ok_cancel` renders `"   OK   "`.
+    assert_eq!(h.query_all_by_label("  OK  ").count(), 1, "message box OK button is uniquely selectable");
+    h.get_by_label("  OK  ").click();
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "clicking message box OK dismisses the error");
+    assert!(h.state().dialog.is_some(), "rename dialog stays open after dismissing message box");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1");
+
+    // Verify recovery after dismissing via mouse OK.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("Recovered"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "recovered rename closes dialog");
+    assert!(h.state().message.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Recovered");
+}
+
+/// #2189: A pre-existing `state.message` consumes Enter and Escape before the underlying dialog.
+#[test]
+fn existing_message_takes_enter_and_escape_before_open_dialog() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("LaterName"));
+    h.state_mut().message = Some(("Alert".into(), "Existing alert".into()));
+    h.run_steps(2);
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Enter dismisses pre-existing message");
+    assert!(h.state().dialog.is_some(), "dialog stays open because message owned Enter");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1", "draft name was not submitted");
+
+    h.state_mut().message = Some(("Alert".into(), "Second alert".into()));
+    h.run_steps(2);
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Escape dismisses pre-existing message");
+    assert!(h.state().dialog.is_some(), "dialog stays open because message owned Escape");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1");
+
+    // Once the message is gone, Enter confirms the still-open dialog.
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "Enter confirms dialog after message dismissal");
+    assert!(h.state().message.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "LaterName");
+}
+
+/// #2189: Ctrl+Escape while an error message is open must not close the dialog behind it or lose the draft.
+#[test]
+fn ctrl_escape_does_not_close_dialog_behind_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some());
+    assert!(h.state().dialog.is_some());
+
+    h.key_press_modifiers(egui::Modifiers::CTRL, Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "Ctrl+Escape does not dismiss the error alert");
+    assert!(h.state().dialog.is_some(), "Ctrl+Escape must not close the dialog behind the alert");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("name"), Some(&json!("a/b")), "rename draft remains intact");
+
+    // Plain Escape still dismisses only the message.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
+}
+
+/// #2189: Holding Enter (OS key-repeat) after a failed rename keeps the error visible until a fresh press.
+#[test]
+fn held_enter_key_repeat_does_not_dismiss_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    // Press and hold Enter (no release event yet) so egui tracks Key::Enter in `keys_down`.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "initial held Enter shows error");
+    assert!(h.state().dialog.is_some());
+
+    // Subsequent OS key-repeat events while Enter remains held must not dismiss the alert.
+    for _ in 0..2 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert!(h.state().message.is_some(), "key-repeat Enter must not dismiss the error alert");
+        assert!(h.state().dialog.is_some(), "key-repeat Enter must not close the dialog");
+    }
+
+    // Release the held Enter key, then press Enter fresh: dismisses the alert while keeping the dialog open.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
+}
