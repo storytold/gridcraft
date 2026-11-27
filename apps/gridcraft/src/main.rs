@@ -488,6 +488,8 @@ fn main() -> eframe::Result<()> {
         app.start_update_check();
     }
     load_prefs(&mut app);
+    // The startup workbook is named in the interface language just loaded (Pasta1, Planilha1).
+    app.sync_default_names();
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();

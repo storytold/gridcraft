@@ -110,8 +110,22 @@ impl SheetApp {
     }
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
+    /// Names new workbooks and sheets in the interface language: `Pasta1` and `Planilha1` in
+    /// Portuguese, `Book1` and `Sheet1` where the catalog has no word. Names already in a
+    /// workbook don't change.
+    pub fn sync_default_names(&mut self) {
+        let language = self.ui.language;
+        let (book, sheet) = (language.tr("Default name|Book"), language.tr("Default name|Sheet"));
+        let names = &self.session.default_names;
+        if names.book != book || names.sheet != sheet {
+            self.session.default_names.set(book, sheet);
+        }
+    }
+
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
+        // Before anything below can make a workbook (the web app's first one is made here).
+        self.sync_default_names();
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
         // made with a switch to the control's tab waits, with its window, for the next `ui` of
