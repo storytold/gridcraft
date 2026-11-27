@@ -31,8 +31,8 @@ pub use style::{
     Underline, VAlign, VertAlign,
 };
 pub use workbook::{
-    CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun, PhoneticString,
-    RefHost, ShowObjects, Workbook, WorkbookView, WriteReservation,
+    CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, LineEnd, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun,
+    PhoneticString, RefHost, ShowObjects, TextEncoding, TextFormat, Workbook, WorkbookView, WriteReservation,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

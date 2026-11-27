@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{LineIndex, Sheet, Workbook};
+use gridcraft_model::{LineEnd, LineIndex, Sheet, TextEncoding, TextFormat, Workbook};
 
 use crate::{EngineError, Result};
 
@@ -532,9 +532,12 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Sylk => {
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
-        // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, None)).transpose().map(Option::unwrap_or_default),
+        // A workbook read from a text file keeps its separator, encoding and line ends. A character
+        // the encoding can't hold is an error here, never a silent `?`: `file.save` asks instead.
+        FileKind::Csv | FileKind::Tsv => {
+            let (text, format) = text_file(wb, kind)?;
+            gridcraft_xlsx::encode_text(&text, format.encoding, false).map_err(|chars| unencodable(format.encoding, &chars))
+        }
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -554,6 +557,40 @@ pub fn source_dir(path: &str) -> Option<std::path::PathBuf> {
     std::path::absolute(path).ok()?.parent().map(std::path::Path::to_path_buf)
 }
 
+/// The active sheet as the text of a CSV file (tab-separated for [`FileKind::Tsv`]), and the format
+/// to encode it in: the separator, encoding and line ends of the text file the workbook was read
+/// from (a `;` UTF-16 file with LF line ends stays one), else `,`, UTF-8 and CRLF.
+pub fn text_file(wb: &Workbook, kind: FileKind) -> Result<(String, TextFormat)> {
+    let delimiter = (kind != FileKind::Tsv).then(|| wb.csv_delimiter.unwrap_or(b','));
+    let format = wb.csv_format.unwrap_or_default();
+    let text = match wb.sheet(wb.active_sheet()) {
+        Some(sh) => csv(wb, sh, delimiter, format.line_end)?,
+        None => String::new(),
+    };
+    Ok((text, format))
+}
+
+/// The error for text the file's encoding can't hold: the characters, and how to choose another.
+pub(crate) fn unencodable(encoding: TextEncoding, chars: &[char]) -> EngineError {
+    EngineError::Other(format!(
+        "This file is in {}, which can't hold {}. Save it in another encoding (file.save with `encoding`: {}); in {} they become ?.",
+        encoding.name(),
+        char_list(chars),
+        TextEncoding::ALL.map(TextEncoding::id).join(", "),
+        encoding.name(),
+    ))
+}
+
+/// The first few of `chars`, for a message: `č, ć, đ`.
+pub(crate) fn char_list(chars: &[char]) -> String {
+    const SHOWN: usize = 10;
+    let mut s = chars.iter().take(SHOWN).map(char::to_string).collect::<Vec<_>>().join(", ");
+    if chars.len() > SHOWN {
+        let _ = write!(s, " and {} more", chars.len() - SHOWN);
+    }
+    s
+}
+
 /// The file at `path` as `CELL("filename")` reports it: absolute, so the folder is the one the
 /// user sees. A workbook that arrived as bytes has no path and keeps only its name.
 pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
@@ -569,11 +606,11 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
 /// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>, line_end: LineEnd) -> Result<String> {
     let text = |c| crate::display::value_text(wb, sh, c);
     match delimiter {
-        Some(d) => gridcraft_xlsx::write_csv(sh, d, text),
-        None => gridcraft_xlsx::write_tsv(sh, text),
+        Some(d) => gridcraft_xlsx::write_csv_text(sh, d, line_end, gridcraft_xlsx::MAX_CSV_BYTES, text),
+        None => gridcraft_xlsx::write_tsv_text(sh, line_end, text),
     }
     .map_err(|e| EngineError::Other(e.to_string()))
 }

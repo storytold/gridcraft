@@ -1140,6 +1140,7 @@ impl Dialog {
             "controlQuestion" => return crate::control_ui::open_question(&params),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
+            "textEncoding" => Dialog::custom("textEncoding", "Save in Another Encoding?", params.clone()),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;
