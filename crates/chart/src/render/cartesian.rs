@@ -6,7 +6,8 @@ use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
     SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
 };
-use gridcraft_model::SeriesAxes;
+use crate::axis::{MAX_ABS, chart_scale};
+use gridcraft_model::{ChartAxis, SeriesAxes};
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -293,10 +294,7 @@ fn axis_scales<'a>(
     let mut axes = Vec::new();
     for axis in [false, true] {
         let members: Vec<usize> = (0..data.series.len())
-            .filter(|i| {
-                sec.get(*i).copied().unwrap_or(false) == axis
-                    && !(horizontal && data.series.get(*i).is_some_and(|s| matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines)))
-            })
+            .filter(|i| sec.get(*i).copied().unwrap_or(false) == axis && !(horizontal && data.series.get(*i).is_some_and(|s| is_xy(s.kind))))
             .collect();
         if members.is_empty() {
             continue;
@@ -315,7 +313,7 @@ fn axis_scales<'a>(
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
             let value_axis = spec.map(|a| if horizontal { &a.x } else { &a.y });
-            (crate::axis::chart_scale(lo, hi, force_zero, value_axis), Fmt::new(code))
+            (chart_scale(lo, hi, force_zero, value_axis), Fmt::new(code))
         };
         axes.push(AxisScale { secondary: axis, scale, fmt, spec });
         if !axis && sec.iter().all(|s| !s) {
@@ -355,22 +353,61 @@ struct OverlayAxes<'a> {
     y: Scale,
 }
 
+fn numeric_points(s: &SeriesData) -> impl Iterator<Item = Option<(f64, f64)>> + '_ {
+    s.values.iter().enumerate().map(|(j, y)| {
+        let x = s.x.as_ref().map_or(Some((j + 1) as f64), |xs| xs.get(j).copied().flatten())?;
+        Some((x, (*y)?))
+    })
+}
+
+fn is_xy(kind: ChartKind) -> bool {
+    matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines)
+}
+
+fn overlay_x_scale<'a>(default: Scale, spec: Option<&ChartAxis>, members: impl Iterator<Item = &'a SeriesData>) -> Scale {
+    let Some(spec) = spec else { return default };
+    let min = spec.min.filter(|n| n.abs() <= MAX_ABS);
+    let max = spec.max.filter(|n| n.abs() <= MAX_ABS);
+    let bound = match (min, max) {
+        (Some(bound), None) | (None, Some(bound)) => bound,
+        _ => return default.with_bounds(Some(spec)),
+    };
+    let axis = ChartAxis { min, max, ..*spec };
+    let (lo, hi) = value_range(members.flat_map(|s| numeric_points(s).flatten().map(|p| p.0))).unwrap_or((default.min, default.max));
+    if (min.is_some() && hi > bound) || (max.is_some() && lo < bound) {
+        let scale = chart_scale(lo, hi, false, Some(&axis));
+        if (min.is_some() && scale.min == bound) || (max.is_some() && scale.max == bound) {
+            return scale;
+        }
+    }
+    // No point can determine the opposite endpoint. Use the bar span, anchored at the saved bound.
+    let span = (default.max - default.min).max(bound.abs() * f64::EPSILON);
+    if min.is_some() {
+        Scale { min: bound, max: bound + span, step: default.step }
+    } else {
+        Scale { min: bound - span, max: bound, step: default.step }
+    }
+}
+
+impl OverlayAxes<'_> {
+    fn fractions(&self, x: f64, y: f64) -> (f64, f64) {
+        let fx = (x - self.x.min) / (self.x.max - self.x.min);
+        let fy = (y - self.y.min) / (self.y.max - self.y.min);
+        (if self.spec.is_some_and(|a| a.x.reversed) { 1.0 - fx } else { fx }, if self.spec.is_some_and(|a| a.y.reversed) { 1.0 - fy } else { fy })
+    }
+}
+
+fn xy_pixel(plot: Bx, (fx, fy): (f64, f64)) -> [f32; 2] {
+    [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h]
+}
+
 fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: &OverlayAxes<'_>, plot: Bx, chart: &Chart) {
-    let pts: Vec<_> = s
-        .values
-        .iter()
-        .enumerate()
-        .map(|(j, y)| {
-            let x = s.x.as_ref().map_or(Some((j + 1) as f64), |x| x.get(j).copied().flatten())?;
-            let mut fx = axes.x.frac(x);
-            let mut fy = axes.y.frac((*y)?);
-            if axes.spec.is_some_and(|a| a.x.reversed) {
-                fx = 1.0 - fx;
-            }
-            if axes.spec.is_some_and(|a| a.y.reversed) {
-                fy = 1.0 - fy;
-            }
-            Some([plot.x + fx * plot.w, plot.bottom() - fy * plot.h])
+    let pts: Vec<_> = numeric_points(s)
+        .map(|p| {
+            p.map(|(x, y)| {
+                let (fx, fy) = axes.fractions(x, y);
+                xy_pixel(plot, (fx.clamp(-0.5, 1.5), fy.clamp(-0.5, 1.5)))
+            })
         })
         .collect();
     if s.kind == ChartKind::ScatterLines {
@@ -426,14 +463,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let ncat = data
         .categories
         .len()
-        .max(
-            data.series
-                .iter()
-                .filter(|s| !xy_combo || !matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
-                .map(|s| s.values.len())
-                .max()
-                .unwrap_or(0),
-        )
+        .max(data.series.iter().filter(|s| !xy_combo || !is_xy(s.kind)).map(|s| s.values.len()).max().unwrap_or(0))
         .min(MAX_CATS);
     if ncat == 0 {
         return;
@@ -455,7 +485,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         .series
         .iter()
         .enumerate()
-        .filter(|(i, _)| kinds.get(*i).is_some_and(|k| supports_trendline(*k)))
+        .filter(|(i, s)| !(xy_combo && is_xy(s.kind)) && kinds.get(*i).is_some_and(|k| supports_trendline(*k)))
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
     let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
@@ -480,21 +510,12 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw }
     };
     let overlay_axes = [false, true].map(|secondary| {
-        let (lo, hi) = value_range(
-            data.series
-                .iter()
-                .filter(|s| s.secondary == secondary && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
-                .flat_map(|s| s.values.iter().flatten().copied()),
-        )
-        .unwrap_or((0.0, 1.0));
-        let spec = chart
-            .series
-            .iter()
-            .filter(|s| s.secondary == secondary && matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
-            .find_map(|s| s.axes.as_ref());
+        let members = data.series.iter().filter(|s| s.secondary == secondary && is_xy(s.kind));
+        let (lo, hi) = value_range(members.clone().flat_map(|s| s.values.iter().flatten().copied())).unwrap_or((0.0, 1.0));
+        let spec = chart.series.iter().filter(|s| s.secondary == secondary && s.kind.is_some_and(is_xy)).find_map(|s| s.axes.as_ref());
         OverlayAxes {
             spec,
-            x: axis_for(secondary).scale.with_bounds(spec.map(|a| &a.x)),
+            x: overlay_x_scale(axis_for(secondary).scale, spec.map(|a| &a.x), members),
             y: nice_scale(lo, hi, false).with_bounds(spec.map(|a| &a.y)),
         }
     });
@@ -521,7 +542,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             if s.color[3] == 0 && s.outline_color.is_none() {
                 continue;
             }
-            if xy_combo && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines) {
+            if xy_combo && is_xy(s.kind) {
                 xy_overlay(ctx, s, &overlay_axes[usize::from(s.secondary)], plot, chart);
                 continue;
             }
@@ -589,10 +610,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                                 let y = c + nslots * bw / 2.0 - (k + 0.5) * bw;
                                 if stacked {
                                     ctx.text(mid, y, &t, LABEL_SIZE, on(s.color), (HAlign::Center, VAlign::Middle));
-                                } else if v >= 0.0 {
-                                    ctx.text(pb.max(pt) + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
+                                } else if pt < pb || (pt == pb && value_reversed != (v < 0.0)) {
+                                    ctx.text(pt - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
                                 } else {
-                                    ctx.text(lo - 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
+                                    ctx.text(pt + 3.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
                                 }
                             } else {
                                 let x = c - nslots * bw / 2.0 + (k + 0.5) * bw;
@@ -619,10 +640,16 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
-    // Trendlines on top: x is the category number 1..n.
+    // Trendlines on top, using the same axes as the points.
     let mut trend_labels = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
         if s.trendlines.is_empty() || !kinds.get(i).is_some_and(|k| supports_trendline(*k)) {
+            continue;
+        }
+        if xy_combo && is_xy(s.kind) {
+            let axes = &overlay_axes[usize::from(s.secondary)];
+            let pts: Vec<_> = numeric_points(s).flatten().collect();
+            draw_trendlines(ctx, s, &pts, &|x, y| axes.fractions(x, y), &|point| xy_pixel(plot, point), &mut trend_labels, (axes.x.min, axes.x.max));
             continue;
         }
         let axis = axis_of(i);
@@ -651,23 +678,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 // ---------------------------------------------------------------- scatter & bubble
 
 pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
-    let pts_of = |s: &SeriesData| -> Vec<Option<(f64, f64)>> {
-        s.values
-            .iter()
-            .enumerate()
-            .map(|(j, v)| {
-                let x = match &s.x {
-                    Some(xs) => xs.get(j).copied().flatten(),
-                    None => Some((j + 1) as f64),
-                };
-                match (x, v) {
-                    (Some(x), Some(y)) => Some((x, *y)),
-                    _ => None,
-                }
-            })
-            .collect()
-    };
-    let all: Vec<Vec<Option<(f64, f64)>>> = data.series.iter().map(pts_of).collect();
+    let all: Vec<Vec<_>> = data.series.iter().map(|s| numeric_points(s).collect()).collect();
     let Some((mut xlo, mut xhi)) = value_range(all.iter().flatten().flatten().map(|p| p.0)) else { return };
     // Forecasts extend the x axis to the trendline's ends.
     for (s, pts) in data.series.iter().zip(&all) {

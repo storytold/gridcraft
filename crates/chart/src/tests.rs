@@ -175,6 +175,89 @@ fn xy_overlays_share_automatic_y_bounds() {
 }
 
 #[test]
+fn xy_overlay_uses_its_numeric_range_with_one_saved_x_bound() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    for (x, min, max, bound_point, tick) in [("{20,50,60}", Some(20.0), None, 0, "0"), ("{-60,-50,-20}", None, Some(-20.0), 2, "10")] {
+        let mut c = bar_xy_chart();
+        let overlay = &mut c.series[1];
+        overlay.categories = Some(x.into());
+        overlay.values = "{0,1,2}".into();
+        overlay.axes = Some(SeriesAxes { x: ChartAxis { min, max, ..Default::default() }, ..Default::default() });
+        let prims = draw_chart(&c);
+        let plot_edge = prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text, .. } if text == tick => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        let points = prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+                _ => None,
+            })
+            .unwrap();
+        assert!((points[bound_point][0] - plot_edge).abs() < 0.01, "the saved bound anchors its edge");
+        assert!(points.windows(2).all(|pair| pair[0][0] < pair[1][0]), "the automatic endpoint leaves room for each numeric X");
+    }
+}
+
+#[test]
+fn xy_trendline_uses_numeric_points_and_leaves_bar_categories_unchanged() {
+    use gridcraft_model::{ChartAxis, SeriesAxes, Trendline};
+    let mut c = bar_xy_chart();
+    let overlay = &mut c.series[1];
+    overlay.categories = Some("{2,5,8}".into());
+    overlay.values = "{1,5,9}".into();
+    let reversed = ChartAxis { min: Some(0.0), max: Some(10.0), reversed: true, ..Default::default() };
+    overlay.axes = Some(SeriesAxes { x: reversed.clone(), y: reversed });
+    overlay.trendlines.push(Trendline { color: Some(Color::Rgb(0x123456)), ..Default::default() });
+    let prims = draw_chart(&c);
+    let line = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: actual, .. } if *actual == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let points = line([240, 112, 32, 255]);
+    let fitted = line([18, 52, 86, 255]);
+    for (point, end) in [(points.first().unwrap(), fitted.first().unwrap()), (points.last().unwrap(), fitted.last().unwrap())] {
+        assert!((point[0] - end[0]).abs() < 0.01 && (point[1] - end[1]).abs() < 0.01, "the fit meets the numeric endpoints");
+    }
+    c.series[1].trendlines[0].forward = 1.0;
+    assert_eq!(green_bars(&prims), green_bars(&draw_chart(&c)), "an XY forecast does not add bar categories");
+}
+
+#[test]
+fn reversed_bar_labels_follow_positive_and_negative_value_endpoints() {
+    let mut c = bar_xy_chart();
+    c.data_labels = true;
+    c.series[0].values = "{4,-3}".into();
+    let axis = &mut c.series[0].axes.as_mut().unwrap().x;
+    axis.min = Some(-10.0);
+    axis.reversed = true;
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    let label = |value| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { text, x, align, .. } if text == value => Some((*x, *align)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (positive_x, positive_align) = label("4");
+    let (negative_x, negative_align) = label("-3");
+    assert!(positive_x < bars[0][0] && matches!(positive_align, HAlign::Right));
+    assert!(negative_x > bars[1][0] + bars[1][2] && matches!(negative_align, HAlign::Left));
+}
+
+#[test]
 fn reversed_value_axis_keeps_bars_ticks_and_xy_aligned() {
     let mut c = bar_xy_chart();
     let original = green_bars(&draw_chart(&c));
