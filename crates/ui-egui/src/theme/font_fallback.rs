@@ -308,7 +308,7 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
             "/System/Library/Fonts/LucidaGrande.ttc",
             "/System/Library/Fonts/Lucida Grande.ttc",
         ],
-        &["NotoSansHebrew-Regular.ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
+        &["NotoSansHebrew-Regular.ttf", "NotoSansHebrew[wdth,wght].ttf", "dejavu/DejaVuSans.ttf", "freefont/FreeSans.ttf"],
         "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
     )
 }

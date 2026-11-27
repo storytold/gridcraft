@@ -186,12 +186,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         } else {
                             // Measure the tab's natural width once in LTR on the first frame so the RTL layout
                             // never uses a huge placeholder span or a per-frame width feedback loop.
-                            let measured = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), body).response.rect.width();
+                            let measured = ui.horizontal(body).response.rect.width();
                             ui.data_mut(|d| d.insert_temp(width_id, measured));
                             ui.ctx().request_repaint();
                         }
                     } else {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), body);
+                        ui.horizontal(body);
                     }
                 });
                 if rtl {
