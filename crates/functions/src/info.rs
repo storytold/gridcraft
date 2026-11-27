@@ -126,7 +126,8 @@ fn info(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // Logical
 
 /// Collects booleans for AND/OR/XOR: references and arrays contribute numbers and booleans
-/// (text and blanks skipped); direct scalars coerce (empty literal = FALSE).
+/// (text and blanks skipped); a direct text argument is skipped too, as Excel does, and a direct
+/// empty literal is FALSE.
 fn logicals(a: &[Arg]) -> R<Vec<bool>> {
     let mut out = Vec::new();
     for arg in a {
@@ -144,6 +145,8 @@ fn logicals(a: &[Arg]) -> R<Vec<bool>> {
             Value::Error(e) => return Err(*e),
             Value::Number(n) => out.push(*n != 0.0),
             Value::Bool(b) => out.push(*b),
+            // Text is ignored, never coerced: a call with only text has no logical value left.
+            Value::Text(_) => {}
             _ if arg.from_ref => {}
             v => out.push(v.to_bool()?),
         }
@@ -557,7 +560,15 @@ mod tests {
         assert_eq!(ev("AND", vec![rf(arr(vec![vec![b(true).value, tv("x"), Value::Empty]]))]), Value::Bool(true));
         is_err(ev("AND", vec![rf(arr(vec![vec![tv("x")]]))]), CellError::Value);
         is_err(ev("AND", vec![t("abc")]), CellError::Value);
-        assert_eq!(ev("AND", vec![t("TRUE")]), Value::Bool(true));
+        is_err(ev("AND", vec![t("TRUE")]), CellError::Value);
+        // Excel skips a text argument beside a logical one; with no logical value left it is
+        // #VALUE!.
+        assert_eq!(ev("AND", vec![n(1.0), t("x")]), Value::Bool(true));
+        assert_eq!(ev("AND", vec![n(0.0), t("x")]), Value::Bool(false));
+        assert_eq!(ev("AND", vec![n(1.0), t("TRUE")]), Value::Bool(true));
+        assert_eq!(ev("OR", vec![n(0.0), t("x")]), Value::Bool(false));
+        assert_eq!(ev("XOR", vec![n(1.0), t("x")]), Value::Bool(true));
+        is_err(ev("AND", vec![t("x"), t("y")]), CellError::Value);
         is_err(ev("OR", vec![b(false), e(CellError::Div0)]), CellError::Div0);
         assert_eq!(ev("OR", vec![b(false), n(2.0)]), Value::Bool(true));
         assert_eq!(ev("OR", vec![b(false), b(false)]), Value::Bool(false));
