@@ -53,11 +53,36 @@ impl Agg {
     }
 }
 
-/// A row/column key: a position or a label (matched case-insensitively).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Key {
-    Pos(u32),
-    Label(GroupKey),
+/// A row or column axis in first-seen order, with one lookup per comparable label.
+#[derive(Default)]
+struct AxisGroups {
+    indices: HashMap<GroupKey, usize>,
+    labels: Vec<Value>,
+}
+
+impl AxisGroups {
+    fn index_for_position(&mut self, offset: u32) -> usize {
+        let index = offset as usize;
+        if index >= self.labels.len() {
+            self.labels.resize(index + 1, Value::Empty);
+        }
+        index
+    }
+
+    /// Registers a label and returns its index if it can receive aggregated values.
+    fn index_for_label(&mut self, value: Value) -> Option<usize> {
+        let label = label_value(value)?;
+        if label.is_error() {
+            // Every error label gets an output position with no aggregated values.
+            self.labels.push(label);
+            return None;
+        }
+        Some(*self.indices.entry(GroupKey::from_value(&label)).or_insert_with(|| {
+            let index = self.labels.len();
+            self.labels.push(label);
+            index
+        }))
+    }
 }
 
 fn label_value(value: Value) -> Option<Value> {
@@ -121,21 +146,10 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         }
         None => (d.wb.active_sheet(), d.selection.active),
     };
-    // Keys in first-seen order, each with its index: a lookup is one probe, not a scan.
-    let mut row_keys: Vec<Key> = Vec::new();
-    let mut col_keys: Vec<Key> = Vec::new();
-    let mut row_index: HashMap<Key, usize> = HashMap::new();
-    let mut col_index: HashMap<Key, usize> = HashMap::new();
-    let mut row_labels: HashMap<usize, Value> = HashMap::new();
-    let mut col_labels: HashMap<usize, Value> = HashMap::new();
+    let mut row_groups = AxisGroups::default();
+    let mut col_groups = AxisGroups::default();
     let mut aggs: HashMap<(usize, usize), Agg> = HashMap::new();
     let mut total: u64 = 0;
-    let index_of = |keys: &mut Vec<Key>, index: &mut HashMap<Key, usize>, k: Key| -> usize {
-        *index.entry(k).or_insert_with_key(|k| {
-            keys.push(k.clone());
-            keys.len() - 1
-        })
-    };
     for t in &srcs {
         let (si, r) = parse_range(&d.wb, t, CMD)?;
         total = total.saturating_add(r.count());
@@ -148,31 +162,27 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         if r0 > r.end.row || c0 > r.end.col {
             continue;
         }
-        // Column keys of this source.
+        // Source columns that can contribute to an output group.
         let mut cols: Vec<(u32, usize)> = Vec::new();
         for col in c0..=r.end.col {
             let ci = if top {
-                let Some(label) = label_value(sh.value(CellRef::new(r.start.row, col))) else {
+                let Some(ci) = col_groups.index_for_label(sh.value(CellRef::new(r.start.row, col))) else {
                     continue;
                 };
-                let ci = index_of(&mut col_keys, &mut col_index, Key::Label(GroupKey::from_value(&label)));
-                col_labels.entry(ci).or_insert(label);
                 ci
             } else {
-                index_of(&mut col_keys, &mut col_index, Key::Pos(col - c0))
+                col_groups.index_for_position(col - c0)
             };
             cols.push((col, ci));
         }
         for row in r0..=r.end.row {
             let ri = if left {
-                let Some(label) = label_value(sh.value(CellRef::new(row, r.start.col))) else {
+                let Some(ri) = row_groups.index_for_label(sh.value(CellRef::new(row, r.start.col))) else {
                     continue;
                 };
-                let ri = index_of(&mut row_keys, &mut row_index, Key::Label(GroupKey::from_value(&label)));
-                row_labels.entry(ri).or_insert(label);
                 ri
             } else {
-                index_of(&mut row_keys, &mut row_index, Key::Pos(row - r0))
+                row_groups.index_for_position(row - r0)
             };
             for (col, ci) in &cols {
                 aggs.entry((ri, *ci)).or_default().add(&sh.value(CellRef::new(row, *col)));
@@ -180,35 +190,31 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     let (out_r0, out_c0) = (dest.row + top as u32, dest.col + left as u32);
-    if out_r0 as u64 + row_keys.len() as u64 > gridcraft_core::MAX_ROWS as u64
-        || out_c0 as u64 + col_keys.len() as u64 > gridcraft_core::MAX_COLS as u64
-    {
+    let (rows, columns) = (row_groups.labels.len(), col_groups.labels.len());
+    if out_r0 as u64 + rows as u64 > gridcraft_core::MAX_ROWS as u64 || out_c0 as u64 + columns as u64 > gridcraft_core::MAX_COLS as u64 {
         return Err(EngineError::Other("The consolidated data doesn't fit below and right of the destination.".into()));
     }
-    if output_cells(row_keys.len(), col_keys.len(), top, left) > MAX_CONSOLIDATE_CELLS {
+    if output_cells(rows, columns, top, left) > MAX_CONSOLIDATE_CELLS {
         return Err(bad(CMD, "the consolidated table would be too large"));
     }
     let mut cells: Vec<(CellRef, Value)> = Vec::new();
     if top {
-        for ci in 0..col_keys.len() {
-            cells.push((CellRef::new(dest.row, out_c0 + ci as u32), col_labels.remove(&ci).unwrap_or_default()));
+        for (ci, label) in col_groups.labels.into_iter().enumerate() {
+            cells.push((CellRef::new(dest.row, out_c0 + ci as u32), label));
         }
     }
     if left {
-        for ri in 0..row_keys.len() {
-            cells.push((CellRef::new(out_r0 + ri as u32, dest.col), row_labels.remove(&ri).unwrap_or_default()));
+        for (ri, label) in row_groups.labels.into_iter().enumerate() {
+            cells.push((CellRef::new(out_r0 + ri as u32, dest.col), label));
         }
     }
-    for ri in 0..row_keys.len() {
-        for ci in 0..col_keys.len() {
+    for ri in 0..rows {
+        for ci in 0..columns {
             let v = aggs.get(&(ri, ci)).map(|a| if a.count == 0 { Value::Empty } else { a.result(&func) }).unwrap_or_default();
             cells.push((CellRef::new(out_r0 + ri as u32, out_c0 + ci as u32), v));
         }
     }
-    let end = CellRef::new(
-        (out_r0 + row_keys.len() as u32).saturating_sub(1).max(dest.row),
-        (out_c0 + col_keys.len() as u32).saturating_sub(1).max(dest.col),
-    );
+    let end = CellRef::new((out_r0 + rows as u32).saturating_sub(1).max(dest.row), (out_c0 + columns as u32).saturating_sub(1).max(dest.col));
     edit(s, |cx| {
         for (c, v) in cells {
             let sh = cx.sheet_mut(dsi)?;
@@ -222,5 +228,5 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(())
     })?;
-    Ok(json!({"range": RangeRef::new(dest, end).a1(), "rows": row_keys.len(), "columns": col_keys.len()}))
+    Ok(json!({"range": RangeRef::new(dest, end).a1(), "rows": rows, "columns": columns}))
 }

@@ -62,6 +62,31 @@ fn consolidate_numeric_labels_on_both_axes_do_not_collapse() {
 }
 
 #[test]
+fn consolidate_error_labels_stay_separate_with_empty_totals() {
+    let mut s = s();
+    s.execute(
+        "range.setValues",
+        json!({"range":"A1","values":[[null,"=NA()","'#N/A","=NA()"],["=NA()",22,23,24],["'#N/A",32,33,34],["=NA()",42,43,44]]}),
+    )
+    .unwrap();
+    s.execute("range.setValues", json!({"range":"I2","values":[[99],[99],[99]]})).unwrap();
+    let result = s.execute("data.consolidate", json!({"sources":["A1:D4"],"destination":"H1","topRow":true,"leftColumn":true})).unwrap();
+    assert_eq!(result["rows"], 3);
+    assert_eq!(result["columns"], 3);
+    let na = Value::Error(gridcraft_core::CellError::NA);
+    for cell in ["I1", "K1", "H2", "H4"] {
+        assert_eq!(v(&s, cell), na, "{cell}");
+    }
+    for cell in ["J1", "H3"] {
+        assert_eq!(v(&s, cell), Value::text("#N/A"), "{cell}");
+    }
+    assert_eq!(v(&s, "J3"), Value::number(33.0));
+    for cell in ["I2", "J2", "K2", "I3", "K3", "I4", "J4", "K4"] {
+        assert_eq!(v(&s, cell), Value::Empty, "{cell}");
+    }
+}
+
+#[test]
 fn advanced_filter_unique_numeric_identity_ignores_number_format() {
     for copy in [false, true] {
         for (second, first_fmt, second_fmt, count) in [(1.4, "0", "0", 2), (1.1, "0.0", "0.00", 1), (1.4, ";;;", ";;;", 2)] {
