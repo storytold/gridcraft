@@ -220,20 +220,41 @@ impl PanelState {
                 }
                 if let Some(a) = self.agents.get_mut(self.selected) {
                     ui.weak(format!("{} · {}", a.model, a.endpoint));
-                    a.thinking.picker(ui, l);
-                    if a.supports_tools {
-                        let mut mode = self.mode;
-                        egui::ComboBox::from_label(l.tr("Access")).selected_text(l.tr(self.mode.label())).show_ui(ui, |ui| {
-                            for m in [Mode::Chat, Mode::Read, Mode::Edit, Mode::Mcp] {
-                                ui.selectable_value(&mut mode, m, l.tr(m.label()));
-                            }
+                    let mut mode = self.mode;
+                    let supports_tools = a.supports_tools;
+                    let mut access = |ui: &mut Ui| {
+                        let label = ui.label(l.tr("Access"));
+                        if supports_tools {
+                            let selected = l.tr(mode.label());
+                            egui::ComboBox::from_id_salt("wingman_access")
+                                .width(ui.available_width().min(170.0))
+                                .truncate()
+                                .selected_text(selected)
+                                .show_ui(ui, |ui| {
+                                    for m in [Mode::Chat, Mode::Read, Mode::Edit, Mode::Mcp] {
+                                        ui.selectable_value(&mut mode, m, l.tr(m.label()));
+                                    }
+                                })
+                                .response
+                                .labelled_by(label.id);
+                        } else {
+                            ui.weak(l.tr("Chat only")).on_hover_text(l.tr("Text only · explicitly attached context is available"));
+                        }
+                    };
+                    if ui.available_width() >= 310.0 {
+                        ui.columns(2, |col| {
+                            access(&mut col[0]);
+                            a.thinking.picker(&mut col[1], l);
                         });
+                    } else {
+                        access(ui);
+                        a.thinking.picker(ui, l);
+                    }
+                    if supports_tools {
                         self.change_mode(mode);
                         if self.mode == Mode::Mcp {
                             self.mcp.ui(ui, l, physical);
                         }
-                    } else {
-                        ui.weak(l.tr("Text only · explicitly attached context is available"));
                     }
                 }
             }
@@ -313,7 +334,7 @@ impl PanelState {
             } else {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(l.tr("Working…"));
+                    ui.label(l.tr(if self.turn.as_ref().is_some_and(|t| t.search.is_some()) { "Searching workbook…" } else { "Working…" }));
                     if ui.button(l.tr("Stop")).clicked() {
                         self.stop();
                     }

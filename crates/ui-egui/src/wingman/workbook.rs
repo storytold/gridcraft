@@ -6,12 +6,17 @@
 mod context;
 #[path = "workbook_data.rs"]
 mod data;
+#[path = "workbook_formula.rs"]
+mod formula;
+#[path = "workbook_search.rs"]
+mod search;
 
 use crate::SheetApp;
 use gridcraft_engine::core::{CellRef, RangeRef};
 use serde_json::{Value as Json, json};
 
 pub(super) use context::{MENTIONS, mention};
+pub(super) use search::Matcher;
 
 const MAX_ARGS: usize = 64 * 1024;
 const MAX_RESULT: usize = 32 * 1024;
@@ -66,6 +71,34 @@ pub(super) fn comment_transfer_params() -> Json {
 const TOOLS: &[Tool] = &[
     tool!("workbook_info", "Inspect visible sheets and the active selection; no local file paths.", None, [], ["offset"]),
     tool!(
+        "grep",
+        "Find matching cells without knowing addresses. Search all visible sheets by default, or pass sheet/scope=sheet to narrow it. Literal substring by default; regex=true enables regex. Use searchIn=value for cell text, formula for expressions, comment for notes/threads. Do not enumerate cells. Continue with identical filters and nextCursor; null ends the search. Report skippedOversizeFields if nonzero.",
+        None,
+        ["pattern"],
+        ["sheet", "scope", "range", "searchIn", "regex", "caseSensitive", "limit", "cursor"]
+    ),
+    tool!(
+        "inspect_formula",
+        "Explain a cell using its value, formula and direct static precedents or dependents. Ranges stay ranges; honor the reported index state, truncation and dynamic references. Use page.nextOffset for subsequent pages.",
+        None,
+        ["cell"],
+        ["sheet", "direction", "offset"]
+    ),
+    tool!(
+        "formula_diagnostics",
+        "Find cached spreadsheet errors such as #REF! across visible sheets or within a worksheet/range. Text that only looks like an error is excluded. This does not recalculate. Use nextCursor for further pages and inspect_formula on a reported address.",
+        None,
+        [],
+        ["sheet", "scope", "range", "limit", "cursor"]
+    ),
+    tool!(
+        "check_formula",
+        "Check the syntax of a proposed =formula before editing. Uses GridCraft's native canonical formula grammar; does not evaluate, resolve names or modify a cell.",
+        None,
+        ["formula"],
+        []
+    ),
+    tool!(
         "read_range",
         "Read values and formulas in an explicit A1 range. Continue at nextOffset for large results.",
         None,
@@ -74,17 +107,17 @@ const TOOLS: &[Tool] = &[
     ),
     tool!(
         "inspect_cell",
-        "Inspect one cell's value, formula, style and comment thread. Truncation flags mark incomplete comment previews.",
+        "Inspect a known address for its value, formula, style and comment thread. For an unknown address or to locate text, use grep instead of trying individual cells. Truncation flags mark incomplete comment previews.",
         None,
         ["cell"],
         ["sheet"]
     ),
     tool!(
         "list_objects",
-        "List charts, comments (including notes), tables or defined names. For comments, optionally filter by worksheet column, e.g. AB. Pass page.nextOffset with the same filter for the next page; null means finished.",
+        "Find charts by title or ID, tables or defined names by name (optional literal search). For comments, list by column, e.g. AB, or use grep to search their text. Pass page.nextOffset with the same filter; null means finished.",
         None,
         ["kind"],
-        ["sheet", "column", "offset"]
+        ["sheet", "column", "search", "offset"]
     ),
     tool!(
         "find_commands",
@@ -260,6 +293,14 @@ fn object(properties: Json, required: &[&str]) -> Json {
 fn field(k: &str) -> Json {
     let boolean = || json!({"type":"boolean"});
     match k {
+        "pattern" => string(512),
+        "scope" => json!({"type":"string","enum":["sheet","workbook"]}),
+        "searchIn" => json!({"type":"string","enum":["all","value","display","formula","comment","error"]}),
+        "regex" | "caseSensitive" => boolean(),
+        "limit" => json!({"type":"integer","minimum":1,"maximum":50}),
+        "cursor" => string(128),
+        "direction" => json!({"type":"string","enum":["precedents","dependents"]}),
+        "formula" => string(gridcraft_engine::formula::MAX_FORMULA_LEN + 1),
         "sourceColumn" | "destinationColumn" => json!({"type":"string","maxLength":3,"description":"Excel column letters, A through XFD"}),
         "mode" => json!({"type":"string","enum":["copy","move"],"default":"copy"}),
         "startRow" | "endRow" | "destinationStartRow" | "headerRow" => {
@@ -307,7 +348,21 @@ fn field(k: &str) -> Json {
 
 impl Tool {
     fn params(&self) -> Json {
-        let props = self.required.iter().chain(self.optional).map(|&k| (k.into(), field(k))).collect();
+        let props = self
+            .required
+            .iter()
+            .chain(self.optional)
+            .map(|&k| {
+                let schema = if (self.name, k) == ("inspect_formula", "cell") {
+                    json!({"type":"string","description":"A1 cell address, optionally sheet-qualified, e.g. 'Quarter 1'!B2","maxLength":320})
+                } else if matches!(self.name, "grep" | "formula_diagnostics") && k == "range" {
+                    json!({"type":"string","description":"Optional A1 range on each searched sheet, e.g. A1:D100 or AB:AB","maxLength":42})
+                } else {
+                    field(k)
+                };
+                (k.into(), schema)
+            })
+            .collect();
         object(Json::Object(props), self.required)
     }
 }
@@ -376,7 +431,10 @@ fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
         }
         Some("boolean") if value.is_boolean() => {}
         Some("null") if value.is_null() => {}
-        Some("integer") if value.as_u64().is_some_and(|n| n <= u64::from(u32::MAX)) => {}
+        Some("integer")
+            if value
+                .as_u64()
+                .is_some_and(|n| n >= spec["minimum"].as_u64().unwrap_or(0) && n <= spec["maximum"].as_u64().unwrap_or(u64::from(u32::MAX))) => {}
         Some("number")
             if value.as_f64().is_some_and(|n| {
                 n.is_finite() && n >= spec["minimum"].as_f64().unwrap_or(f64::MIN) && n <= spec["maximum"].as_f64().unwrap_or(f64::MAX)
@@ -387,6 +445,16 @@ fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
 }
 
 pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Json, allow_write: bool) -> Result<Json, String> {
+    execute_with_matcher(app, name, args, allow_write, &mut None)
+}
+
+pub(super) fn execute_with_matcher(
+    app: &mut SheetApp,
+    name: &str,
+    args: &Json,
+    allow_write: bool,
+    matcher: &mut Option<Matcher>,
+) -> Result<Json, String> {
     if is_write(name)? && !allow_write {
         return Err("This profile cannot change the workbook.".into());
     }
@@ -413,12 +481,33 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Json, allow_write: 
         if receipt.to_string().len() > MAX_RESULT { json!({"applied":true,"undoLabel":undo_label,"detailsOmitted":true}) } else { receipt }
     } else {
         match name {
+            "grep" => search::grep_slice(app.session.active().ok_or("No open workbook")?, args, matcher)?,
+            "formula_diagnostics" => {
+                let mut query = args.clone();
+                query["searchIn"] = json!("error");
+                query["pattern"] = json!("#");
+                if query.get("sheet").is_none() && query.get("scope").is_none() {
+                    query["scope"] = json!("workbook");
+                }
+                search::grep_slice(app.session.active().ok_or("No open workbook")?, &query, matcher)?
+            }
+            "inspect_formula" => formula::query(app, args)?,
+            "check_formula" => {
+                let source = args["formula"].as_str().ok_or("Expected a formula starting with =")?;
+                if !source.starts_with('=') {
+                    return Err("Start the formula with =, as for set_cell.".into());
+                }
+                match gridcraft_engine::formula::parse(source) {
+                    Ok(_) => json!({"validSyntax":true}),
+                    Err(e) => json!({"validSyntax":false,"message":e.msg,"positionInExpression":e.pos}),
+                }
+            }
             "find_commands" => {
                 let q = args["search"].as_str().unwrap_or("").trim().to_ascii_lowercase();
                 let offset = args["offset"].as_u64().unwrap_or(0) as usize;
                 let found = gridcraft_engine::command_specs()
                     .iter()
-                    .filter(|c| c.id.to_ascii_lowercase().contains(&q) || c.label.to_ascii_lowercase().contains(&q));
+                    .filter(|c| [c.id, c.label, c.params].into_iter().chain(c.menu.iter().copied()).any(|s| s.to_ascii_lowercase().contains(&q)));
                 context::page(
                     found.skip(offset).map(|c| {
                         json!({"id":c.id,"label":c.label,"ribbon":c.menu,"parameters":c.params,

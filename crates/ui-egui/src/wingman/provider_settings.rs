@@ -72,6 +72,9 @@ struct Config {
     language_models: Models,
     agent: DefaultAgent,
     wingman: Aliases,
+    // ACP launch/registry entries are not model endpoints. Inspect presence only; never
+    // interpret a command, argument or environment value as a Wingman setting.
+    agent_servers: serde_json::Value,
 }
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -317,7 +320,7 @@ impl Host {
             instructions: String::new(),
             protocol,
             max_output_tokens: None,
-            thinking: Thinking::default(),
+            thinking: Thinking::manual(protocol),
             parallel: false,
             legacy_limit: false,
             reasoning_history: false,
@@ -370,6 +373,9 @@ fn build_catalog(config: Config) -> Result<Catalog, String> {
         if let Some(p) = p {
             providers.push((name.into(), p, Some(url), Some(key), protocol));
         }
+    }
+    if providers.is_empty() && config.agent_servers.as_object().is_some_and(|entries| !entries.is_empty()) {
+        return Err("agent_servers configures external ACP agents, which Wingman does not launch. Add a language_models provider for chat or model discovery; context_servers adds MCP tools to a model.".into());
     }
     let mut provider_names = BTreeSet::new();
     for (name, p, url, key, protocol) in providers {
@@ -449,6 +455,45 @@ pub(in super::super) fn load() -> Result<Vec<Agent>, String> {
 mod tests {
     use super::build_catalog;
     use serde_json::json;
+
+    #[test]
+    fn external_agent_settings_are_not_discoverable_models_or_mcp_servers() {
+        let mut config = json!({"agent_servers":{"external":{"type":"custom","command":"acp-example"}},
+                                "context_servers":{"tools":{"url":"https://example.org/mcp"}}});
+        let parsed = |v| build_catalog(serde_json::from_value(v).unwrap());
+        assert!(parsed(config.clone()).err().is_some_and(|e| e.contains("ACP") && e.contains("language_models")));
+        config["language_models"] = json!({"ollama":{}});
+        let catalog = parsed(config).unwrap();
+        assert!(catalog.declared.is_empty());
+        assert_eq!(catalog.hosts.len(), 1);
+        assert!(catalog.hosts[0].discover);
+    }
+
+    #[test]
+    fn unannotated_and_discovery_only_models_leave_effort_to_the_server_until_chosen() {
+        let catalog = build_catalog(
+            serde_json::from_value(json!({
+                "language_models":{"openai_compatible":{"local":{"api_url":"http://localhost:8080/v1","available_models":[{"name":"configured"}]}}},
+                "wingman":{"agents":{"Maximum":{"provider":"local","model":"configured","effort":"max"}}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let request = |a: &super::Agent| super::super::transport::payload(a, Vec::new(), Vec::new()).unwrap();
+        let model = catalog.declared.iter().find(|a| a.name == "configured").unwrap();
+        let mut discovered = catalog.hosts[0].template.clone();
+        discovered.model = "discovered".into();
+        for mut a in [model.clone(), discovered] {
+            assert!(request(&a).get("reasoning_effort").is_none());
+            for (chosen, sent) in [("med", "medium"), ("Extra-High", "xhigh"), ("max", "max"), ("none", "none")] {
+                a.thinking.preference(a.protocol, None, Some(chosen)).unwrap();
+                assert_eq!(request(&a)["reasoning_effort"], sent);
+            }
+            a.thinking.preference(a.protocol, None, Some("default")).unwrap();
+            assert!(request(&a).get("reasoning_effort").is_none());
+        }
+        assert_eq!(request(catalog.declared.iter().find(|a| a.name == "Maximum").unwrap())["reasoning_effort"], "max");
+    }
 
     #[test]
     fn model_ref_and_alias_preferences_reach_separate_requests_for_the_same_model() {

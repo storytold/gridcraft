@@ -151,6 +151,46 @@ impl<T: Copy + Ord> Intervals<T> {
         self.walk(1, 0, self.max_end.len() / 2, p, a, f)
     }
 
+    /// A point lookup for interactive inspection: count pending entries and visited tree
+    /// nodes (not just matches), so even a sparse wide-column filter cannot freeze the UI.
+    fn visit_point_bounded(&self, row: u32, fuel: &mut usize, mut f: impl FnMut(&T)) -> bool {
+        for it in &self.pending {
+            if *fuel == 0 {
+                return false;
+            }
+            *fuel -= 1;
+            if it.0 <= row && row <= it.1 {
+                f(&it.2);
+            }
+        }
+        let p = self.items.partition_point(|it| it.0 <= row);
+        if p == 0 {
+            return true;
+        }
+        let mut stack = vec![(1, 0, self.max_end.len() / 2)];
+        while let Some((node, lo, hi)) = stack.pop() {
+            if *fuel == 0 {
+                return false;
+            }
+            *fuel -= 1;
+            if lo >= p || self.max_end.get(node).is_none_or(|&end| end < row) {
+                continue;
+            }
+            if hi - lo <= 1 {
+                if let (Some(it), Some(false)) = (self.items.get(lo), self.dead.get(lo))
+                    && it.1 >= row
+                {
+                    f(&it.2);
+                }
+            } else {
+                let mid = lo + (hi - lo) / 2;
+                stack.push((2 * node + 1, mid, hi));
+                stack.push((2 * node, lo, mid));
+            }
+        }
+        true
+    }
+
     /// [`Intervals::query`] that skips entries an earlier call with the same `taken` already
     /// took (and whole subtrees of them), so that a series of queries lists each interval once in
     /// all. `f` answers whether it took the entry; one it declines is offered again later.
@@ -424,5 +464,37 @@ impl Graph {
     /// Precedent areas of a formula cell (for Trace Precedents).
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
+    }
+
+    /// Statically indexed ranges and the dynamic-reference flag, without copying the ranges.
+    /// None means no entry in this graph; do not infer that a formula has no references.
+    pub fn precedent_info(&self, k: Key) -> Option<(&[Area], bool)> {
+        self.nodes.get(&k).map(|n| (n.areas.as_slice(), n.dynamic))
+    }
+
+    /// Visit direct indexed dependents without expanding ranges. Returns false when the
+    /// inspection budget ended; visitors may see duplicates across indexes. Does not recalculate.
+    pub fn visit_dependents_bounded(&self, sheet: usize, c: CellRef, mut budget: usize, mut visit: impl FnMut(Key)) -> bool {
+        if let Some(v) = self.cell_deps.get(&(sheet, c)) {
+            for &key in v {
+                if budget == 0 {
+                    return false;
+                }
+                budget -= 1;
+                visit(key);
+            }
+        }
+        if let Some(v) = self.col_deps.get(&(sheet, c.col))
+            && !v.visit_point_bounded(c.row, &mut budget, |key| visit(*key))
+        {
+            return false;
+        }
+        self.wide_deps.get(&sheet).is_none_or(|v| {
+            v.visit_point_bounded(c.row, &mut budget, |(lo, hi, key)| {
+                if *lo <= c.col && c.col <= *hi {
+                    visit(*key);
+                }
+            })
+        })
     }
 }

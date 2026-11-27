@@ -120,6 +120,7 @@ struct Turn {
     agent: Agent,
     target: Target,
     rounds: usize,
+    final_answer: bool,
     calls: usize,
     // Messages from the start of this turn, distinct from older completed history.
     wire: Vec<Value>,
@@ -127,6 +128,7 @@ struct Turn {
     partial: String,
     queue: VecDeque<ToolCall>,
     external: Option<mcp::Pending>,
+    search: Option<chat::SearchBatch>,
     offered: mcp::Offered,
 }
 
@@ -256,6 +258,11 @@ mod tests {
         let mut app = SheetApp::new(session, Services::default());
         app.ui = serde_json::from_value(json!({"ribbonCollapsed":true})).unwrap();
         app.follow_active_window();
+        assert!(!UiState::default().show_wingman_pane);
+        assert!(app.run("view.wingman", json!({"on":true})).is_err());
+        app.run("options.showWingmanPane", json!({"on":true})).unwrap();
+        let saved: UiState = serde_json::from_value(serde_json::to_value(&app.ui).unwrap()).unwrap();
+        assert!(saved.at_startup().show_wingman_pane);
         let mut windows = vec![app.ui_window().unwrap()];
         for _ in 0..2 {
             app.wingman.loaded = true;

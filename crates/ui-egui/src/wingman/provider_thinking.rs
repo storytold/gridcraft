@@ -23,13 +23,17 @@ enum Choice {
 
 impl Choice {
     fn parse(raw: &str, protocol: Protocol) -> Result<Self, String> {
-        match raw.trim() {
+        let name = raw.trim();
+        match name.to_ascii_lowercase().as_str() {
+            "default" | "server default" => Ok(Self::Default),
             "none" | "off" | "false" => Ok(Self::Off),
             "on" | "true" if protocol == Protocol::Ollama => Ok(Self::On),
-            "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => Ok(Self::Level(raw.trim().to_owned())),
+            "med" => Ok(Self::Level("medium".into())),
+            "extra-high" | "extra high" => Ok(Self::Level("xhigh".into())),
+            s @ ("minimal" | "low" | "medium" | "high" | "xhigh" | "max") => Ok(Self::Level(s.into())),
             // Native Ollama supports model-defined names, not just the OpenAI effort enum.
-            s if protocol == Protocol::Ollama && s != "default" && !s.is_empty() && s.len() <= 64 && !s.chars().any(char::is_control) => {
-                Ok(Self::Level(s.to_owned()))
+            _ if protocol == Protocol::Ollama && !name.is_empty() && name.len() <= 64 && !name.chars().any(char::is_control) => {
+                Ok(Self::Level(name.to_owned()))
             }
             _ => Err("Unknown thinking level for this provider.".into()),
         }
@@ -38,7 +42,7 @@ impl Choice {
     fn label(&self) -> &str {
         match self {
             Self::Default => "Server default",
-            Self::Off => "Off",
+            Self::Off => "None (off)",
             Self::On => "On",
             Self::Level(name) => name,
         }
@@ -62,6 +66,21 @@ impl Default for Thinking {
 }
 
 impl Thinking {
+    /// Model-list endpoints return IDs, not per-model reasoning capabilities. These are manual
+    /// protocol choices, not a capability claim; an untouched model uses its server default.
+    pub(super) fn manual(protocol: Protocol) -> Self {
+        let mut choices = vec![Choice::Off];
+        let levels: &[&str] = match protocol {
+            Protocol::Completions => &["minimal", "low", "medium", "high", "xhigh", "max"],
+            Protocol::Ollama => {
+                choices.push(Choice::On);
+                &["low", "medium", "high"]
+            }
+        };
+        choices.extend(levels.iter().map(|&name| Choice::Level(name.into())));
+        Self { choices, ..Default::default() }
+    }
+
     pub(super) fn configured(protocol: Protocol, supports: Option<bool>, effort: Option<&Levels>, levels: Option<&Levels>) -> Result<Self, String> {
         let mut out = Self { disabled: supports == Some(false), ..Default::default() };
         let scalar = match effort {
@@ -98,17 +117,19 @@ impl Thinking {
                 }
             }
             out.selected = out.choices.last().ok_or("A thinking level list must not be empty.")?.clone();
+        } else if !out.disabled {
+            out = Self::manual(protocol);
         }
         if let Some(s) = scalar {
             out.choose(Choice::parse(s, protocol)?)?;
-        }
-        if out.choices.is_empty() && supports == Some(true) && protocol == Protocol::Ollama {
-            out.choices.extend([Choice::Off, Choice::On]);
         }
         Ok(out)
     }
 
     fn add_listed(&mut self, choice: Choice) -> Result<(), String> {
+        if choice == Choice::Default {
+            return Err("Server default is always available; omit it from reasoning_effort_levels.".into());
+        }
         if self.choices.len() >= 32 || self.choices.contains(&choice) {
             return Err("Thinking levels must be unique, with at most 32 choices.".into());
         }
@@ -120,7 +141,7 @@ impl Thinking {
     }
 
     fn choose(&mut self, choice: Choice) -> Result<(), String> {
-        if !self.choices.contains(&choice) {
+        if choice != Choice::Default && !self.choices.contains(&choice) {
             if self.listed {
                 return Err("The selected thinking level is outside this model's declared reasoning_effort_levels.".into());
             }
@@ -131,6 +152,9 @@ impl Thinking {
     }
 
     pub(super) fn preference(&mut self, protocol: Protocol, enabled: Option<bool>, effort: Option<&str>) -> Result<(), String> {
+        if enabled == Some(true) && self.disabled {
+            return Err("enable_thinking=true conflicts with supports_thinking=false.".into());
+        }
         if enabled == Some(false) {
             // A level-only model cannot turn thinking off. Leave that decision with its
             // server, and label the selection accordingly instead of sending a made-up level.
@@ -148,25 +172,46 @@ impl Thinking {
             return self.choose(choice);
         }
         if enabled == Some(true) && matches!(self.selected, Choice::Default | Choice::Off) {
-            if let Some(choice) = self.choices.iter().rev().find(|c| **c != Choice::Off) {
+            if !self.listed {
+                // A profile requested thinking, not the most expensive manual option.
+                return self.choose(if protocol == Protocol::Ollama { Choice::On } else { Choice::Level("medium".into()) });
+            } else if let Some(choice) = self.choices.iter().rev().find(|c| **c != Choice::Off) {
                 self.selected = choice.clone();
-            } else if protocol == Protocol::Ollama {
-                self.choose(Choice::On)?;
             } else {
-                return Err("Specify an effort supported by this Chat Completions model to enable thinking.".into());
+                return Err("This model has no enabled thinking level in reasoning_effort_levels.".into());
             }
         }
         Ok(())
     }
 
     pub(in super::super) fn picker(&mut self, ui: &mut egui::Ui, lang: Language) {
-        if self.choices.is_empty() || self.disabled {
-            return;
-        }
-        egui::ComboBox::from_label(lang.tr("Thinking")).selected_text(lang.tr(self.selected.label())).show_ui(ui, |ui| {
-            for choice in std::iter::once(&Choice::Default).chain(&self.choices) {
-                ui.selectable_value(&mut self.selected, choice.clone(), lang.tr(choice.label()));
-            }
+        let why = lang.tr(if self.disabled {
+            "Thinking is disabled for this model in wingman.json."
+        } else if self.listed {
+            "Choose a configured level for the next turn. Server default sends no override."
+        } else {
+            "Manual protocol choices; your model may accept only some. Server default sends no override."
+        });
+        let label = ui.label(lang.tr("Thinking mode"));
+        ui.add_enabled_ui(!self.disabled, |ui| {
+            let value = if self.disabled { "Disabled by configuration" } else { self.selected.label() };
+            egui::ComboBox::from_id_salt("wingman_thinking")
+                .width(ui.available_width().min(170.0))
+                .truncate()
+                .selected_text(lang.tr(value))
+                .show_ui(ui, |ui| {
+                    if !self.listed {
+                        ui.weak(why);
+                        ui.separator();
+                    }
+                    for choice in std::iter::once(&Choice::Default).chain(&self.choices) {
+                        ui.selectable_value(&mut self.selected, choice.clone(), lang.tr(choice.label()));
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text(why)
+                .on_disabled_hover_text(why);
         });
     }
 
@@ -185,5 +230,27 @@ impl Thinking {
 
     pub(super) fn supports_reasoning_history(&self) -> bool {
         !self.disabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manual_menus_follow_each_protocol_but_explicit_capabilities_take_precedence() {
+        let labels = |t: &Thinking| t.choices.iter().map(|c| c.label().to_owned()).collect::<Vec<_>>();
+        let chat = Thinking::manual(Protocol::Completions);
+        assert!(labels(&chat).iter().any(|v| v == "xhigh") && labels(&chat).iter().any(|v| v == "max"));
+        let ollama = Thinking::manual(Protocol::Ollama);
+        assert!(ollama.choices.contains(&Choice::On));
+        assert!(!labels(&ollama).iter().any(|v| v == "xhigh" || v == "max"));
+        let only = Levels::Csv("low,med".into());
+        let mut restricted = Thinking::configured(Protocol::Completions, None, None, Some(&only)).unwrap();
+        assert_eq!(labels(&restricted), ["low", "medium"]);
+        assert!(restricted.preference(Protocol::Completions, None, Some("max")).is_err());
+        let mut disabled = Thinking::configured(Protocol::Completions, Some(false), None, None).unwrap();
+        assert!(disabled.preference(Protocol::Completions, Some(true), Some("default")).is_err());
+        assert!(disabled.wire(Protocol::Completions).is_null());
     }
 }

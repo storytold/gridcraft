@@ -1,6 +1,6 @@
 # Wingman
 
-Choose the **Wingman** tile at the far right of the desktop ribbon, or type **Wingman** in command search. The tile stays in place when the ribbon groups scroll and becomes a compact button when the ribbon collapses. Drag the panel's left edge to resize it. Each workbook window has its own threads and permissions. Opening the panel does not contact a model.
+Wingman is off by default. Enable **File → Options → Features → Show Wingman pane**, then choose **Wingman** at the far right of the desktop ribbon or in command search. The tile stays in place when the ribbon groups scroll and becomes a compact button when the ribbon collapses. Drag the panel's left edge to resize it. Each workbook window has its own threads and permissions. Opening the panel does not contact a model.
 
 To remove Wingman from the ribbon, uncheck **File → Options → Features → Show Wingman pane**. This closes the dock and cancels its model requests and MCP connections in every open workbook window. Turning it back on restores the launcher without opening a pane.
 
@@ -39,7 +39,11 @@ The settings follow the [local model](https://zed.dev/docs/ai/use-a-local-model)
 
 ### Thinking modes
 
-For a model that supports adjustable reasoning, add `"reasoning_effort_levels": ["low", "medium", "high"], "reasoning_effort": "medium"` to its entry in `available_models`. A comma-separated list also works. **Thinking** selects the level for the next turn; **Server default** omits the override. Only advertise levels your model accepts. A native Ollama model with `"supports_thinking": true` can instead offer on/off. Defaults can also use `effort` and `enable_thinking` on `agent.default_model` or a named Wingman agent.
+**Find models → choose a model → Thinking** works without editing JSON. Thinking sits beside **Access**, or directly below it when the dock is narrow. Leave **Server default** selected to send no override. Model discovery identifies the model; it does not prove which reasoning levels the server implements.
+
+For Chat Completions, the manual choices are none, minimal, low, medium, high, xhigh and max. Select a level your endpoint accepts; `max` and `xhigh` are different values. Native Ollama uses `think` rather than `reasoning_effort` and offers on/off and low/medium/high. To restrict the list, put e.g. `"reasoning_effort_levels": ["low", "medium", "high"], "reasoning_effort": "medium"` in the model's `available_models` entry. A comma-separated list also works. An explicit `"supports_thinking": false` disables the control. An agent can inherit or override the configured default using `effort`.
+
+Wingman runs its own tool loop against the configured model API. In Zed these are [model providers](https://zed.dev/docs/ai/llm-providers); [external agents](https://zed.dev/docs/ai/external-agents) are separate programs using ACP, with their own sessions, permissions and tools. Wingman does not launch Zed's `agent_servers`. Use `language_models` for a model endpoint and `context_servers` for additional MCP tools.
 
 ## Work with a sheet
 
@@ -53,6 +57,8 @@ For a model that supports adjustable reasoning, add `"reasoning_effort_levels": 
 The initial access setting accepts `ask`, `write`, `write_mcp`, or `minimal` in `agent.default_profile`; an individual agent can override it. Type `@` for references. Arrow keys select a completion; Tab or Enter accepts it, Escape dismisses it. For example:
 
 - `Why does @read D3:D12 return different margins from @selection?`
+- `Which cells contain XYZ anywhere in this workbook? Give me the sheet names and addresses.`
+- `Find formulas using XLOOKUP on the Orders sheet, then explain what the first match depends on.`
 - `Compare @read 'Q1 Sales'!B2:D8 with @read 'Q2 Sales'!B2:D8.`
 - `Add a column chart for @read A1:B12 and give it the title “Weekly sales”.`
 - `Summarize @comments, then propose a reply for the active cell.`
@@ -66,6 +72,14 @@ References capture workbook data when you send. The selected endpoint receives t
 Enter sends; Shift+Enter adds a line. `/mode chat|read|write|mcp` changes access; `/settings` opens JSON; `/help` lists commands. `/new` starts a conversation and keeps the previous one under **Threads** for that agent. `/clear` discards the current conversation. Threads are held in memory, not in the spreadsheet. The desktop control command `view.wingman` toggles the dock or accepts `{"on":true}` / `{"on":false}`.
 
 To reuse the comment extraction in another run, open a native macro for editing and ask Wingman to add the same column transfer as a step. Approving the draft does not move anything; the command reads the sheet's then-current comments when you run the saved macro.
+
+### Search and formula inspection
+
+Wingman’s `grep` searches populated cells across visible sheets by default. It can narrow the search to a sheet, a range or a column, and match literal text or a regular expression in values, formatted display text, formulas, or comment threads. It returns sheet names, addresses and matching excerpts. Large searches yield to the UI between slices; **Stop** cancels them. Only result pages go to the model. No cursor means the search is finished; a skipped-fields count distinguishes an incomplete scan from a clean miss.
+
+Use `formula_diagnostics` to locate cached spreadsheet errors: a cell displaying the text `#REF!` is not the same as an actual reference error. `inspect_formula` follows direct static precedents or dependents without expanding large ranges, and reports unavailable indexes or incomplete traces. Neither tool recalculates the workbook. `check_formula` checks a proposed formula’s syntax without executing it; valid syntax is not a guarantee that referenced names exist or that its calculated result is correct.
+
+To find an object rather than a cell, ask for a chart by title, a table by name, or a defined name. `list_objects` can filter the native object list before paging; its chart IDs and table ranges can be passed to other workbook tools.
 
 ### Undo and the Macro Editor
 

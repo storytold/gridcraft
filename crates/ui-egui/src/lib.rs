@@ -178,7 +178,7 @@ impl Default for UiState {
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
             #[cfg(not(target_arch = "wasm32"))]
-            show_wingman_pane: true,
+            show_wingman_pane: false,
             formula_bar_expanded: false,
             formula_bar_lines: formula_bar::MAX_LINES,
             status_bar: true,

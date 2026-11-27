@@ -29,7 +29,7 @@ fn clipped(s: &str, chars: usize) -> (String, bool) {
     }
 }
 
-fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
+pub(super) fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
     let entry = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
     let hidden = sh.is_protected() && style.protection.hidden;
@@ -118,23 +118,34 @@ fn info(d: &DocState, offset: usize) -> Json {
         "activeCell":d.selection.active.a1(),"readOnly":d.read_only_source.is_some(),"protectedStructure":d.wb.protected_structure})
 }
 
-fn objects(d: &DocState, sh: &Sheet, kind: &str, column: Option<&str>, offset: usize) -> Result<Json, String> {
+fn objects(d: &DocState, sh: &Sheet, kind: &str, column: Option<&str>, search: Option<&str>, offset: usize) -> Result<Json, String> {
     let column = match (kind, column) {
         ("comments", Some(name)) => Some(letters_to_col(name).ok_or("Use worksheet column letters A through XFD.")?),
         (_, Some(_)) => return Err("The column filter is only available for comments.".into()),
         (_, None) => None,
     };
+    let search = search.filter(|s| !s.is_empty());
+    if kind == "comments" && search.is_some() {
+        return Err("To search comment text, use grep with searchIn=comment.".into());
+    }
+    // Compile a Unicode case-insensitive *literal* once; scan borrowed names without copying each one.
+    let pattern = search
+        .map(|s| regex::RegexBuilder::new(&regex::escape(s)).case_insensitive(true).build())
+        .transpose()
+        .map_err(|_| "Invalid object search.")?;
+    let matches = |s: &str| pattern.as_ref().is_none_or(|p| p.is_match(s));
+    let chart_id = search.and_then(|s| s.parse::<u32>().ok());
     let data = match kind {
-        "charts" => page(sh.charts.iter().skip(offset).map(|c|json!({"id":c.id,"type":format!("{:?}",c.kind),
+        "charts" => page(sh.charts.iter().filter(|c| matches(c.title.as_deref().unwrap_or_default()) || Some(c.id)==chart_id).skip(offset).map(|c|json!({"id":c.id,"type":format!("{:?}",c.kind),
             "title":c.title.as_deref().map(|s|clip(s,128)),"at":c.anchor.cell.a1(),"source":c.source.as_deref().map(|s|clip(s,240)),
             "series":c.series.len(),"xTitle":c.x_title.as_deref().map(|s|clip(s,128)),"yTitle":c.y_title.as_deref().map(|s|clip(s,128)),
             "legend":format!("{:?}",c.legend),"dataLabels":c.data_labels,"gridlines":c.gridlines})),offset,32),
         // Iterate stored notes/threads in address order, not every cell in a whole-column range.
         "comments" => page(sh.comments.iter().filter(|(cell,_)| column.is_none_or(|col| col == cell.col)).skip(offset)
             .map(|(cell,c)| json!({"cell":cell.a1(),"comment":comment(c,false)})),offset,32),
-        "tables" => page(sh.tables.iter().skip(offset).map(|t|json!({"name":clip(&t.name,128),"range":t.range.a1(),"columns":t.columns.len()})),offset,32),
-        "names" => page(d.wb.names.iter().filter(|n| !n.hidden && n.scope.is_none_or(|i|d.wb.sheet(i).is_some_and(|s|s.visibility==Visibility::Visible)))
-            .skip(offset).map(|n|json!({"name":clip(&n.name,128),"refersTo":clip(&n.formula,256),"scope":n.scope.and_then(|i|d.wb.sheet(i)).map(|s|clip(&s.name,128))})),offset,32),
+        "tables" => page(sh.tables.iter().filter(|t|matches(&t.name)).skip(offset).map(|t|json!({"name":clip(&t.name,255),"range":t.range.a1(),"columns":t.columns.len()})),offset,32),
+        "names" => page(d.wb.names.iter().filter(|n| !n.hidden && n.scope.is_none_or(|i|d.wb.sheet(i).is_some_and(|s|s.visibility==Visibility::Visible)) && matches(&n.name))
+            .skip(offset).map(|n|json!({"name":clip(&n.name,255),"refersTo":clip(&n.formula,256),"scope":n.scope.and_then(|i|d.wb.sheet(i)).map(|s|clip(&s.name,128))})),offset,32),
         _ => return Err("Unknown object category".into()),
     };
     let mut out = json!({"sheet":clip(&sh.name,128),"kind":kind,"page":data});
@@ -156,7 +167,9 @@ pub(super) fn query(app: &SheetApp, name: &str, args: &Json) -> Result<Json, Str
         "workbook_info" => Ok(info(d, offset)),
         "inspect_cell" => Ok(cell_data(d, sh, args["cell"].as_str().and_then(CellRef::parse).ok_or("Invalid cell address")?, true)),
         "read_range" => Ok(cells(d, sh, super::limited_range(args["range"].as_str().ok_or("Missing range")?)?, offset)),
-        "list_objects" => objects(d, sh, args["kind"].as_str().ok_or("Missing object category")?, args["column"].as_str(), offset),
+        "list_objects" => {
+            objects(d, sh, args["kind"].as_str().ok_or("Missing object category")?, args["column"].as_str(), args["search"].as_str(), offset)
+        }
         _ => Err("Unknown inspection tool".into()),
     }
 }
@@ -187,8 +200,8 @@ pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, S
             Ok(info)
         }
         "workbook" => Ok(info(d, 0)),
-        "charts" => objects(d, sh, "charts", None, 0),
-        "comments" => objects(d, sh, "comments", None, 0),
+        "charts" => objects(d, sh, "charts", None, None, 0),
+        "comments" => objects(d, sh, "comments", None, None, 0),
         "vba" => Ok(json!({"embeddedVbaBytes":d.wb.vba_project.as_ref().map(|b|b.len()),
             "capability":"GridCraft preserves an embedded VBA project as opaque bytes. Paste module text for review or formatting; binary modules cannot be read, rewritten or run by Wingman."})),
         _ => {
@@ -199,5 +212,30 @@ pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, S
             };
             Ok(cells(d, target, super::limited_range(&address)?, 0))
         }
+    }
+}
+
+#[cfg(test)]
+mod object_search_tests {
+    use super::*;
+    use gridcraft_engine::{Session, model::DefinedName};
+    use std::sync::Arc;
+
+    #[test]
+    fn name_search_is_literal_and_pages_visible_matches() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut app = SheetApp::new(s, Default::default());
+        let wb = Arc::make_mut(&mut app.session.active_mut().unwrap().wb);
+        for i in 0..36 {
+            wb.names.push(DefinedName { name: format!("Ö_Fee.{i:02}"), formula: "1".into(), scope: None, comment: String::new(), hidden: i == 3 });
+        }
+        let find = |q: &str, offset| query(&app, "list_objects", &json!({"kind":"names","search":q,"offset":offset})).unwrap()["page"].clone();
+        assert_eq!(find("ö_fEE.", 0)["nextOffset"], 32);
+        let end = find("ö_fEE.", 32);
+        assert_eq!(end["items"][0]["name"], "Ö_Fee.33");
+        assert!(end["nextOffset"].is_null());
+        assert_eq!(find("Fee.*", 0)["items"], json!([]));
+        assert!(query(&app, "list_objects", &json!({"kind":"comments","search":"fee"})).unwrap_err().contains("grep"));
     }
 }
