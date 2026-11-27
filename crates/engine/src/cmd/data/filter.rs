@@ -284,16 +284,21 @@ fn pct_encode(s: &str) -> String {
     out
 }
 
-/// Format-independent, mode-independent `<kind>:<encoded_value>` key of a non-blank cell.
-fn typed_value_token(v: &Value) -> String {
+/// ASCII-only lowercase key used by checklist identities saved before Unicode case keys (#2912).
+fn legacy_case_key(s: &str) -> String {
+    s.to_ascii_lowercase()
+}
+
+/// Format-independent, mode-independent `<kind>:<encoded_value>` key of a non-blank cell, folded with `fold`.
+fn typed_value_token_with(v: &Value, fold: fn(&str) -> String) -> String {
     let (kind, norm) = match v {
         Value::Number(n) => {
-            let s = if *n == 0.0 { "0".to_string() } else { filter_case_key(v.display().trim()) };
+            let s = if *n == 0.0 { "0".to_string() } else { fold(v.display().trim()) };
             ("n", s)
         }
-        Value::Text(t) => ("t", filter_case_key(t.trim())),
+        Value::Text(t) => ("t", fold(t.trim())),
         Value::Bool(b) => ("b", if *b { "true".to_string() } else { "false".to_string() }),
-        _ => ("e", filter_case_key(v.display().trim())),
+        _ => ("e", fold(v.display().trim())),
     };
     format!("{kind}:{}", pct_encode(&norm))
 }
@@ -310,9 +315,18 @@ fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<
 /// whose custom format displays only whitespace falls back to its underlying value (`42`), keeping
 /// General `42` stable if later formatted as spaces.
 fn cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
-    let typed = typed_value_token(v);
+    cell_base_token_with(wb, sh, c, v, filter_case_key)
+}
+
+/// The base key as older builds saved it, so a stored checklist identity keeps matching its rows (#2912).
+fn legacy_cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
+    cell_base_token_with(wb, sh, c, v, legacy_case_key)
+}
+
+fn cell_base_token_with(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, fold: fn(&str) -> String) -> String {
+    let typed = typed_value_token_with(v, fold);
     let vtext = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    let eff = filter_case_key(if vtext.trim().is_empty() { v.display() } else { vtext }.trim());
+    let eff = fold(if vtext.trim().is_empty() { v.display() } else { vtext }.trim());
     format!("{typed}:{}", pct_encode(&eff))
 }
 
@@ -355,27 +369,35 @@ fn id_splits_base(id: &str, base: &str) -> bool {
     id.strip_prefix("c:") == Some(base) || id.strip_prefix("f:").and_then(|rest| rest.strip_prefix(base)).is_some_and(|rest| rest.starts_with(':'))
 }
 
+/// Strips `base` or, failing that, `legacy_base` from the front of a stored identity's remainder.
+fn strip_either_base<'a>(rest: &'a str, base: &str, legacy_base: &str) -> Option<&'a str> {
+    rest.strip_prefix(base).or_else(|| rest.strip_prefix(legacy_base))
+}
+
 /// Checks whether a non-blank cell matches any primary stored identity (`d:`, `c:`, `f:`, `w:`, `s:`).
 fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, identities: &[String]) -> bool {
     let base = cell_base_token(wb, sh, c, v);
+    // Identities saved with ASCII-only folding still match; they differ from `base` only for non-ASCII uppercase text.
+    let legacy_base = legacy_cell_base_token(wb, sh, c, v);
+    let after_base = |rest| strip_either_base(rest, &base, &legacy_base);
     let mut formula_enc: Option<Option<String>> = None;
     let mut slicer_enc: Option<Option<String>> = None;
     identities.iter().any(|id| {
         if let Some(rest) = id.strip_prefix("d:") {
-            rest == base
+            rest == base || rest == legacy_base
         } else if let Some(rest) = id.strip_prefix("c:") {
-            if rest != base {
+            if rest != base && rest != legacy_base {
                 return false;
             }
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).is_none()
         } else if let Some(rest) = id.strip_prefix("f:") {
-            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
+            let Some(tail) = after_base(rest).and_then(|s| s.strip_prefix(':')) else {
                 return false;
             };
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).as_deref()
                 == Some(tail)
         } else if let Some(rest) = id.strip_prefix("w:") {
-            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
+            let Some(tail) = after_base(rest).and_then(|s| s.strip_prefix(':')) else {
                 return false;
             };
             let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
@@ -834,7 +856,9 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
             continue;
         }
         let base = cell_base_token(wb, sh, c, &v);
-        let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base)));
+        let legacy_base = legacy_cell_base_token(wb, sh, c, &v);
+        let split_formulas = sh.show_formulas
+            || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base) || id_splits_base(id, &legacy_base)));
         let split_fmtws = true;
         let shown = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
         let id = cell_identity_token(wb, sh, c, &v, &shown, split_formulas, split_fmtws);
@@ -1079,5 +1103,27 @@ mod unicode_filter_tests {
         s.execute("data.filterBy", json!({"column": "A", "values": values})).unwrap();
         assert!(!is_hidden(&s, 1), "ΟΣ stays visible after unchanged apply");
         assert!(is_hidden(&s, 2), "ος stays excluded after unchanged apply");
+    }
+
+    /// A checklist identity saved with ASCII-only folding (`Ä` as `d:t:%C3%84:%C3%84`) still matches its row,
+    /// and the dropdown still shows that entry as checked.
+    #[test]
+    fn legacy_ascii_folded_identity_keeps_matching_its_row() {
+        use gridcraft_core::{CellRef, RangeRef};
+        use gridcraft_model::AutoFilter;
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["Ä"], ["Other"]]})).unwrap();
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.autofilter = Some(AutoFilter {
+            range: RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 0)),
+            criteria: vec![(0, FilterCriterion::Values { values: vec!["Ä".into()], blanks: false, identities: vec!["d:t:%C3%84:%C3%84".into()] })],
+        });
+        s.execute("data.reapply", json!({})).unwrap();
+        assert!(!is_hidden(&s, 1), "legacy identity must keep its row visible");
+        assert!(is_hidden(&s, 2));
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(options.iter().find(|(t, _)| t == "Ä").map(|(_, on)| *on), Some(true), "{options:?}");
+        assert_eq!(options.iter().find(|(t, _)| t == "Other").map(|(_, on)| *on), Some(false), "{options:?}");
     }
 }
