@@ -252,6 +252,10 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The Python environment: the initialization code that runs before the workbook's Python
+    /// cells. Shared, so a copy of the workbook (every edit's undo step) doesn't copy the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_env: Option<Arc<crate::python::PyEnvironment>>,
     /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
     /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
     #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
@@ -285,6 +289,12 @@ pub struct Workbook {
     /// the links in memory are still written for the old one. Not in JSON.
     #[serde(skip)]
     pub source_path: Option<std::path::PathBuf>,
+    /// The Python cell of the picture waiting on the object clipboard: the copy it belongs to, and a
+    /// reference that follows the cell as the ones in the sheets do, so a paste after a row insert or
+    /// a sheet rename links to the right cell. It is here and not with the clipboard so that Undo and
+    /// Redo bring back the reference that goes with their workbook. Not in JSON.
+    #[serde(skip)]
+    pub held_link: Option<(u64, String)>,
 }
 
 fn is_all(s: &ShowObjects) -> bool {
@@ -396,8 +406,8 @@ impl Workbook {
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
     /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
-    /// (not one that is a table's name alone, which reads the table first) and form controls'
-    /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
+    /// (not one that is a table's name alone, which reads the table first), form controls'
+    /// linked cells and the Python cell a linked picture shows. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
     /// visited: table calculated-column and totals formulas, a PivotChart's link to its
     /// PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
@@ -523,6 +533,15 @@ impl Workbook {
                 });
                 v
             });
+            // The Python cell a linked picture shows: one a deleted sheet takes no longer names a
+            // cell, and a reader drops the link.
+            let images = sh.images.iter().any(|i| i.python_source.as_deref().is_some_and(changes)).then(|| {
+                let mut v = sh.images.clone();
+                v.iter_mut().flat_map(|i| i.python_source.as_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
             if cells.is_empty()
                 && cond_formats.is_none()
                 && validations.is_none()
@@ -530,6 +549,7 @@ impl Workbook {
                 && sparklines.is_none()
                 && pivots.is_none()
                 && controls.is_none()
+                && images.is_none()
             {
                 continue;
             }
@@ -557,6 +577,9 @@ impl Workbook {
             if let Some(v) = controls {
                 sh.controls = v;
             }
+            if let Some(v) = images {
+                sh.images = v;
+            }
         }
     }
 
@@ -582,10 +605,12 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            python_env: None,
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
             preserved: None,
+            held_link: None,
             source_dir: None,
             region: gridcraft_core::region::default_region(),
             source_path: None,
@@ -861,7 +886,15 @@ mod tests {
     #[test]
     fn object_ids_never_overflow_or_repeat() {
         let mut wb = Workbook::new();
-        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        let image = |id| crate::Image {
+            id,
+            anchor: Default::default(),
+            data: Default::default(),
+            mime: String::new(),
+            alt: String::new(),
+            python_source: None,
+            rendered: None,
+        };
         assert_eq!(wb.next_object_id(), 1);
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(7));
@@ -908,7 +941,15 @@ mod tests {
     #[test]
     fn free_object_ids_come_from_below_when_nothing_is_free_above() {
         let mut wb = Workbook::new();
-        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        let image = |id| crate::Image {
+            id,
+            anchor: Default::default(),
+            data: Default::default(),
+            mime: String::new(),
+            alt: String::new(),
+            python_source: None,
+            rendered: None,
+        };
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
             sh.images.push(image(u32::MAX - 1));

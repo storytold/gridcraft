@@ -166,7 +166,10 @@ stale flag. Its `value` is the cached result, so formulas, display and saving re
 other cell. `model::python` has the text forms: `PY("…"&"…",n)` with literals of at most 255
 characters (the function's syntax, which some files hold), the `_xlfn._xlws.` prefix, the
 8,192-character limit measured on that formula (`PyCode::fits`), and the `xl("…")` literals in
-code, which structural edits rewrite like formula references.
+code, which structural edits rewrite like formula references. Code is stored with `\n` line breaks:
+`\r\n` and a lone `\r` become `\n` everywhere, string literals included (`normalize_code`). Python
+reads source the same way, so what runs is unchanged, and a carriage return a string needs is the
+escape `\r`, which is kept.
 
 Only those edits rewrite them: inserting or deleting cells, rows and columns, a cut and paste, and
 renaming or deleting a sheet. An edit that would make a cell's code longer than the limit (a

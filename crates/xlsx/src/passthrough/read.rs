@@ -213,6 +213,9 @@ impl KeptReader {
                 let mut q = Preserved::default();
                 match self.keep(cx, &mut q, std::slice::from_ref(r), &mut seen) {
                     Ok(()) => {
+                        if is_kind(r, &["custom-properties"]) {
+                            take_out_notices(&mut q, r);
+                        }
                         p.parts.extend(q.parts);
                         p.package_rels.extend(q.rels);
                     }
@@ -564,6 +567,27 @@ impl KeptReader {
             ..Default::default()
         };
         Ok((vml, q.parts))
+    }
+}
+
+/// A kept custom properties part without the notices GridCraft writes itself. With nothing else in
+/// it, it isn't kept at all, nor is the relationship to it, unless it has relationships of its own:
+/// then it stays, empty, for the parts they keep.
+fn take_out_notices(kept: &mut Preserved, rel: &PreservedRel) {
+    let target = normalize(&rel.target);
+    let Some(part) = kept.parts.iter_mut().find(|q| normalize(&q.name) == target) else { return };
+    match crate::custom_props::without_notices(&part.data) {
+        crate::custom_props::Stripped::Unchanged => {}
+        crate::custom_props::Stripped::Part(data) => part.data = Arc::from(data),
+        crate::custom_props::Stripped::Nothing(empty) => {
+            // Its own relationships, to a kept part or to an external target, need it there.
+            if !part.rels.is_empty() {
+                part.data = Arc::from(empty);
+            } else {
+                kept.parts.clear();
+                kept.rels.clear();
+            }
+        }
     }
 }
 

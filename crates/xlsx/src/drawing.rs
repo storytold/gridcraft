@@ -4,8 +4,10 @@
 //! An equation is written as `mc:AlternateContent`: the `a14` choice is a text box holding the
 //! equation as Office Math (`a14:m`), the fallback the same text box holding the LaTeX as plain
 //! text. Both carry the source in `descr="gridcraft:latex:…"`, which wins on reading; without it,
-//! Office Math in the subset `omml` reads is converted back to LaTeX.
+//! Office Math in the subset `omml` reads is converted back to LaTeX. The pictures of Python cells
+//! have their own descriptions: see [`crate::python_pictures`].
 
+use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use craft_xlsx::{Anchor as CraftAnchor, Drawing as CraftDrawing, Item as CraftItem, Marker as CraftMarker, Placement as CraftPlacement};
@@ -160,6 +162,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     };
     let dr = CraftDrawing::read(&root);
     let rels = cx.pkg.rels(part)?;
+    // The Python cells that have their companion pictures: a second one on a cell is a floating picture.
+    let mut python_cells = HashSet::new();
     let mut anchors: Vec<&CraftAnchor> = Vec::new();
     let mut alt_anchors: Vec<CraftAnchor> = Vec::new();
     for item in &dr.items {
@@ -200,9 +204,27 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         cx.warn(format!("missing picture {target}"));
                         continue;
                     };
-                    let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    let descr = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
+                    let (python_source, alt) = match crate::python_pictures::read_link(descr) {
+                        Some((reference, alt)) => (Some(reference.to_string()), alt),
+                        None => (None, descr),
+                    };
+                    let companion = crate::python_pictures::read_cell_marker(descr);
+                    let alt = match &companion {
+                        Some(marker) => {
+                            let first = !python_cells.contains(&anchor.cell);
+                            if first && crate::python_pictures::take_for_cell(sheet, anchor.cell, marker, &data) {
+                                python_cells.insert(anchor.cell);
+                                continue;
+                            }
+                            cx.python_pictures_without_cell = cx.python_pictures_without_cell.saturating_add(1);
+                            marker.alt
+                        }
+                        None => alt,
+                    };
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    let mime = mime_for(&target).to_string();
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime, alt: alt.to_string(), python_source, rendered: None });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -642,6 +664,8 @@ pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// The companion picture of the Python cell at a place.
+    PythonCell(&'a crate::write::PythonImage, String),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -652,13 +676,36 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
         match o {
             Obj::Image(img, rid) => {
                 let placement = to_placement(sheet, &img.anchor);
-                let mut anchor = CraftAnchor::picture(placement, id as u32, &format!("Picture {}", id - 1), &img.alt, rid);
+                // A picture linked to a Python cell names its source in `descr`, after its own text.
+                let linked = img.python_source.as_deref().and_then(|r| crate::python_pictures::linked_descr(r, &img.alt));
+                let descr = linked.as_deref().unwrap_or(&img.alt);
+                let mut anchor = CraftAnchor::picture(placement, id as u32, &format!("Picture {}", id - 1), descr, rid);
                 if let Some(ext) = anchor.object.child_mut("xdr:spPr").and_then(|sp| sp.child_mut("a:xfrm")).and_then(|x| x.child_mut("a:ext")) {
                     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
                     ext.set_attr("cx", e(img.anchor.width));
                     ext.set_attr("cy", e(img.anchor.height));
                 }
                 items.push(CraftItem::Anchor(anchor));
+            }
+            Obj::PythonCell(python, rid) => {
+                let (at, image) = (&python.at, &python.image);
+                let anchor =
+                    Anchor { cell: *at, dx: 0.0, dy: 0.0, width: image.width as f32, height: image.height as f32, mode: AnchorMode::MoveOnly };
+                let emu = |v: f32| (f64::from(v) * EMU_PER_PX).round() as i64;
+                let placement = CraftPlacement::OneCell {
+                    from: CraftMarker { col: at.col, col_off: 0, row: at.row, row_off: 0 },
+                    cx: emu(anchor.width),
+                    cy: emu(anchor.height),
+                };
+                let xml = format!(
+                    "<xdr:pic><xdr:nvPicPr><xdr:cNvPr id=\"{id}\" name=\"Python {}\" descr=\"{}\" hidden=\"1\"/><xdr:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"{rid}\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>",
+                    at.a1(),
+                    esc_attr(&crate::python_pictures::cell_descr(*at, image, python.stands_in)),
+                    xfrm(&anchor, "a:xfrm")
+                );
+                if let Some(object) = parse_craft_fragment(&xml) {
+                    items.push(CraftItem::Anchor(CraftAnchor { placement, object, client_data: None }));
+                }
             }
             Obj::Chart(ch, rid) if crate::chartex::is_chartex(ch.kind) => {
                 let placement = to_placement(sheet, &ch.anchor);
