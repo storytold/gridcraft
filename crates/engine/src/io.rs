@@ -53,6 +53,10 @@ impl FileKind {
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
+/// The error for a workbook with a password to modify, opened with neither that password
+/// (`modifyPassword`) nor `readOnly`, contains this. The interface asks for the password or a
+/// read-only open when it sees it.
+pub const MODIFY_PASSWORD_REQUIRED: &str = "is reserved by its author. Enter the password to modify it, or open it read-only.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
@@ -144,6 +148,7 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    crate::cmd::data::migrate_loaded_autofilters(&mut wb);
     Ok((wb, warnings))
 }
 
@@ -528,8 +533,8 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
+        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default),
+        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, None)).transpose().map(Option::unwrap_or_default),
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -558,19 +563,18 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| {
-        // General's grid-width formatting rounds large identifiers to scientific notation.
-        // Delimited files have no column width, so preserve the whole numeric value instead.
-        if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
-            && let gridcraft_core::Value::Number(number) = sh.value(c)
-            && number.is_finite()
-        {
-            number.to_string()
-        } else {
-            crate::display::value_text(wb, sh, c)
-        }
-    })
+/// One intentional difference: a number shown as General is not narrowed to the cell width and
+/// never gets an exponent (`gridcraft_numfmt::format_value_full`). Below 1E+15 it is written as
+/// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
+/// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
+/// that `&` writes in scientific notation as their 15 digits in full.
+/// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
+    let text = |c| crate::display::value_text(wb, sh, c);
+    match delimiter {
+        Some(d) => gridcraft_xlsx::write_csv(sh, d, text),
+        None => gridcraft_xlsx::write_tsv(sh, text),
+    }
     .map_err(|e| EngineError::Other(e.to_string()))
 }
 
@@ -1062,6 +1066,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
+    // A brand-new file gets the restrictive default: no group/other write, whatever the umask.
+    #[cfg(unix)]
+    if prior.is_none() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o644);
+    }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
@@ -1085,16 +1095,50 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
     }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+    // `sync_all` before the rename: without it a power loss right after the rename can leave
+    // the new name pointing at an empty or truncated file while the old workbook is gone.
+    // A file system that cannot flush at all (some network mounts; on Apple targets std asks
+    // for F_FULLFSYNC, which they refuse) keeps the old behaviour: skip the flush, still rename.
+    let synced = |f: &std::fs::File| f.sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) });
+    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| synced(&f)).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    drop(f);
     std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
-    })
+    })?;
+    // Make the rename itself durable. Best effort: the workbook is already in place, so a
+    // directory that can't be opened or synced (some file systems) is not a failed save.
+    #[cfg(unix)]
+    {
+        let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
+}
+
+/// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure), on
+/// Apple targets ENOTSUP (45, which std leaves uncategorized there), or an unsupported-operation
+/// error (EOPNOTSUPP/ENOSYS, and ENOTSUP where it equals EOPNOTSUPP). Any other error is a real
+/// failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn full_sync_unsupported(e: &std::io::Error) -> bool {
+    flush_unsupported_on(e, cfg!(unix), cfg!(target_vendor = "apple"))
+}
+
+/// [`full_sync_unsupported`] for a given platform, so each platform's raw codes can be tested
+/// on any host.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
+    let raw = e.raw_os_error();
+    (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 /// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
@@ -1110,43 +1154,14 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    gridcraft_model::b64::encode(data)
 }
 
+/// Base64, or a `data:` URL's base64 payload.
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.split_once(',').filter(|(h, _)| h.starts_with("data:")).map(|(_, b)| b).unwrap_or(s);
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for c in s.bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        let v = B64.iter().position(|&x| x == c)? as u32;
-        buf = (buf << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    gridcraft_model::b64::decode(s)
 }
 
 /// Pixel size of a PNG or JPEG from its header.

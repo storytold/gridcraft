@@ -1,0 +1,33 @@
+name: GridCraft unsigned nightly
+
+# Enabled for supervised manual runs by the reviewed manual actor only; no schedule yet.
+# A later explicit opt-in may add a cadence (and turn on nightly-dispatch.yml with it).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned:
+    # Actual context guards only; no inherited/platform secrets.
+    if: >-
+      github.repository == 'storytold/gridcraft' &&
+      github.ref == 'refs/heads/main' && github.ref_type == 'branch' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    # Maximum for the reusable workflow. Its compiler narrows to contents/actions read;
+    # no OIDC, attestation write, release environment or platform secrets in compilation.
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@f94a43818dabb2e85f2f4d5cd768bb8e5662600a
+    with:
+      tooling-revision: f94a43818dabb2e85f2f4d5cd768bb8e5662600a
+      app-name: gridcraft
+      manual-actors: '["bflatastic","dylanmtaylor","echelon","FredApps","skylartaylor"]'
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      # One producer run builds every listed platform for one all-or-nothing release. The pin is the
+      # craft-common-actions main commit that merged 8389cad8 (#375, the signer Windows fix).
+      platforms: '["windows-x86_64","linux-x86_64","macos-aarch64"]'

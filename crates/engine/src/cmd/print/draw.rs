@@ -1,5 +1,5 @@
 use super::layout::{DENSE_BLOCK, SheetLayout};
-use super::objects::draw_cell_picture;
+use super::objects::{PicCache, draw_cell_picture};
 use super::text::{TextPlacement, draw_text};
 use super::{
     BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
@@ -25,12 +25,12 @@ pub(super) struct Look {
     pub(super) cf: Option<crate::cf::CfLook>,
 }
 
-fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Option<crate::cf::CfCache>) -> Look {
+fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut crate::cf::CfCache) -> Look {
     let mut style = match sh.table_at(c) {
-        Some(t) => crate::tables::table_cell_style(wb, si, t, c),
+        Some(t) => crate::tables::table_cell_shown_style(wb, si, t, cf.table_edges(sh, t), c),
         None => wb.styles.get(sh.style_id(c)).clone(),
     };
-    let cfl = cf.as_mut().and_then(|cache| cache.look(wb, si, c));
+    let cfl = cf.look(wb, si, c);
     if let Some(st) = cfl.as_ref().and_then(|l| l.style.as_ref()) {
         if st.align.reading_order.is_some() {
             style.align.reading_order = st.align.reading_order;
@@ -319,7 +319,7 @@ impl<'a> Covered<'a> {
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Option<crate::cf::CfCache>) {
+pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut crate::cf::CfCache, pics: &mut PicCache) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
@@ -434,7 +434,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut Opt
             continue;
         }
         if let Some(picture) = sh.cell_pictures.get(c) {
-            draw_cell_picture(pg, &picture.data, (b.text_x(x, w), y, w, h), b.k);
+            draw_cell_picture(pg, pics, (b.si, *c), &picture.data, (b.text_x(x, w), y, w, h), b.k);
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
             draw_checkbox(pg, (b.text_x(x, w), y, w, h), b.k, on);
         } else {

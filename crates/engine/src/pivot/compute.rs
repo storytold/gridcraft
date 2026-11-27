@@ -132,10 +132,14 @@ fn aggregate_record(
     }
     for row_depth in 0..=row_path.len() {
         for col_depth in 0..=col_path.len() {
-            let accs = data
-                .aggs
-                .entry((row_path[..row_depth].to_vec(), col_path[..col_depth].to_vec()))
-                .or_insert_with(|| vec![Acc::default(); input.vals.len() + input.extra.len()]);
+            let accs = data.aggs.entry((row_path[..row_depth].to_vec(), col_path[..col_depth].to_vec())).or_insert_with(|| {
+                input
+                    .vals
+                    .iter()
+                    .map(|(_, v)| Acc::for_func(v.func))
+                    .chain(std::iter::repeat_n(Acc::default(), input.extra.len()))
+                    .collect::<Vec<_>>()
+            });
             for (acc, (source, _)) in accs.iter_mut().zip(input.vals) {
                 if let ValSrc::Col(column) = source {
                     acc.add(rec.get(*column).unwrap_or(&Value::Empty));
@@ -790,7 +794,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             }
             PivotShowAs::Rank => v.number_format.clone(),
             _ => v.number_format.clone().or_else(|| match v.func {
-                PivotFunc::Count | PivotFunc::CountNumbers => None,
+                PivotFunc::Count | PivotFunc::CountNumbers | PivotFunc::DistinctCount => None,
                 _ => {
                     let f = match vs {
                         ValSrc::Col(c) => fmt_of(*c),
@@ -864,6 +868,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             &data_fmt,
             l,
             ck.1,
+            pt,
             &ctx,
             &col_fields,
             &col_items,
@@ -878,16 +883,6 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }
 
-fn item_refs(fields: &[&PivotField], items: &[FieldItems], path: &[u32]) -> Vec<PivotItemRef> {
-    path.iter()
-        .enumerate()
-        .filter_map(|(depth, index)| {
-            let (field, item) = (fields.get(depth)?, items.get(depth)?.get(*index)?);
-            Some(PivotItemRef { field: field.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
-        })
-        .collect()
-}
-
 #[allow(clippy::too_many_arguments)]
 fn fill_line_values(
     g: &mut Grid,
@@ -899,6 +894,7 @@ fn fill_line_values(
     data_fmt: &[Option<String>],
     l: usize,
     ck: CellKind,
+    pt: &PivotTable,
     ctx: &Ctx<'_>,
     col_fields: &[&PivotField],
     col_items: &[FieldItems],
@@ -918,7 +914,7 @@ fn fill_line_values(
         let Some(raw) = lookup.get(rp, cp, *vi) else {
             // No records: blank, or the "For empty cells show" caption (a number when it
             // reads as one, as Excel stores `missingCaption="0"`).
-            if let Some(c) = &ctx.pt.empty_caption {
+            if let Some(c) = &pt.empty_caption {
                 let v = c.trim().parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::number).unwrap_or_else(|| Value::text(c.as_str()));
                 let fmt = if matches!(v, Value::Number(_)) { data_fmt.get(*vi).cloned().flatten() } else { None };
                 g.set(r, l + j, v, ck, 0, fmt);
@@ -950,4 +946,14 @@ fn fill_line_values(
         g.set(r, l + j, shown, ck, 0, data_fmt.get(*vi).cloned().flatten());
     }
     Ok(())
+}
+
+fn item_refs(fields: &[&PivotField], items: &[FieldItems], path: &[u32]) -> Vec<PivotItemRef> {
+    path.iter()
+        .enumerate()
+        .filter_map(|(d, it)| {
+            let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+            Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+        })
+        .collect()
 }

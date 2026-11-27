@@ -26,6 +26,7 @@ mod names;
 mod paste;
 mod ref_edit;
 mod show;
+mod sort_dialog;
 mod spelling;
 mod zoom;
 
@@ -38,6 +39,7 @@ use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
+pub(crate) use sort_dialog::{grid_sense, refuse_sheet_change};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -64,6 +66,8 @@ pub struct Dialog {
     pub tab: String,
     pub search: String,
     pub list_index: usize,
+    /// Custom Sort's own state: the selection to restore and the column choices.
+    sort: sort_dialog::State,
     pub result: Option<Json>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
@@ -233,6 +237,7 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: true,
@@ -258,6 +263,7 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: false,
@@ -452,6 +458,22 @@ impl Dialog {
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
+                // A workbook with a password to modify asks for that, or a read-only open.
+                if p("modify").as_bool().unwrap_or(false) {
+                    values["modifyPassword"] = json!("");
+                    values["readOnly"] = json!(false);
+                    return Some(Dialog::form(
+                        "openPassword",
+                        "Password",
+                        "file.open",
+                        vec![
+                            Note(format!("'{file}' is reserved by its author. Enter the password to modify it, or open it read-only.")),
+                            Password { key: "modifyPassword", label: "Password:" },
+                            Check { key: "readOnly", label: "Read Only" },
+                        ],
+                        values,
+                    ));
+                }
                 values["password"] = json!("");
                 Dialog::form(
                     "openPassword",
@@ -509,7 +531,13 @@ impl Dialog {
                     Choice {
                         key: "operation",
                         label: "Operation",
-                        options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
+                        options: vec![
+                            ("none", "None"),
+                            ("add", "Paste Special|Add"),
+                            ("subtract", "Subtract"),
+                            ("multiply", "Multiply"),
+                            ("divide", "Divide"),
+                        ],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },
@@ -651,7 +679,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "Text to Columns|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },
@@ -989,11 +1017,7 @@ impl Dialog {
                 }],
                 json!({"kind": "blanks"}),
             ),
-            "sort" => {
-                // Seed "Sort by" from the column the user is actually in (#1906).
-                let col = app.session.active().map(|d| gridcraft_engine::core::col_to_letters(d.selection.active.col)).unwrap_or_else(|| "A".into());
-                Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
-            }
+            "sort" => sort_dialog::open(app, &params)?,
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
             "pasteName" => {
                 // F3 opens it only when the workbook has names to paste, as in Excel.
@@ -1009,6 +1033,7 @@ impl Dialog {
                 dialog
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "newFormattingRule" => cond_format_rules::new_rule_dialog(app, &params),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
