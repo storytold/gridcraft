@@ -101,6 +101,7 @@ mod python_mode;
 mod quick_analysis_button;
 mod ref_edit;
 mod ribbon_layout;
+mod ribbon_menu_language;
 mod right_to_left;
 mod scroll_position;
 mod scrollbar_column_fill;
