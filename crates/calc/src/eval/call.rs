@@ -413,12 +413,13 @@ impl<'h> Evaluator<'h> {
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
         if !a.range.is_single() {
-            // Adding the block's remembered sum to anything but +0.0 would add in another order.
-            // COUNT never reads the sum, so it may reuse every block.
-            if (kind == Agg::Count || acc.is_empty())
-                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
+            // COUNT never reads the sum, so it may reuse every block's remembered count.
+            // SUM and AVERAGE must walk so SUM can snap only its last addition (the remembered
+            // block sum does not keep that last add).
+            if kind == Agg::Count
+                && let Some((_sum, count)) = self.host.range_sum(a.sheet, a.range)
             {
-                acc.add_range_sum(sum, count);
+                acc.add_range_sum(0.0, count);
                 return Ok(());
             }
             // Folded without building an array, but still walked: the part inside the used
