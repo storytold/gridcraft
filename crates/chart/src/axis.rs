@@ -26,6 +26,24 @@ impl Scale {
         if max > min && (max - min).is_finite() { Self { min, max, step: nice_scale(min, max, false).step } } else { self }
     }
 
+    /// When a single saved bound excludes the automatic range, shift that range to the bound.
+    pub(crate) fn with_overlay_bounds(self, axis: Option<&gridcraft_model::ChartAxis>) -> Self {
+        let Some(axis) = axis else { return self };
+        let min = axis.min.filter(|v| v.abs() <= MAX_ABS);
+        let max = axis.max.filter(|v| v.abs() <= MAX_ABS);
+        match (min, max) {
+            (Some(min), None) if min >= self.max => self.anchored_at(min, true),
+            (None, Some(max)) if max <= self.min => self.anchored_at(max, false),
+            _ => self.with_bounds(Some(axis)),
+        }
+    }
+
+    pub(crate) fn anchored_at(self, bound: f64, lower: bool) -> Self {
+        // Leave room for at least one representable value even at large magnitudes.
+        let span = (self.max - self.min).max(bound.abs() * f64::EPSILON);
+        if lower { Self { min: bound, max: bound + span, step: self.step } } else { Self { min: bound - span, max: bound, step: self.step } }
+    }
+
     /// Tick values from `min` to `max` (at most 51).
     pub fn ticks(&self) -> Vec<f64> {
         let span = self.max - self.min;

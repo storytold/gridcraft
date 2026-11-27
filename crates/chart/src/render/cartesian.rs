@@ -1,6 +1,6 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::cat_label;
-use super::lines::{decimate_area, draw_markers, draw_runs};
+use super::lines::{decimate_area, draw_clipped_runs, draw_markers, draw_plot_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
@@ -381,12 +381,7 @@ fn overlay_x_scale<'a>(default: Scale, spec: Option<&ChartAxis>, members: impl I
         }
     }
     // No point can determine the opposite endpoint. Use the bar span, anchored at the saved bound.
-    let span = (default.max - default.min).max(bound.abs() * f64::EPSILON);
-    if min.is_some() {
-        Scale { min: bound, max: bound + span, step: default.step }
-    } else {
-        Scale { min: bound - span, max: bound, step: default.step }
-    }
+    default.anchored_at(bound, min.is_some())
 }
 
 impl OverlayAxes<'_> {
@@ -398,25 +393,24 @@ impl OverlayAxes<'_> {
 }
 
 fn xy_pixel(plot: Bx, (fx, fy): (f64, f64)) -> [f32; 2] {
-    [plot.x + fx as f32 * plot.w, plot.bottom() - fy as f32 * plot.h]
+    [plot.x + fx as f32 * plot.w, plot.y + (1.0 - fy) as f32 * plot.h]
 }
 
 fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: &OverlayAxes<'_>, plot: Bx, chart: &Chart) {
-    let pts: Vec<_> = numeric_points(s)
-        .map(|p| {
-            p.map(|(x, y)| {
-                let (fx, fy) = axes.fractions(x, y);
-                xy_pixel(plot, (fx.clamp(-0.5, 1.5), fy.clamp(-0.5, 1.5)))
-            })
-        })
-        .collect();
+    let pts: Vec<_> = numeric_points(s).map(|p| p.map(|(x, y)| axes.fractions(x, y))).collect();
     if s.kind == ChartKind::ScatterLines {
-        draw_runs(ctx, &pts, s.color, line_style_width(chart.style), s.smooth.then_some(plot));
-    } else {
-        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+        draw_clipped_runs(ctx, &pts, s.color, line_style_width(chart.style), s.smooth, |p| xy_pixel(plot, p));
     }
-    if chart.data_labels && pts.len() <= MAX_LABELS {
-        draw_point_labels(ctx, s, &pts);
+    let labels = chart.data_labels && pts.len() <= MAX_LABELS;
+    if s.kind == ChartKind::Scatter || labels {
+        let visible: Vec<_> =
+            pts.into_iter().map(|p| p.filter(|(x, y)| (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y)).map(|p| xy_pixel(plot, p))).collect();
+        if s.kind == ChartKind::Scatter {
+            draw_plot_markers(ctx, visible.iter().flatten().copied(), 3.5, s.color, plot);
+        }
+        if labels {
+            draw_point_labels(ctx, s, &visible);
+        }
     }
 }
 
@@ -516,7 +510,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         OverlayAxes {
             spec,
             x: overlay_x_scale(axis_for(secondary).scale, spec.map(|a| &a.x), members),
-            y: nice_scale(lo, hi, false).with_bounds(spec.map(|a| &a.y)),
+            y: nice_scale(lo, hi, false).with_overlay_bounds(spec.map(|a| &a.y)),
         }
     });
 

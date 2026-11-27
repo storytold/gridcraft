@@ -204,6 +204,82 @@ fn xy_overlay_uses_its_numeric_range_with_one_saved_x_bound() {
 }
 
 #[test]
+fn xy_overlay_clips_to_the_plot_at_segment_intersections() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    let axis = ChartAxis { min: Some(0.0), max: Some(10.0), ..Default::default() };
+    c.series[1].axes = Some(SeriesAxes { x: axis.clone(), y: axis });
+    c.series[1].categories = Some("{0,10}".into());
+    c.series[1].values = "{0,10}".into();
+    fn line_points(p: &Prim) -> Option<&[[f32; 2]]> {
+        match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        }
+    }
+    let reference = draw_chart(&c);
+    let &[bottom_left, top_right] = reference.iter().find_map(line_points).unwrap() else { panic!("expected a two-point plot diagonal") };
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let inside = |[x, y]: [f32; 2]| bottom_left[0] <= x && x <= top_right[0] && top_right[1] <= y && y <= bottom_left[1];
+
+    c.series[1].categories = Some("{-20,5,30,30,5,-20}".into());
+    c.series[1].values = "{2,7,2,8,3,8}".into();
+    let clipped = draw_chart(&c);
+    let runs: Vec<_> = clipped.iter().filter_map(line_points).collect();
+    assert_eq!(runs.len(), 2, "the excursion beyond the right edge splits the line");
+    for (run, entry_x, exit_x, height) in [(runs[0], bottom_left[0], top_right[0], 0.6), (runs[1], top_right[0], bottom_left[0], 0.4)] {
+        let y = bottom_left[1] + height * (top_right[1] - bottom_left[1]);
+        let entry = run.first().unwrap();
+        let exit = run.last().unwrap();
+        assert!(close(entry[0], entry_x) && close(entry[1], y), "entry is the segment intersection");
+        assert!(close(exit[0], exit_x) && close(exit[1], y), "exit is the segment intersection");
+        assert!(run.iter().copied().all(inside));
+    }
+    c.series[1].smooth = true;
+    let smooth = draw_chart(&c);
+    let runs: Vec<_> = smooth.iter().filter_map(line_points).collect();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().all(|run| run.len() > 3 && run.iter().copied().all(inside)));
+
+    c.series[1].kind = Some(ChartKind::Scatter);
+    c.series[1].categories = Some("{-1,5,0,6}".into());
+    c.series[1].values = "{4,5,5,11}".into();
+    let markers = draw_chart(&c);
+    let mut interior = 0;
+    let mut boundary = 0;
+    for prim in markers {
+        match prim {
+            Prim::Circle { cx, cy, r, fill: Some([240, 112, 32, 255]), .. } => {
+                assert!(inside([cx - r, cy - r]) && inside([cx + r, cy + r]));
+                interior += 1;
+            }
+            Prim::Polygon { pts, fill: [240, 112, 32, 255], .. } => {
+                assert!(pts.iter().copied().all(inside) && pts.iter().any(|p| close(p[0], bottom_left[0])));
+                boundary += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!((interior, boundary), (1, 1), "outside markers are hidden and the boundary marker is clipped");
+}
+
+#[test]
+fn xy_overlay_keeps_a_saved_y_minimum_above_all_values() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    let overlay = &mut c.series[1];
+    overlay.kind = Some(ChartKind::Scatter);
+    overlay.values = "{1,2}".into();
+    overlay.axes = Some(SeriesAxes { y: ChartAxis { min: Some(20.0), ..Default::default() }, ..Default::default() });
+    let has_overlay = |prims: &[Prim]| {
+        prims.iter().any(|p| matches!(p, Prim::Circle { fill: Some([240, 112, 32, 255]), .. } | Prim::Polygon { fill: [240, 112, 32, 255], .. }))
+    };
+    assert!(!has_overlay(&draw_chart(&c)), "the saved minimum clips the entire series");
+    c.series[1].values = "{1,20}".into();
+    assert!(has_overlay(&draw_chart(&c)), "the saved minimum itself lies on the plot edge");
+}
+
+#[test]
 fn xy_trendline_uses_numeric_points_and_leaves_bar_categories_unchanged() {
     use gridcraft_model::{ChartAxis, SeriesAxes, Trendline};
     let mut c = bar_xy_chart();

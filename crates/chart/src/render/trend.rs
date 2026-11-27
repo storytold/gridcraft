@@ -1,5 +1,5 @@
 use super::frame::{Bx, value_range};
-use super::lines::decimate;
+use super::lines::{clip_unit, decimate};
 use super::{
     ChartKind, Ctx, HAlign, LABEL_SIZE, LineDash, MAX_CATS, MAX_LINE_PTS, MAX_TRENDLINES, Prim, SeriesData, TEXT, TrendlineKind, VAlign,
     fit_trendline, moving_average,
@@ -37,77 +37,6 @@ pub(super) fn max_forward(s: &SeriesData) -> f64 {
 /// Longest backward forecast among `s`'s regression trendlines.
 pub(super) fn max_backward(s: &SeriesData) -> f64 {
     s.trendlines.iter().filter(|t| !matches!(t.spec.kind, TrendlineKind::MovingAverage(_))).map(|t| forecast(t.spec.backward)).fold(0.0, f64::max)
-}
-
-type ClippedSegment = ((f64, f64), (f64, f64), bool, bool);
-
-/// Liang–Barsky: the part of segment `a`–`b` inside the unit square, with whether the start and
-/// end were cut.
-fn clip_segment(a: (f64, f64), b: (f64, f64)) -> Option<ClippedSegment> {
-    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-    let (mut t0, mut t1) = (0.0f64, 1.0f64);
-    for (p, q) in [(-dx, a.0), (dx, 1.0 - a.0), (-dy, a.1), (dy, 1.0 - a.1)] {
-        if p == 0.0 {
-            if q < 0.0 {
-                return None;
-            }
-        } else {
-            let r = q / p;
-            if p < 0.0 {
-                if r > t1 {
-                    return None;
-                }
-                t0 = t0.max(r);
-            } else {
-                if r < t0 {
-                    return None;
-                }
-                t1 = t1.min(r);
-            }
-        }
-    }
-    Some(((a.0 + t0 * dx, a.1 + t0 * dy), (a.0 + t1 * dx, a.1 + t1 * dy), t0 > 0.0, t1 < 1.0))
-}
-
-/// Clips a sampled polyline in plot fractions (`None` = gap) to the plot box (the unit
-/// square), returning the visible runs.
-fn clip_unit(pts: &[Option<(f64, f64)>]) -> Vec<Vec<(f64, f64)>> {
-    const LIM: f64 = 1e9;
-    let ok = |p: &(f64, f64)| p.0.is_finite() && p.1.is_finite();
-    let cl = |p: (f64, f64)| (p.0.clamp(-LIM, LIM), p.1.clamp(-LIM, LIM));
-    let mut runs: Vec<Vec<(f64, f64)>> = Vec::new();
-    let mut run: Vec<(f64, f64)> = Vec::new();
-    for w in pts.windows(2) {
-        let seg = match w {
-            [Some(a), Some(b)] if ok(a) && ok(b) => clip_segment(cl(*a), cl(*b)),
-            _ => None,
-        };
-        match seg {
-            Some((p, q, cut_start, cut_end)) => {
-                if cut_start || run.is_empty() {
-                    if run.len() >= 2 {
-                        runs.push(std::mem::take(&mut run));
-                    }
-                    run.clear();
-                    run.push(p);
-                }
-                run.push(q);
-                if cut_end {
-                    runs.push(std::mem::take(&mut run));
-                }
-            }
-            None => {
-                if run.len() >= 2 {
-                    runs.push(std::mem::take(&mut run));
-                }
-                run.clear();
-            }
-        }
-    }
-    if run.len() >= 2 {
-        runs.push(run);
-    }
-    runs
 }
 
 /// Draws `s`'s trendlines fitted to its plotted points `pts` (data x, y). `frac` maps data to

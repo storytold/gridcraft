@@ -134,6 +134,93 @@ pub(super) fn decimate_area(top: Vec<[f32; 2]>, base: Vec<[f32; 2]>, max: usize)
     poly
 }
 
+type ClippedSegment = ((f64, f64), (f64, f64), bool, bool);
+
+/// Liang–Barsky: the part of segment `a`–`b` inside the unit square, with whether the start and
+/// end were cut.
+fn clip_segment(a: (f64, f64), b: (f64, f64)) -> Option<ClippedSegment> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    if !dx.is_finite() || !dy.is_finite() {
+        return None;
+    }
+    let (mut t0, mut t1) = (0.0, 1.0);
+    let (mut entry, mut exit) = (None, None);
+    for (p, q, end, edge) in
+        [(-dx, a.0, b.0, (0, 0.0)), (dx, 1.0 - a.0, 1.0 - b.0, (0, 1.0)), (-dy, a.1, b.1, (1, 0.0)), (dy, 1.0 - a.1, 1.0 - b.1, (1, 1.0))]
+    {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+        } else {
+            let r = q / p;
+            if p < 0.0 {
+                if r > t1 {
+                    return None;
+                }
+                if r > t0 || (r == t0 && q < 0.0) {
+                    (t0, entry) = (r, Some(edge));
+                }
+            } else {
+                if r < t0 {
+                    return None;
+                }
+                if r < t1 || (r == t1 && r == 1.0 && end < 0.0) {
+                    (t1, exit) = (r, Some(edge));
+                }
+            }
+        }
+    }
+    // Set the crossed coordinate exactly even if a long segment loses precision at the edge.
+    let point = |t, (axis, edge): (usize, f64)| {
+        let mut p = [dx.mul_add(t, a.0).clamp(0.0, 1.0), dy.mul_add(t, a.1).clamp(0.0, 1.0)];
+        p[axis] = edge;
+        (p[0], p[1])
+    };
+    let start = entry.map_or(a, |edge| point(t0, edge));
+    let end = exit.map_or(b, |edge| point(t1, edge));
+    Some((start, end, entry.is_some(), exit.is_some()))
+}
+
+/// Clips a sampled polyline in plot fractions (`None` = gap) to the plot box (the unit
+/// square), returning the visible runs.
+pub(super) fn clip_unit(pts: &[Option<(f64, f64)>]) -> Vec<Vec<(f64, f64)>> {
+    let ok = |p: &(f64, f64)| p.0.is_finite() && p.1.is_finite();
+    let mut runs: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut run: Vec<(f64, f64)> = Vec::new();
+    for w in pts.windows(2) {
+        let seg = match w {
+            [Some(a), Some(b)] if ok(a) && ok(b) => clip_segment(*a, *b),
+            _ => None,
+        };
+        match seg {
+            Some((p, q, cut_start, cut_end)) => {
+                if cut_start || run.is_empty() {
+                    if run.len() >= 2 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                    run.clear();
+                    run.push(p);
+                }
+                run.push(q);
+                if cut_end {
+                    runs.push(std::mem::take(&mut run));
+                }
+            }
+            None => {
+                if run.len() >= 2 {
+                    runs.push(std::mem::take(&mut run));
+                }
+                run.clear();
+            }
+        }
+    }
+    if run.len() >= 2 {
+        runs.push(run);
+    }
+    runs
+}
+
 /// Draws a polyline split at gaps (`None`), decimated when long. With `smooth` (the plot box),
 /// each run is interpolated with a Catmull-Rom spline so the line curves through the data points.
 ///
@@ -167,41 +254,71 @@ pub(super) fn draw_runs(ctx: &mut Ctx, pts: &[Option<[f32; 2]>], color: Rgba, wi
     }
 }
 
+/// Smooth in plot fractions, then clip the resulting segments before converting to pixels.
+pub(super) fn draw_clipped_runs(
+    ctx: &mut Ctx,
+    pts: &[Option<(f64, f64)>],
+    color: Rgba,
+    width: f32,
+    smooth: bool,
+    px: impl Fn((f64, f64)) -> [f32; 2],
+) {
+    let mut budget = MAX_LINE_PTS * 2;
+    for run in pts.split(Option::is_none).filter(|run| run.len() >= 2) {
+        let samples;
+        let run = if smooth && run.len() >= 3 && budget > run.len() {
+            let points: Vec<_> = run.iter().flatten().map(|&(x, y)| [x, y]).collect();
+            samples = smooth_points(&points, budget).into_iter().map(|[x, y]| Some((x, y))).collect::<Vec<_>>();
+            budget = budget.saturating_sub(samples.len());
+            &samples
+        } else {
+            run
+        };
+        for visible in clip_unit(run) {
+            ctx.line(decimate(visible.into_iter().map(&px).collect(), MAX_LINE_PTS), color, width);
+        }
+    }
+}
+
 /// Catmull-Rom spline through `pts`: every segment gets the same number of sub-segments (up to
 /// 100), chosen so the whole curve stays within `cap` points (one per data point when `cap` is
 /// smaller than that). Endpoints are
 /// duplicated so the curve passes through the first and last points, and the curve is clamped
 /// to the `plot` box (a spline overshoots its data near sharp turns).
 fn smooth_run(pts: Vec<[f32; 2]>, plot: Bx, cap: usize) -> Vec<[f32; 2]> {
-    let n = pts.len();
-    if n < 3 {
+    if pts.len() < 3 {
         return pts;
     }
+    let (x0, x1) = (plot.x.min(plot.right()), plot.x.max(plot.right()));
+    let (y0, y1) = (plot.y.min(plot.bottom()), plot.y.max(plot.bottom()));
+    let points: Vec<_> = pts.into_iter().map(|p| p.map(f64::from)).collect();
+    smooth_points(&points, cap).into_iter().map(|[x, y]| [(x as f32).clamp(x0, x1), (y as f32).clamp(y0, y1)]).collect()
+}
+
+fn smooth_points(pts: &[[f64; 2]], cap: usize) -> Vec<[f64; 2]> {
+    let n = pts.len();
     let steps = (cap / n).clamp(1, 100);
-    let mut out: Vec<[f32; 2]> = Vec::with_capacity(n.saturating_mul(steps).min(cap) + 1);
-    let at = |i: isize| -> [f32; 2] {
+    let mut out = Vec::with_capacity(n.saturating_mul(steps).min(cap) + 1);
+    let at = |i: isize| {
         let j = i.clamp(0, n as isize - 1) as usize;
         pts.get(j).copied().unwrap_or([0.0, 0.0])
     };
-    let (x0, x1) = (plot.x.min(plot.right()), plot.x.max(plot.right()));
-    let (y0, y1) = (plot.y.min(plot.bottom()), plot.y.max(plot.bottom()));
-    let clip = |p: [f32; 2]| [p[0].clamp(x0, x1), p[1].clamp(y0, y1)];
     for i in 0..n.saturating_sub(1) {
         let (p0, p1, p2, p3) = (at(i as isize - 1), at(i as isize), at(i as isize + 1), at(i as isize + 2));
         for s in 0..steps {
-            let t = s as f32 / steps as f32;
-            out.push(clip(catmull(p0, p1, p2, p3, t)));
+            let t = s as f64 / steps as f64;
+            out.push(catmull(p0, p1, p2, p3, t));
         }
     }
-    out.push(clip(at(n as isize - 1)));
+    out.push(at(n as isize - 1));
     out
 }
 
 /// One Catmull-Rom point between `p1` and `p2` (uniform parameterisation), tangent-scaled by 0.5.
-fn catmull(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) -> [f32; 2] {
+fn catmull(p0: [f64; 2], p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], t: f64) -> [f64; 2] {
     let t2 = t * t;
     let t3 = t2 * t;
-    let mut o = [0.0f32; 2];
+    let mut o = [0.0; 2];
     for k in 0..2 {
         let (a0, a1, a2, a3) = (p0[k], p1[k], p2[k], p3[k]);
         o[k] = 0.5 * ((2.0 * a1) + (-a0 + a2) * t + (2.0 * a0 - 5.0 * a1 + 4.0 * a2 - a3) * t2 + (-a0 + 3.0 * a1 - 3.0 * a2 + a3) * t3);
@@ -210,14 +327,62 @@ fn catmull(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) -> [f
 }
 
 pub(super) fn draw_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, color: Rgba) {
+    markers(ctx, pts, r, color, None);
+}
+
+pub(super) fn draw_plot_markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, color: Rgba, plot: Bx) {
+    markers(ctx, pts, r, color, Some(plot));
+}
+
+fn markers(ctx: &mut Ctx, pts: impl Iterator<Item = [f32; 2]>, r: f32, color: Rgba, plot: Option<Bx>) {
+    const STROKE: f32 = 0.75;
     let mut seen = HashSet::new();
     for p in pts {
         if seen.len() >= MAX_MARKERS {
             break;
         }
         if seen.insert(((p[0] * 0.5) as i32, (p[1] * 0.5) as i32)) {
-            ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(color), stroke: Some((WHITE, 0.75)) });
+            let outer = r + STROKE / 2.0;
+            if let Some(plot) = plot.filter(|b| p[0] - outer < b.x || p[0] + outer > b.right() || p[1] - outer < b.y || p[1] + outer > b.bottom()) {
+                // Clip the fill and outline separately so the plot edge gains no outline.
+                clipped_disc(ctx, p, outer, WHITE, plot);
+                clipped_disc(ctx, p, r - STROKE / 2.0, color, plot);
+            } else {
+                ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(color), stroke: Some((WHITE, STROKE)) });
+            }
         }
+    }
+}
+
+fn clipped_disc(ctx: &mut Ctx, center: [f32; 2], radius: f32, fill: Rgba, plot: Bx) {
+    const SIDES: usize = 24;
+    let mut pts: Vec<_> = (0..SIDES)
+        .map(|i| {
+            let (sin, cos) = (std::f32::consts::TAU * i as f32 / SIDES as f32).sin_cos();
+            [center[0] + radius * cos, center[1] + radius * sin]
+        })
+        .collect();
+    for (axis, edge, sign) in [(0, plot.x, 1.0), (0, plot.right(), -1.0), (1, plot.y, 1.0), (1, plot.bottom(), -1.0)] {
+        let inside = |p: [f32; 2]| (p[axis] - edge) * sign >= 0.0;
+        let input = std::mem::take(&mut pts);
+        let Some(&last) = input.last() else { return };
+        let mut prev = last;
+        for p in input {
+            if inside(prev) != inside(p) {
+                let t = (edge - prev[axis]) / (p[axis] - prev[axis]);
+                let mut hit = p;
+                hit[axis] = edge;
+                hit[1 - axis] = prev[1 - axis] + t * (p[1 - axis] - prev[1 - axis]);
+                pts.push(hit);
+            }
+            if inside(p) {
+                pts.push(p);
+            }
+            prev = p;
+        }
+    }
+    if pts.len() >= 3 {
+        ctx.out.push(Prim::Polygon { pts, fill, stroke: None });
     }
 }
 
