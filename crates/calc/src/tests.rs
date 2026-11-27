@@ -902,7 +902,9 @@ fn spills() {
 
 #[test]
 fn stack_functions_preserve_single_cell_reference_errors_and_recalculate_dependents() {
-    for (source, error) in [("=NA()", CellError::NA), ("#N/A", CellError::NA), ("=1/0", CellError::Div0), ("#DIV/0!", CellError::Div0)] {
+    for (source, error) in
+        [("=NA()", CellError::NA), ("#N/A", CellError::NA), ("=1/0", CellError::Div0), ("#DIV/0!", CellError::Div0), ("#NUM!", CellError::Num)]
+    {
         for name in ["VSTACK", "HSTACK"] {
             let mut t = T::new();
             t.set("Z6", source);
@@ -933,6 +935,18 @@ fn stack_functions_still_propagate_direct_error_expressions() {
         assert_eq!(t.get("A1"), Value::Error(CellError::NA));
         assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c("A1")));
         assert_eq!((t.get("A2"), t.get("B1")), (Value::Empty, Value::Empty));
+    }
+}
+
+#[test]
+fn stack_functions_propagate_oversized_range_errors() {
+    for name in ["VSTACK", "HSTACK"] {
+        let mut t = T::new();
+        // Keep the trimmed range above the evaluator's 16-million-cell limit.
+        t.set("Z700000", "1");
+        t.set("AA1", &format!("={name}(1,A1:Z700000,2)"));
+        assert_eq!(t.get("AA1"), Value::Error(CellError::Num), "{name}");
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c("AA1")), "{name}");
     }
 }
 

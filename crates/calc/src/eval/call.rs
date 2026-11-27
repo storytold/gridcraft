@@ -340,6 +340,10 @@ impl<'h> Evaluator<'h> {
                 }
             }
             let from_ref = matches!(ev, Ev::R(_));
+            let stack_range = match &ev {
+                Ev::R(areas) if matches!(spec.name, "VSTACK" | "HSTACK") => matches!(areas.as_slice(), [area] if !area.range.is_single()),
+                _ => false,
+            };
             let value = match ev {
                 Ev::R(areas) if areas.len() > 1 => {
                     // Multi-area references (unions): flatten into one row for aggregates.
@@ -354,6 +358,9 @@ impl<'h> Evaluator<'h> {
                 }
                 ev => self.deref(ev),
             };
+            // A scalar error from reading a multi-cell range is a range-read failure. Stacks
+            // preserve scalar errors as elements only when they come from a referenced cell.
+            let from_ref = from_ref && !(stack_range && matches!(value, Value::Error(_)));
             // Only an argument left out (`f(a,,b)`) is omitted; one that computes a blank is given.
             let blank_value = !from_ref && value == Value::Empty && lambda_at != Some(i) && !matches!(a, Expr::Missing);
             evaluated.push(Arg { value, from_ref, blank_value });
