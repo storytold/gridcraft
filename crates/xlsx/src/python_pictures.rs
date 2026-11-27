@@ -24,8 +24,6 @@ use gridcraft_core::addr::unquote_sheet;
 use gridcraft_core::{CellRef, Value};
 use gridcraft_model::{CellPicture, PyCode, PyImage, PyOutput, Sheet, Workbook};
 
-use crate::xml;
-
 const LINK: &str = "gridcraft:python:";
 const CELL: &str = "gridcraft:pythonCell:";
 /// What a Python cell whose result is a picture holds as its value, and what the worker names the
@@ -42,7 +40,7 @@ const MAX_LENGTH_DIGITS: usize = 3;
 pub fn linked_descr(reference: &str, alt: &str) -> Option<String> {
     // What XML can't carry never reaches the file, so it isn't counted either. A sheet name loses the
     // same characters, and the reference still names the sheet when it is read.
-    let reference: String = reference.chars().filter(|c| xml::is_xml_char(*c)).collect();
+    let reference: String = reference.chars().filter(|c| craft_xml::is_xml_char(*c)).collect();
     parse_reference(&reference)?;
     let n = reference.chars().count();
     (n <= MAX_REFERENCE_CHARS).then(|| format!("{LINK}{n}:{reference}:{alt}"))

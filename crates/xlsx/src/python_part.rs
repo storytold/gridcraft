@@ -631,7 +631,7 @@ mod tests {
         let mut bytes = environment_package(Some(&part));
         let start = {
             let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-            zip.by_name(PART).unwrap().data_start() as usize
+            zip.by_name(PART).unwrap().data_start().unwrap() as usize
         };
         // Damage the Python entry only, leaving the directory and other parts readable.
         bytes[start] ^= 0xff;

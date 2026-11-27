@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod chart_data;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
@@ -205,6 +206,9 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The file a read-only open came from (`readOnly` on a workbook with a password to modify).
+    /// Save never writes over it, so the reservation holds; Save As to another file still works.
+    pub read_only_source: Option<String>,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -224,6 +228,9 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The Distinct Count PivotTable value fields (sheet, pivot, value) an .xlsx save has already
+    /// told the user about (#3336), so only a field not yet disclosed raises the notice again.
+    pub distinct_disclosed: Vec<(usize, usize, usize)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -323,6 +330,7 @@ impl DocState {
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
     /// made in this session.
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
@@ -340,7 +348,11 @@ impl DocState {
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
-        let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let mut sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        // A merged active cell is selected whole, as a click on it selects it (#1348).
+        if let Some(sh) = wb.active() {
+            sel.expand_merges(sh);
+        }
         DocState {
             saved: wb.clone(),
             wb,
@@ -355,11 +367,13 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            read_only_source: None,
             scripts_trusted,
             trust,
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            distinct_disclosed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {

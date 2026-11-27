@@ -530,3 +530,43 @@ fn python_code_with_an_empty_value_counts_as_content() {
     s.execute("edit.copy", json!({"range": "T1"})).unwrap();
     assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
 }
+
+/// Renaming a defined name or a table renames it in Python cells' `xl()` references too.
+#[test]
+fn xl_references_follow_name_and_table_renames() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    let table = s.doc().unwrap().wb.sheets[0].tables[0].name.clone();
+    s.execute("formulas.defineName", json!({"name": "Opts", "refersTo": "=Sheet1!$A$2:$A$3"})).unwrap();
+    plant(&mut s, 0, "E1", &format!("a = xl(\"Opts\")\nb = xl(\"{table}[v]\")"));
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Opts", "refersTo": "=Sheet1!$A$2:$A$3"})).unwrap();
+    assert_eq!(code(&s, 0, "E1").as_deref(), Some(format!("a = xl(\"Choices\")\nb = xl(\"{table}[v]\")").as_str()));
+    s.execute("table.rename", json!({"table": table, "name": "Data"})).unwrap();
+    assert_eq!(code(&s, 0, "E1").as_deref(), Some("a = xl(\"Choices\")\nb = xl(\"Data[v]\")"));
+}
+
+#[test]
+fn a_python_cell_is_not_a_trend_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    plant(&mut s, 0, "A1", "1");
+    let offered = |s: &Session, growth: bool| {
+        let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+        crate::fill::trend_applies(&s.doc().unwrap().wb, 0, r("A1:A2"), r("A1:A5"), growth)
+    };
+    assert!(!offered(&s, false) && !offered(&s, true));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_python_cell() {
+    let mut s = s();
+    plant_empty(&mut s, "A1");
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org"})).unwrap();
+    assert_eq!(code(&s, 0, "A1"), Some("x = 1".into()));
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    let at = CellRef::parse("A1").unwrap();
+    assert_eq!(sh.value(at), Value::Empty);
+    assert_eq!(sh.hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}

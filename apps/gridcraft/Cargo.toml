@@ -25,9 +25,6 @@ chrono = { workspace = true }
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
-[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
-winit = { version = "0.30", default-features = false, features = ["x11"] }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 # Retain X11 fallback; draw Wayland client-side controls without bundled title fonts.
 winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
@@ -35,7 +32,7 @@ winit = { version = "0.30", default-features = false, features = ["x11", "waylan
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
 # Cargo.toml).
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
+craft-print = { workspace = true }
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true, features = ["image-data"] }
@@ -49,6 +46,8 @@ arboard = { workspace = true, features = ["image-data", "wayland-data-control"] 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.
 pollster = "1"
+# The explicit AppUserModelID the nightly channel sets before its first window (`process_identity.rs`).
+winsafe = { version = "0.0.29", features = ["user", "shell"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }

@@ -109,7 +109,7 @@ pub(super) fn repack(bytes: &[u8], changes: &[(&str, &[u8])]) -> Vec<u8> {
         let mut part = z.by_index(i).unwrap();
         let mut data = vec![];
         part.read_to_end(&mut data).unwrap();
-        parts.push((part.name().to_string(), data));
+        parts.push((part.name().unwrap().to_string(), data));
     }
     for (name, data) in changes {
         parts.retain(|(n, _)| n != name);
@@ -151,12 +151,12 @@ fn py_at<'a>(sheet: &'a Sheet, cell: &str) -> &'a PyCode {
 
 fn media_parts(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-    z.file_names().filter(|n| n.starts_with("xl/media/")).map(str::to_string).collect()
+    z.file_names().filter_map(Result::ok).filter(|n| n.starts_with("xl/media/")).map(|n| n.to_string()).collect()
 }
 
 pub(super) fn part_names(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-    z.file_names().map(str::to_string).collect()
+    z.file_names().filter_map(Result::ok).map(|n| n.to_string()).collect()
 }
 
 /// The Python Object cell B2 of [`package_with_picture`], its code being its one script.

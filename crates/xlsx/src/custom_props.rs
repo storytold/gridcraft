@@ -193,7 +193,7 @@ pub fn write_notices(out: &mut Out) {
     match out.kept.custom_properties_part() {
         Some(name) => {
             if let Some(merged) = out.part_data(&name).and_then(|data| with_notices(Some(data))) {
-                out.replace_part(&name, merged);
+                out.replace(&name, merged);
             }
         }
         None => {

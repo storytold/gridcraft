@@ -1,0 +1,56 @@
+{
+  "title": "GridCraft nightly deep-background icons",
+  "author": "@skylartaylor",
+  "license": "MIT OR Apache-2.0",
+  "inputs": [
+    {
+      "path": "assets/app-icon/gridcraft-nightly.svg",
+      "sha256": "671748d45b785a840cf6ad062024c008e4704edc8925bed986dac2558438516b",
+      "purpose": "vector master for every frame"
+    },
+    {
+      "path": "assets/app-icon/gridcraft.svg",
+      "sha256": "a4c55f2f52893b319862b610c006af83da9f097a4112b5a982b8ba95f43d2850",
+      "purpose": "stable artwork this is derived from"
+    }
+  ],
+  "method": {
+    "kind": "vector render of the project-owned artwork with only its field colour deepened",
+    "stable_field": "#1f9d55",
+    "nightly_field": "#14532d",
+    "unchanged": "ink #0b0b0c, paper #efe9dc, every path, stroke width and the 824/1024 Mac padding",
+    "sizes": "each frame rendered at its own size, never upscaled",
+    "renderer": "chrome",
+    "generator": "packaging/nightly-icons.py"
+  },
+  "outputs": {
+    "gridcraft-nightly.png": "f06a2507dbd07c307d3b3e46eb2b7d849c29cc51f56114d61091d68d9d59e0d0",
+    "gridcraft-nightly-1024.png": "914314b91dd214132bc017503d88197ca1537fab0de144a59cc65e03a03be400",
+    "gridcraft-nightly.ico": "20cdb98a65c157f1db67800d439730b2c5dd564722d615d2b9483dc948f6e751",
+    "gridcraft-nightly.icns": "e8fb90269660151b8ab1370bbd7194f5bae29888aa44959cf4c48110dcdebe9a"
+  },
+  "ico_frame_sizes": [
+    16,
+    20,
+    24,
+    32,
+    40,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icns_png_slots": {
+    "icp4": 16,
+    "icp5": 32,
+    "ic11": 32,
+    "icp6": 64,
+    "ic12": 64,
+    "ic07": 128,
+    "ic08": 256,
+    "ic13": 256,
+    "ic09": 512,
+    "ic14": 512,
+    "ic10": 1024
+  }
+}

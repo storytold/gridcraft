@@ -270,7 +270,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                             ed.request_focus();
                                         }
                                         if ed.lost_focus() {
-                                            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
+                                            if !crate::framework::escape_pressed(ui.ctx()) && text != name {
                                                 app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
                                             }
                                             app.grid.renaming_tab = None;
@@ -382,6 +382,23 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// How many statistics, given their widths left to right, fit when drawn from the right end of
+/// `room` points with `gap` points of space after each. The leftmost (lowest-priority) labels are
+/// the ones left out; a label wider than the whole room leaves none.
+fn fitting_statistics(widths: &[f32], room: f32, gap: f32) -> usize {
+    let mut used = 0.0;
+    let mut kept = 0;
+    for w in widths.iter().rev() {
+        let need = w + gap;
+        if used + need > room {
+            break;
+        }
+        used += need;
+        kept += 1;
+    }
+    kept
+}
+
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -403,6 +420,11 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                // F8 / Shift+F8 selection mode.
+                if let Some(label) = app.grid.selection_mode.status_text() {
+                    ui.add_space(12.0);
+                    text(ui, egui::RichText::new(app.ui.language.tr(label)).font(theme::ui_font(12.5)).color(t.text_dim));
+                }
                 crate::macro_ui::status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
@@ -417,8 +439,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => app.ui.language.tr_fill("Circular References: {cell}", &[("cell", &c.a1())]),
+                            None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -479,7 +501,17 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
-                    for p in selection_statistics(app).into_iter().rev() {
+                    // Only the rightmost statistics that fit are drawn: on a narrow window the rest
+                    // would paint over the mode text such as "Ready" at the left end (#4187).
+                    let stats = selection_statistics(app);
+                    let font = theme::ui_font(12.5);
+                    let widths: Vec<f32> = stats.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), font.clone(), t.text_dim).size().x).collect();
+                    // Each label is followed by egui's automatic item spacing as well as the
+                    // explicit 10 points of `add_space` below.
+                    let gap = 10.0 + ui.spacing().item_spacing.x;
+                    let keep = fitting_statistics(&widths, ui.available_width(), gap);
+                    let span = stats.len();
+                    for p in stats.into_iter().skip(span - keep).rev() {
                         let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
@@ -516,26 +548,30 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    // The label the right-click menu shows, then the value: clicking a statistic copies the part
+    // after `": "`.
+    let lang = app.ui.language;
+    let part = |label: &str, value: String| format!("{}: {value}", lang.tr(label));
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(format!("Average: {}", fmt(a)));
+        parts.push(part("Average", fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(format!("Count: {}", st.count));
+        parts.push(part("Count", st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(format!("Numerical Count: {}", st.numeric));
+        parts.push(part("Numerical Count", st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(format!("Minimum: {}", fmt(st.min)));
+        parts.push(part("Minimum", fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(format!("Maximum: {}", fmt(st.max)));
+        parts.push(part("Maximum", fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(format!("Sum: {}", fmt(st.sum)));
+        parts.push(part("Sum", fmt(st.sum)));
     }
     parts
 }
@@ -584,6 +620,36 @@ mod tests {
 
     fn names(app: &SheetApp) -> Vec<String> {
         app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn status_bar_statistics_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        for (cell, input) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        app.run("selection.set", json!({"range": "A1:A3"})).unwrap();
+        app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        let parts = [("Average", "2"), ("Count", "3"), ("Numerical Count", "3"), ("Minimum", "1"), ("Maximum", "3"), ("Sum", "6")];
+        let english: Vec<String> = parts.iter().map(|(label, value)| format!("{label}: {value}")).collect();
+        assert_eq!(super::selection_statistics(&app), english);
+        app.ui.language = Language::It;
+        let italian: Vec<String> = parts.iter().map(|(label, value)| format!("{}: {value}", Language::It.tr(label))).collect();
+        assert_eq!(super::selection_statistics(&app), italian, "each label as the right-click menu shows it");
+        assert!(italian.iter().zip(&english).all(|(it, en)| it != en), "the Italian catalog translates every label: {italian:?}");
+    }
+
+    #[test]
+    fn statistics_that_do_not_fit_are_left_out() {
+        // Widths left to right (Average, Count, Sum), 10 points of gap after each. Only a suffix fits.
+        let widths = [60.0, 50.0, 40.0];
+        assert_eq!(super::fitting_statistics(&widths, 300.0, 10.0), 3);
+        assert_eq!(super::fitting_statistics(&widths, 159.0, 10.0), 2);
+        assert_eq!(super::fitting_statistics(&widths, 100.0, 10.0), 1);
+        assert_eq!(super::fitting_statistics(&widths, 49.0, 10.0), 0);
     }
 
     #[test]
