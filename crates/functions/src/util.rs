@@ -11,7 +11,7 @@ pub(crate) type R<T> = Result<T, CellError>;
 
 /// Largest array a function may build.
 pub(crate) const MAX_CELLS: usize = 10_000_000;
-/// Longest text a cell can hold.
+/// Longest text a cell can hold, in UTF-16 code units.
 pub(crate) const MAX_TEXT: usize = 32_767;
 
 /// Scalar-position lifting tables.
@@ -20,11 +20,11 @@ pub(crate) const S: &[bool] = &[true];
 pub(crate) const A: &[bool] = &[false];
 
 /// Turns an implementation result into a cell value: errors become error values, non-finite
-/// numbers become `#NUM!`, text longer than 32,767 characters becomes `#VALUE!`.
+/// numbers become `#NUM!`, text longer than 32,767 UTF-16 code units becomes `#VALUE!`.
 pub(crate) fn finish(r: R<Value>) -> Value {
     match r {
         Ok(Value::Number(n)) => Value::number(n),
-        Ok(Value::Text(t)) if t.len() > MAX_TEXT && t.chars().count() > MAX_TEXT => Value::Error(CellError::Value),
+        Ok(Value::Text(t)) if t.len() > MAX_TEXT && t.encode_utf16().count() > MAX_TEXT => Value::Error(CellError::Value),
         Ok(v) => v,
         Err(e) => Value::Error(e),
     }
@@ -51,7 +51,7 @@ pub(crate) fn arg(args: &[Arg], i: usize) -> R<&Arg> {
 
 /// Whether argument `i` was supplied (present and not an empty literal like `F(1,)`).
 pub(crate) fn has(args: &[Arg], i: usize) -> bool {
-    matches!(args.get(i), Some(a) if !matches!(a.value, Value::Empty) || a.from_ref)
+    matches!(args.get(i), Some(a) if !matches!(a.value, Value::Empty) || a.from_ref || a.blank_value)
 }
 
 /// Number coercion for a scalar parameter: empty = 0, TRUE = 1, numeric text parses.

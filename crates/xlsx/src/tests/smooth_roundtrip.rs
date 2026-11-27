@@ -20,6 +20,8 @@ fn smooth_line_setting_round_trips() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     };
     s.charts.push(Chart {
         id: 1,
@@ -32,6 +34,8 @@ fn smooth_line_setting_round_trips() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -51,6 +55,8 @@ fn smooth_line_setting_round_trips() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

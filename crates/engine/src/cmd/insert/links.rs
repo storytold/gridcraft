@@ -3,6 +3,11 @@ use super::{
     split_sheet, str_param, target_ranges, target_sheet,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- links & comments
 
 pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
@@ -27,8 +32,10 @@ pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
             st.font.underline = Underline::Single;
         });
         let sh = cx.sheet_mut(sheet)?;
-        if let Some(t) = text.clone().or_else(|| sh.value(at).is_empty().then(|| target.clone())) {
-            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style });
+        if let Some(t) = text.clone().or_else(|| {
+            (sh.spill_anchor(at).is_none() && sh.value(at).is_empty() && sh.cell(at).is_none_or(|cell| !cell.has_content())).then(|| target.clone())
+        }) {
+            sh.set_cell(at, Cell { value: gridcraft_core::Value::text(t.as_str()), formula: None, style: link_style, py: None });
         } else {
             sh.set_style(at, link_style);
         }
@@ -38,24 +45,29 @@ pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address is handed to the
-/// host (`UiRequest::OpenUrl`); anything else is refused ([`crate::links::classify`]). Opens no
-/// dialog; the interactive click asks for confirmation first, in the UI.
+/// Follows a link: a reference selects it; anything else is refused ([`crate::links::classify`]).
+/// An `http`/`https`/`mailto` address is refused too unless the host set
+/// [`crate::links::LinkPolicy::Allow`]: every caller of a command may be a script or an agent, so
+/// the user opens such links by clicking and confirming, and the UI then calls
+/// [`Session::open_confirmed_link`] (#2181). Opens no dialog.
 pub(super) fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
     let target = match str_param(p, "url").or_else(|| str_param(p, "target")) {
         Some(t) => t.to_string(),
         None => {
             let sheet = target_sheet(s, p)?;
             let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
-            let Some(h) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.hyperlinks.get(&at)) else {
+            let Some(h) = crate::links::cell_link(&s.doc()?.wb, sheet, at) else {
                 return Err(EngineError::Other("There's no hyperlink in this cell.".into()));
             };
-            h.target.clone()
+            h.target
         }
     };
     match crate::links::classify(&target) {
         crate::links::LinkKind::Internal(r) => crate::cmd::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
+            if s.link_policy != crate::links::LinkPolicy::Allow {
+                return Err(EngineError::Other(crate::links::NEEDS_CONFIRMATION.into()));
+            }
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
         }
