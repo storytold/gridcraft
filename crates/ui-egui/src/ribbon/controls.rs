@@ -290,7 +290,7 @@ fn combo_popup(
     if filter {
         height += ui.spacing().interact_size.y + 4.0 * spacing + 1.0;
     }
-    let menu = craft_ui::combo::Menu::new(ui, &field).height(height);
+    let menu = crate::combo_menu::Menu::new(ui, &field).height(height);
     let text_id = anchor.id.with(salt).with("__combo_text");
     let sel0 = st.sel;
     let shown = if filter {

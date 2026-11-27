@@ -1,13 +1,14 @@
 //! DrawingML charts (`xl/charts/chartN.xml`): reading the common 2-D/3-D chart groups into the
 //! model, and writing model charts (with cached series values) from scratch.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use craft_drawingml::chart::{Chart as DmlChart, ChartType, Trendline as DmlTrendline, TrendlineType};
 use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
-use gridcraft_core::{RangeRef, Value, category_levels};
-use gridcraft_formula::{Expr, SheetSel};
+use gridcraft_core::{CellRef, RangeRef, Value, category_levels};
+use gridcraft_formula::{BinOp, Expr, Reference, SheetSel};
 use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
@@ -53,7 +54,16 @@ pub(crate) fn map_dml_color(c: &DmlColor) -> Option<Color> {
     }
 }
 
+/// Whether a line group draws markers: the group's `c:marker` is on (or missing) and not every
+/// series hides its marker.
+fn line_group_markers(g: &El) -> bool {
+    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+    group_markers && !(all_none && g.kids("ser").next().is_some())
+}
+
 fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
+    let line_groups = || plot.into_iter().flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")));
     match k {
         ChartType::Column => ChartKind::ColumnClustered,
         ChartType::StackedColumn => ChartKind::ColumnStacked,
@@ -62,19 +72,22 @@ fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
         ChartType::StackedBar => ChartKind::BarStacked,
         ChartType::PercentBar => ChartKind::BarStacked100,
         ChartType::Line => {
-            let markers = plot
-                .into_iter()
-                .flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")))
-                .filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
-                .any(|g| {
-                    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                    group_markers && !(all_none && g.kids("ser").next().is_some())
-                });
+            let markers = line_groups().filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked"))).any(line_group_markers);
             if markers { ChartKind::LineMarkers } else { ChartKind::Line }
         }
         ChartType::LineMarkers => ChartKind::LineMarkers,
-        ChartType::StackedLine => ChartKind::LineStacked,
+        // `percentStacked` and `stacked` line groups both read as stacked lines; the grouping
+        // tells them apart.
+        ChartType::StackedLine => {
+            let pct: Vec<&El> = line_groups().filter(|g| g.child_val("grouping") == Some("percentStacked")).collect();
+            if pct.is_empty() {
+                ChartKind::LineStacked
+            } else if pct.iter().any(|g| line_group_markers(g)) {
+                ChartKind::LineStacked100Markers
+            } else {
+                ChartKind::LineStacked100
+            }
+        }
         ChartType::Area => ChartKind::Area,
         ChartType::StackedArea => {
             let pct = plot
@@ -127,16 +140,239 @@ fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
     }
 }
 
-fn literal_array(e: Option<&El>) -> Option<String> {
+const MAX_CHART_CACHED_POINTS: usize = 16_777_216;
+
+pub(crate) struct ChartReadBudget {
+    remaining: usize,
+    pub(crate) exceeded: bool,
+}
+
+impl ChartReadBudget {
+    pub(crate) fn new() -> Self {
+        Self { remaining: MAX_CHART_CACHED_POINTS, exceeded: false }
+    }
+}
+
+/// Excel's maximum worksheet row count bounds cache expansion while preserving declared trailing gaps.
+const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
+
+/// The points of a cache or literal (`c` holds `ptCount`, `pts` the `<c:pt>`s), by index; missing
+/// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
+/// in document order. A missing, unreadable or too small `ptCount` gives way to the points present.
+///
+/// The workbook-wide budget is checked before allocation. If the requested count would exceed the
+/// remaining budget, all present points are retained when they fit; only trailing gaps are
+/// clamped. If present points extend past the remaining budget, points beyond that boundary are
+/// dropped as well, and the caller is warned.
+fn read_points<'a>(c: &El, pts: &'a El, budget: &mut ChartReadBudget) -> Option<Vec<Option<&'a str>>> {
+    let at = |i: usize, p: &El| p.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(i);
+    let placed = || pts.kids("pt").enumerate().map(|(i, p)| (at(i, p), p)).filter(|(i, _)| *i < MAX_CACHED_POINTS);
+    let highest = placed().map(|(i, _)| i + 1).max().unwrap_or(0);
+    let requested =
+        c.child_val("ptCount").and_then(|v| v.trim().parse::<usize>().ok()).map(|n| n.min(MAX_CACHED_POINTS).max(highest)).unwrap_or(highest);
+    let count = if requested <= budget.remaining {
+        requested
+    } else {
+        budget.exceeded = true;
+        if highest <= budget.remaining { highest } else { budget.remaining }
+    };
+    budget.remaining = budget.remaining.saturating_sub(count);
+    if count == 0 {
+        return None;
+    }
+    let mut vals = vec![None; count];
+    for (i, p) in placed() {
+        if let (Some(slot), Some(v)) = (vals.get_mut(i), p.child("v")) {
+            *slot = Some(v.text.as_str());
+        }
+    }
+    Some(vals)
+}
+
+/// Points as an array constant. Missing points become `#N/A` (numbers) or `""` (text) so
+/// positions line up.
+fn literal<S: AsRef<str>>(points: &[Option<S>], numeric: bool) -> String {
+    let items: Vec<String> = points
+        .iter()
+        .map(|v| match (v.as_ref().map(AsRef::as_ref), numeric) {
+            (Some(t), true) => t.trim().parse::<f64>().ok().filter(|n| n.is_finite()).map_or_else(|| "#N/A".to_string(), num),
+            (None, true) => "#N/A".to_string(),
+            (Some(t), false) => format!("\"{}\"", t.replace('"', "\"\"")),
+            (None, false) => "\"\"".to_string(),
+        })
+        .collect();
+    format!("{{{}}}", items.join(","))
+}
+
+/// The points cached under a PivotChart series reference.
+#[derive(Clone, Debug)]
+struct CachedPoints {
+    points: Vec<Option<String>>,
+    numeric: bool,
+    /// A `multiLvlStrRef` of more than one level: one column (or row) of cells per level, the
+    /// innermost last. The cache holds the innermost level.
+    multi_level: bool,
+}
+
+/// What a PivotChart series saved with its references, plotted when the referenced cells don't
+/// hold it (see [`plot_cached`]).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PivotSeriesCache {
+    name: Option<String>,
+    categories: Option<CachedPoints>,
+    values: Option<CachedPoints>,
+    /// The values' `numCache` format code.
+    number_format: Option<String>,
+}
+
+/// `numCache`, `strCache`, or the innermost level of a `multiLvlStrCache`, under `cat` or `val`.
+fn cached_points(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<CachedPoints> {
+    let e = e?;
+    let owned = |p: Vec<Option<&str>>| p.into_iter().map(|v| v.map(str::to_string)).collect();
+    if let Some(c) = e.path(&["numRef", "numCache"]) {
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: true, multi_level: false })
+    } else if let Some(c) = e.path(&["strRef", "strCache"]) {
+        Some(CachedPoints { points: owned(read_points(c, c, budget)?), numeric: false, multi_level: false })
+    } else {
+        let c = e.path(&["multiLvlStrRef", "multiLvlStrCache"])?;
+        let multi_level = c.kids("lvl").nth(1).is_some();
+        Some(CachedPoints { points: owned(read_points(c, c.child("lvl")?, budget)?), numeric: false, multi_level })
+    }
+}
+
+fn pivot_series_cache(s: &El, budget: &mut ChartReadBudget) -> PivotSeriesCache {
+    PivotSeriesCache {
+        name: s.path(&["tx", "strRef", "strCache", "pt", "v"]).map(|v| v.text.clone()),
+        categories: cached_points(s.child("cat"), budget),
+        values: cached_points(s.child("val"), budget),
+        number_format: s
+            .path(&["val", "numRef", "numCache", "formatCode"])
+            .map(|c| c.text.trim())
+            .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+            .map(str::to_string),
+    }
+}
+
+/// The references of a series formula: one area, or a union `(Sheet!$A$1:$A$3,Sheet!$A$5)`.
+fn ref_areas<'e>(e: &'e Expr, out: &mut Vec<&'e Reference>) -> bool {
+    match e {
+        Expr::Ref(r) => {
+            out.push(r);
+            true
+        }
+        Expr::Paren(x) => ref_areas(x, out),
+        Expr::Binary(BinOp::Union, a, b) => ref_areas(a, out) && ref_areas(b, out),
+        _ => false,
+    }
+}
+
+/// Whether a cell shows the cached point: numbers within rounding, text as is. A number cache
+/// leaves out cells that hold no number.
+fn point_matches(v: &Value, p: Option<&str>, numeric: bool) -> bool {
+    match (v, p) {
+        (Value::Number(n), Some(t)) => t.trim().parse::<f64>().is_ok_and(|c| c == *n || (c - n).abs() <= 1e-9 * c.abs().max(n.abs())),
+        (Value::Number(_), None) => false,
+        (_, None) => numeric || v.is_empty(),
+        (_, Some(_)) if numeric => false,
+        (Value::Text(s), Some(t)) => **s == *t,
+        (Value::Bool(b), Some(t)) => t.eq_ignore_ascii_case(if *b { "TRUE" } else { "FALSE" }),
+        (Value::Error(e), Some(t)) => e.as_str() == t,
+        (Value::Empty, Some(t)) => t.is_empty(),
+        (Value::Array(_), Some(_)) => false,
+    }
+}
+
+/// Whether the cells a series formula refers to (on sheet `home` when unqualified) hold the
+/// cached points, one cell per point. Of a multi-level block, the innermost level is compared.
+fn live_matches(wb: &Workbook, home: usize, f: &str, p: &CachedPoints) -> bool {
+    let Ok(e) = gridcraft_formula::parse(f) else { return false };
+    let mut refs = Vec::new();
+    if !ref_areas(&e, &mut refs) {
+        return false;
+    }
+    let mut areas = Vec::with_capacity(refs.len());
+    for r in refs {
+        let si = match &r.sheet {
+            SheetSel::Current => Some(home),
+            SheetSel::Named(n) => wb.sheet_index(n),
+            SheetSel::Span(..) => None,
+        };
+        let Some(sheet) = si.and_then(|i| wb.sheet(i)) else { return false };
+        areas.push((sheet, r.range()));
+    }
+    let n = p.points.len();
+    if p.multi_level {
+        // The last column of a block with a row per point, or the last row of one with a
+        // column per point.
+        let [(sheet, r)] = areas[..] else { return false };
+        let leaf = if r.height() as usize == n {
+            RangeRef::new(CellRef::new(r.start.row, r.end.col), r.end)
+        } else if r.width() as usize == n {
+            RangeRef::new(CellRef::new(r.end.row, r.start.col), r.end)
+        } else {
+            return false;
+        };
+        areas = vec![(sheet, leaf)];
+    }
+    if areas.iter().try_fold(0u64, |t, (_, r)| t.checked_add(r.count())) != Some(n as u64) {
+        return false;
+    }
+    areas.iter().flat_map(|(sheet, r)| r.iter().map(|c| sheet.value(c))).zip(&p.points).all(|(v, pt)| point_matches(&v, pt.as_deref(), p.numeric))
+}
+
+/// A PivotChart's `<c:f>` formulas only approximate its PivotTable: often just the table's corner
+/// cell, or a block that takes in the grand total row. Excel draws the chart from the PivotTable,
+/// and the cached points are what it shows. When the cells a series' categories or values refer
+/// to (on sheet `si`) don't hold their cached points, the series plots the cached points (and its
+/// cached name) instead; refreshing the PivotTable rebinds the chart to live cells. A live
+/// multi-level category block keeps its reference and draws only its innermost level.
+pub(crate) fn plot_cached(wb: &Workbook, si: usize, ch: &mut Chart, caches: &[PivotSeriesCache]) {
+    for (ser, c) in ch.series.iter_mut().zip(caches) {
+        let stale = |f: Option<&str>, p: &&CachedPoints| !f.is_some_and(|f| live_matches(wb, si, f, p));
+        let categories = c.categories.as_ref().filter(|p| stale(ser.categories.as_deref(), p)).map(|p| literal(&p.points, p.numeric));
+        let values = c.values.as_ref().filter(|p| stale(Some(&ser.values), p)).map(|p| literal(&p.points, p.numeric));
+        let name_stale = c.name.as_ref().is_some_and(|name| {
+            let cached = CachedPoints { points: vec![Some(name.clone())], numeric: false, multi_level: false };
+            !ser.name.as_deref().is_some_and(|f| live_matches(wb, si, f, &cached))
+        });
+        if categories.is_none() && c.categories.as_ref().is_some_and(|p| p.multi_level) {
+            ser.innermost_categories = true;
+        }
+        if categories.is_none() && values.is_none() && !name_stale {
+            continue;
+        }
+        if categories.is_some() {
+            ser.categories = categories;
+        }
+        if let Some(v) = values {
+            ser.values = v;
+            ser.number_format.clone_from(&c.number_format);
+        }
+        if name_stale && let Some(name) = &c.name {
+            ser.name = Some(format!("\"{}\"", name.replace('"', "\"\"")));
+        }
+    }
+}
+
+/// [`plot_cached`] for the PivotCharts read from a workbook (by chart id), once every sheet's
+/// cells are in.
+pub(crate) fn plot_pivot_caches(wb: &mut Workbook, pending: &[(u32, Vec<PivotSeriesCache>)]) {
+    for (id, caches) in pending {
+        let at = wb.sheets.iter().enumerate().find_map(|(si, sh)| sh.charts.iter().position(|c| c.id == *id).map(|ci| (si, ci)));
+        let Some((si, ci)) = at else { continue };
+        let Some(mut ch) = wb.sheet(si).and_then(|sh| sh.charts.get(ci)).cloned() else { continue };
+        plot_cached(wb, si, &mut ch, caches);
+        if let Some(slot) = wb.sheet_mut(si).and_then(|sh| sh.charts.get_mut(ci)) {
+            *slot = ch;
+        }
+    }
+}
+
+fn literal_array(e: Option<&El>, budget: &mut ChartReadBudget) -> Option<String> {
     let e = e?;
     for k in ["numLit", "strLit"] {
         if let Some(l) = e.child(k) {
-            let pts: Vec<String> = l
-                .kids("pt")
-                .filter_map(|p| p.child("v"))
-                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
-                .collect();
-            return Some(format!("{{{}}}", pts.join(",")));
+            return read_points(l, l, budget).map(|p| literal(&p, k == "numLit"));
         }
     }
     None
@@ -196,34 +432,190 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
-pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
+/// Parses a legacy OOXML `<c:style val="..."/>` index (`1..=48`), trimming surrounding spaces.
+fn parse_chart_style(val: &str) -> Option<u32> {
+    val.trim().parse::<u32>().ok().filter(|s| (1..=48).contains(s))
+}
+
+fn group_kind(g: &El) -> Option<ChartKind> {
+    let grouping = g.child_val("grouping").unwrap_or("standard");
+    let stacked = grouping == "stacked";
+    let pct = grouping == "percentStacked";
+    Some(match g.name.as_str() {
+        "barChart" | "bar3DChart" => {
+            let bar = g.child_val("barDir") == Some("bar");
+            match (bar, stacked, pct) {
+                (false, true, _) => ChartKind::ColumnStacked,
+                (false, _, true) => ChartKind::ColumnStacked100,
+                (false, _, _) => ChartKind::ColumnClustered,
+                (true, true, _) => ChartKind::BarStacked,
+                (true, _, true) => ChartKind::BarStacked100,
+                (true, _, _) => ChartKind::BarClustered,
+            }
+        }
+        "lineChart" | "line3DChart" => {
+            if stacked {
+                ChartKind::LineStacked
+            } else {
+                // The group's kind is its first series' (each series may differ; see
+                // `series_kind_in`).
+                let (plain, marked) =
+                    if pct { (ChartKind::LineStacked100, ChartKind::LineStacked100Markers) } else { (ChartKind::Line, ChartKind::LineMarkers) };
+                match g.kids("ser").next() {
+                    Some(first) => series_kind_in(g, marked, first),
+                    None if g.child_val("marker").is_some_and(|v| v == "0" || v == "false") => plain,
+                    None => marked,
+                }
+            }
+        }
+        "pieChart" | "pie3DChart" => ChartKind::Pie,
+        "ofPieChart" => ChartKind::Pie,
+        "doughnutChart" => ChartKind::Doughnut,
+        "areaChart" | "area3DChart" => {
+            if pct {
+                ChartKind::AreaStacked100
+            } else if stacked {
+                ChartKind::AreaStacked
+            } else {
+                ChartKind::Area
+            }
+        }
+        "scatterChart" => match g.kids("ser").next() {
+            _ if g.child_val("scatterStyle") == Some("marker") => ChartKind::Scatter,
+            Some(first) => series_kind_in(g, ChartKind::ScatterLines, first),
+            None => ChartKind::ScatterLines,
+        },
+        "bubbleChart" => ChartKind::Bubble,
+        "radarChart" => ChartKind::Radar,
+        "stockChart" => ChartKind::Stock,
+        _ => return None,
+    })
+}
+
+/// The kind series `s` of group `g` (of kind `k`) is drawn as: in a line or 100% stacked line
+/// group its own markers (none when it says so), in a scatter group its own lines; otherwise
+/// the group's.
+fn series_kind_in(g: &El, k: ChartKind, s: &El) -> ChartKind {
+    let marked = || {
+        let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+        let none = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+        group_markers && !none
+    };
+    match k {
+        ChartKind::Line | ChartKind::LineMarkers if marked() => ChartKind::LineMarkers,
+        ChartKind::Line | ChartKind::LineMarkers => ChartKind::Line,
+        ChartKind::LineStacked100 | ChartKind::LineStacked100Markers if marked() => ChartKind::LineStacked100Markers,
+        ChartKind::LineStacked100 | ChartKind::LineStacked100Markers => ChartKind::LineStacked100,
+        ChartKind::Scatter | ChartKind::ScatterLines if g.child_val("scatterStyle") != Some("marker") => {
+            if s.path(&["spPr", "ln"]).is_some_and(|l| l.child("noFill").is_some()) { ChartKind::Scatter } else { ChartKind::ScatterLines }
+        }
+        k => k,
+    }
+}
+
+fn rich_title(t: &El) -> Option<String> {
+    let tx = t.child("tx")?;
+    if let Some(rich) = tx.child("rich") {
+        let paras: Vec<String> =
+            rich.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect();
+        let s = paras.join("\n");
+        return if s.is_empty() { None } else { Some(s) };
+    }
+    if let Some(sr) = tx.child("strRef") {
+        if let Some(v) = sr.path(&["strCache", "pt", "v"]) {
+            return Some(v.text.clone());
+        }
+        return sr.child("f").map(|f| f.text.trim().to_string());
+    }
+    None
+}
+
+/// The text of an axis title (`c:title`): its rich text or cached reference, else Excel's default.
+fn axis_title(t: &El) -> String {
+    rich_title(t).unwrap_or_else(|| "Axis Title".into())
+}
+
+// Value axes looked at (and looked up) while finding a chart's primary axes, so a test can check
+// the work grows with the file, not with its square.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VAL_AXIS_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut ChartReadBudget) -> (Chart, Vec<PivotSeriesCache>) {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
     fn ax_ids(g: &El) -> Vec<&str> {
         g.kids("axId").filter_map(|a| a.attr("val")).collect()
     }
-    let first_axes = groups.first().map(|g| ax_ids(g)).unwrap_or_default();
-    let ser_els: Vec<(&El, bool)> = groups
+    // An empty group draws nothing: the chart's kind and axes come from the groups with series
+    // (a chart without series from its first group).
+    let kinded: Vec<(&El, ChartKind)> = groups.iter().filter_map(|g| group_kind(g).map(|k| (*g, k))).collect();
+    let with_series = kinded.iter().any(|(g, _)| g.child("ser").is_some());
+    let drawing: Vec<(&El, ChartKind)> = kinded.iter().copied().filter(|(g, _)| !with_series || g.child("ser").is_some()).collect();
+    let first_kind = drawing.first().map_or_else(|| map_chart_type(dc.kind, plot), |(_, k)| *k);
+    // The primary axes are the pair whose value axis sits left or bottom (a secondary pair is on
+    // the right or top), else the first group's; series on other axes are secondary.
+    let mut val_sides: HashMap<&str, &str> = HashMap::new();
+    for a in plot.into_iter().flat_map(|p| p.kids("valAx")) {
+        #[cfg(test)]
+        VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+        if let (Some(id), Some(pos)) = (a.child_val("axId"), a.child_val("axPos")) {
+            val_sides.entry(id).or_insert(pos);
+        }
+    }
+    let pairs: Vec<Vec<&str>> = drawing.iter().map(|(g, _)| ax_ids(g)).collect();
+    let primary_axes: Vec<&str> = pairs
         .iter()
-        .enumerate()
-        .flat_map(|(gi, g)| {
-            let sec = gi > 0 && ax_ids(g) != first_axes;
-            g.kids("ser").map(move |s| (s, sec))
+        .find(|ids| {
+            #[cfg(test)]
+            VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+            ids.get(1).is_some_and(|id| matches!(val_sides.get(id).copied(), Some("l" | "b")))
+        })
+        .or_else(|| pairs.iter().find(|ids| !ids.is_empty()))
+        .cloned()
+        .unwrap_or_default();
+    // The axis titles are the primary pair's (an axis of another pair, or of an empty group, holds
+    // another scale's titles), else the first of their kind in the file; a shown axis before a
+    // deleted one.
+    let primary = |a: &El| a.child_val("axId").is_some_and(|id| primary_axes.contains(&id));
+    let shown = |a: &El| !a.child("delete").is_some_and(|c| c.flag("val", true));
+    let first_of = |tags: &[&str], pos: &[&str]| -> Option<&El> {
+        let fits = |a: &&El| tags.contains(&a.name.as_str()) && (pos.is_empty() || a.child_val("axPos").is_some_and(|p| pos.contains(&p)));
+        let axes = plot.into_iter().flat_map(|p| p.children.iter()).filter(fits);
+        let ranked: [&dyn Fn(&El) -> bool; 4] = [&|a| primary(a) && shown(a), &shown, &primary, &|_| true];
+        ranked.into_iter().find_map(|r| axes.clone().find(|a| r(a)))
+    };
+    // The primary pair's group says whether its axes are both value axes (a scatter's).
+    let primary_kind = drawing.iter().zip(&pairs).find(|(_, ids)| **ids == primary_axes).map_or(first_kind, |((_, k), _)| *k);
+    let (x_ax, y_ax) = if matches!(primary_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble) {
+        (first_of(&["valAx"], &["b", "t"]), first_of(&["valAx"], &["l", "r"]))
+    } else {
+        (first_of(&["catAx", "dateAx"], &[]), first_of(&["valAx"], &[]))
+    };
+    let title_of = |a: Option<&El>| a.and_then(|a| a.child("title")).map(axis_title);
+    let axis_titles = if plot.is_some() { (title_of(x_ax), title_of(y_ax)) } else { dc.axis_titles.clone() };
+    // Each series element with its axes and the kind its group draws it as (a line's markers and
+    // a scatter's lines are the series' own), in the order the shared reader lists them.
+    let ser_els: Vec<(&El, bool, ChartKind)> = groups
+        .iter()
+        .flat_map(|g| {
+            let ids = ax_ids(g);
+            let sec = !ids.is_empty() && ids != primary_axes;
+            let k = group_kind(g);
+            g.kids("ser").map(move |s| (s, sec, k.map_or(first_kind, |k| series_kind_in(g, k, s))))
         })
         .collect();
-    let multi_axis = ser_els.iter().any(|(_, sec)| *sec);
-    let is_combo = dc.kind == ChartType::Combo || multi_axis;
-    let base_kind = map_chart_type(dc.kind, plot);
-    let kind = if is_combo { ChartKind::Combo } else { base_kind };
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
+    let pivot = dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string);
     let series = dc
         .series
         .into_iter()
         .enumerate()
         .map(|(i, s)| {
-            let (sel, fallback_sec) = match ser_els.get(i).copied() {
-                Some((el, sec)) => (Some(el), sec),
-                None => (None, false),
+            let (sel, sec, drawn) = match ser_els.get(i).copied() {
+                Some((el, sec, k)) => (Some(el), sec, k),
+                None => (None, s.secondary_axis, s.kind.map_or(first_kind, |k| map_chart_type(k, plot))),
             };
             let color = s
                 .fill
@@ -243,35 +635,55 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 .into_iter()
                 .flat_map(|e| e.kids("trendline").take(16))
                 .filter(|e| e.child("trendlineType").and_then(|c| c.attr("val")).and_then(TrendlineType::from_xml).is_some());
-            Series {
+            let values_el = sel.and_then(|e| e.child("val").or_else(|| e.child("yVal")));
+            let series = Series {
                 name: s.refs.name.as_deref().map(chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
                 categories: s
                     .refs
                     .categories
                     .as_deref()
                     .map(chart_ref_from_file)
-                    .or_else(|| literal_array(sel.and_then(|e| e.child("cat").or_else(|| e.child("xVal"))))),
-                values: s
+                    .or_else(|| literal_array(sel.and_then(|e| e.child("cat").or_else(|| e.child("xVal"))), budget)),
+                values: s.refs.values.as_deref().map(chart_ref_from_file).or_else(|| literal_array(values_el, budget)).unwrap_or_default(),
+                bubble_sizes: s
                     .refs
-                    .values
+                    .sizes
                     .as_deref()
                     .map(chart_ref_from_file)
-                    .or_else(|| literal_array(sel.and_then(|e| e.child("val").or_else(|| e.child("yVal")))))
-                    .unwrap_or_default(),
-                bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")))),
+                    .or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")), budget)),
                 color,
-                secondary: is_combo && (s.secondary_axis || fallback_sec),
-                kind: if dc.kind == ChartType::Combo {
-                    s.kind.map(|k| map_chart_type(k, plot))
-                } else if multi_axis {
-                    Some(s.kind.map(|k| map_chart_type(k, plot)).unwrap_or(base_kind))
-                } else {
-                    None
-                },
+                secondary: sec,
+                kind: None,
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
                 trendlines: s.trendlines.iter().map(|t| map_trendline(t, trendline_els.next())).collect(),
-            }
+                number_format: values_el
+                    .filter(|v| v.child("numRef").is_none())
+                    .and_then(|v| v.path(&["numLit", "formatCode"]))
+                    .map(|c| c.text.trim())
+                    .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("General"))
+                    .map(str::to_string),
+                innermost_categories: false,
+            };
+            // A PivotChart's series keep their cached points, sorted with them below.
+            let cache = pivot.is_some().then(|| sel.map(|e| pivot_series_cache(e, budget)).unwrap_or_default());
+            (series, drawn, sel, cache)
+        })
+        .collect::<Vec<_>>();
+    // Series in the order the file gives them (`c:order`), whichever group holds them.
+    let order = |e: Option<&El>| e.and_then(|s| s.child_val("order")).and_then(|v| v.parse::<u32>().ok());
+    let mut series = series;
+    if series.iter().all(|(_, _, e, _)| order(*e).is_some()) {
+        series.sort_by_key(|(_, _, e, _)| order(*e));
+    }
+    let mut drawn = Vec::with_capacity(series.len());
+    let mut caches = Vec::new();
+    let series: Vec<Series> = series
+        .into_iter()
+        .map(|(s, k, _, cache)| {
+            drawn.push(k);
+            caches.extend(cache);
+            s
         })
         .collect();
     let legend = match dc.legend.as_deref() {
@@ -283,11 +695,20 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     };
     let hole_size =
         if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
-    Chart {
+    // No `<c:title>`: an automatic title (a lone series' name), unless the file deleted it.
+    let title = match root.and_then(|r| r.child("chart")) {
+        Some(c) => match c.child("title") {
+            Some(t) => rich_title(t).or(dc.title),
+            None if c.child("autoTitleDeleted").is_some_and(|d| d.flag("val", true)) => Some(String::new()),
+            None => None,
+        },
+        None => dc.title,
+    };
+    let mut ch = Chart {
         id: 0,
-        kind,
+        kind: first_kind,
         anchor: Default::default(),
-        title: dc.title,
+        title,
         series,
         legend,
         data_labels: dc.data_labels || series_labels,
@@ -298,21 +719,42 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             outline: t.outline,
         }),
         gridlines: dc.gridlines,
-        style: dc.style,
+        // Excel can wrap the legacy chart style in mc:AlternateContent.
+        // The c14 Choice uses different IDs, so read the c:style Fallback.
+        style: root
+            .and_then(|r| {
+                r.child_val("style").and_then(parse_chart_style).or_else(|| {
+                    r.kids("AlternateContent")
+                        .filter_map(|wrapper| wrapper.child("Fallback"))
+                        .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
+                })
+            })
+            .or_else(|| (1..=48).contains(&dc.style).then_some(dc.style))
+            .unwrap_or(2),
         hole_size,
         first_slice_angle: dc.first_slice_angle,
-        x_title: dc.axis_titles.0,
-        y_title: dc.axis_titles.1,
+        x_title: axis_titles.0,
+        y_title: axis_titles.1,
         source: None,
         by_rows: false,
-        pivot: dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string),
-    }
+        pivot,
+    };
+    // Series of one family are one chart; series of other families make a combination chart.
+    ch.set_drawn_kinds(&drawn, first_kind);
+    (ch, caches)
 }
 
-pub fn read_chart(root: &El) -> Option<Chart> {
+/// A chart part, with the cached points of each series when it is a PivotChart (empty otherwise),
+#[cfg(test)]
+pub(crate) fn read_chart(root: &El) -> Option<(Chart, Vec<PivotSeriesCache>)> {
+    let mut budget = ChartReadBudget::new();
+    read_chart_with_budget(root, &mut budget)
+}
+
+pub(crate) fn read_chart_with_budget(root: &El, budget: &mut ChartReadBudget) -> Option<(Chart, Vec<PivotSeriesCache>)> {
     let craft = to_craft_el(root);
     let dc = craft_drawingml::chart::read::chart_from(&craft)?;
-    Some(from_dml_chart(dc, Some(root)))
+    Some(from_dml_chart(dc, Some(root), budget))
 }
 
 // ---------------------------------------------------------------- writing
@@ -320,7 +762,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 #[derive(Clone, Copy, PartialEq)]
 enum G {
     Bar { bar: bool, grouping: &'static str },
-    Line { stacked: bool, markers: bool },
+    Line { grouping: &'static str, markers: bool },
     Pie,
     Doughnut,
     Area { grouping: &'static str },
@@ -330,6 +772,45 @@ enum G {
     Stock,
 }
 
+/// The kind of axes a group is drawn on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axes {
+    /// None: pie and doughnut.
+    None,
+    /// Categories across, values up: columns, lines, areas, stock, radar.
+    Category,
+    /// Categories down, values across: horizontal bars.
+    Horizontal,
+    /// Values both ways: scatter and bubble.
+    Values,
+}
+
+fn axes_of(g: G) -> Axes {
+    match g {
+        G::Pie | G::Doughnut => Axes::None,
+        G::Bar { bar: true, .. } => Axes::Horizontal,
+        G::Scatter { .. } | G::Bubble => Axes::Values,
+        _ => Axes::Category,
+    }
+}
+
+/// Group `g` drawn on axes of kind `family`: itself where it fits, else the nearest group that
+/// does (a line-like series as lines, others as columns, bars or scatter).
+fn fit_axes(g: G, family: Axes) -> G {
+    let own = axes_of(g);
+    if own == family || family == Axes::None {
+        return g;
+    }
+    let line_like = matches!(g, G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. });
+    match family {
+        Axes::None => g,
+        Axes::Category if line_like => G::Line { grouping: "standard", markers: false },
+        Axes::Category => G::Bar { bar: false, grouping: "clustered" },
+        Axes::Horizontal => G::Bar { bar: true, grouping: "clustered" },
+        Axes::Values => G::Scatter { lines: true },
+    }
+}
+
 fn group_for(k: ChartKind) -> G {
     match k {
         ChartKind::ColumnStacked => G::Bar { bar: false, grouping: "stacked" },
@@ -337,9 +818,11 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::BarClustered => G::Bar { bar: true, grouping: "clustered" },
         ChartKind::BarStacked => G::Bar { bar: true, grouping: "stacked" },
         ChartKind::BarStacked100 => G::Bar { bar: true, grouping: "percentStacked" },
-        ChartKind::Line => G::Line { stacked: false, markers: false },
-        ChartKind::LineMarkers => G::Line { stacked: false, markers: true },
-        ChartKind::LineStacked => G::Line { stacked: true, markers: false },
+        ChartKind::Line => G::Line { grouping: "standard", markers: false },
+        ChartKind::LineMarkers => G::Line { grouping: "standard", markers: true },
+        ChartKind::LineStacked => G::Line { grouping: "stacked", markers: false },
+        ChartKind::LineStacked100 => G::Line { grouping: "percentStacked", markers: false },
+        ChartKind::LineStacked100Markers => G::Line { grouping: "percentStacked", markers: true },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
         ChartKind::Area => G::Area { grouping: "standard" },
@@ -392,6 +875,13 @@ fn is_ref(f: &str) -> bool {
     matches!(gridcraft_formula::parse(f), Ok(Expr::Ref(_)))
 }
 
+/// The items of an array constant (`{1,"a";#N/A,2}`), row-major; nothing for anything else.
+fn array_items(f: &str) -> Vec<Expr> {
+    match gridcraft_formula::parse(f) {
+        Ok(Expr::Array(rows)) => rows.into_iter().flatten().collect(),
+        _ => Vec::new(),
+    }
+}
 /// A chart reference that is a name: its sheet when qualified (`Sheet1!Sales`), the bare
 /// name, and the definition formulas would find from sheet `si` (none when undefined). `None`
 /// when it isn't a name, or names a sheet the workbook doesn't have.
@@ -429,16 +919,27 @@ fn is_defined_name(wb: &Workbook, si: usize, f: &str) -> bool {
     chart_name(wb, si, f).is_some_and(|(_, _, d)| d.is_some())
 }
 
-fn num_data(tag: &str, f: Option<&str>, wb: &Workbook, si: usize) -> String {
+/// `fmt` is the format code saved with literal values (`numLit`); references save their cells'.
+fn num_data(tag: &str, f: Option<&str>, fmt: Option<&str>, wb: &Workbook, si: usize) -> String {
     let f = f.unwrap_or("").trim();
     if f.is_empty() {
         return format!("<c:{tag}><c:numLit><c:ptCount val=\"0\"/></c:numLit></c:{tag}>");
     }
     if f.starts_with('{') {
-        let vals: Vec<&str> = f.trim_matches(|c| c == '{' || c == '}').split([',', ';']).collect();
-        let mut s = format!("<c:{tag}><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"{}\"/>", vals.len());
-        for (i, v) in vals.iter().enumerate() {
-            if let Ok(n) = v.trim().parse::<f64>() {
+        let items = array_items(f);
+        let fmt = esc(fmt.unwrap_or("General"));
+        let mut s = format!("<c:{tag}><c:numLit><c:formatCode>{fmt}</c:formatCode><c:ptCount val=\"{}\"/>", items.len());
+        for (i, e) in items.iter().enumerate() {
+            let n = match e {
+                Expr::Number(n) => Some(*n),
+                Expr::Unary(gridcraft_formula::UnOp::Neg, x) => match **x {
+                    Expr::Number(n) => Some(-n),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // Anything else (`#N/A`, text) is a gap: its index is left out.
+            if let Some(n) = n {
                 let _ = write!(s, "<c:pt idx=\"{i}\"><c:v>{}</c:v></c:pt>", num(n));
             }
         }
@@ -520,6 +1021,15 @@ fn str_data(tag: &str, f: &str, wb: &Workbook, si: usize) -> String {
     s
 }
 
+/// The text of a literal series name: a quoted formula literal (`"Sales ""East"""`) without its
+/// quotes and with `""` read as `"`; bare text as is.
+pub(crate) fn literal_text(n: &str) -> std::borrow::Cow<'_, str> {
+    match n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(t) => t.replace("\"\"", "\"").into(),
+        None => n.into(),
+    }
+}
+
 /// `<c:cat>` of a series: a string reference, or a multi-level one (`multiLvlStrRef`) when the
 /// category range has more columns than a column of values (or more rows than a row of values:
 /// year beside month). Its cache lists the innermost level first, then each outer level with
@@ -561,14 +1071,20 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
     Some(s)
 }
 
-fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String {
+/// Series `s` in group `g`, drawn as kind `own`: a line or scatter series keeps its own markers
+/// or lines within its group.
+fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
+    let g = match (g, group_for(own)) {
+        (G::Line { grouping, .. }, G::Line { markers, .. }) => G::Line { grouping, markers },
+        (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
+        _ => g,
+    };
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
     if let Some(n) = &s.name {
         if is_ref(n) || is_defined_name(wb, si, n) {
             x.push_str(&str_data("tx", n, wb, si));
         } else {
-            let lit = n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')).unwrap_or(n);
-            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(lit));
+            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(&literal_text(n)));
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
@@ -605,11 +1121,11 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     match g {
         G::Scatter { .. } | G::Bubble => {
             if let Some(c) = &s.categories {
-                x.push_str(&num_data("xVal", Some(c), wb, si));
+                x.push_str(&num_data("xVal", Some(c), None, wb, si));
             }
-            x.push_str(&num_data("yVal", Some(&s.values), wb, si));
+            x.push_str(&num_data("yVal", Some(&s.values), s.number_format.as_deref(), wb, si));
             if g == G::Bubble {
-                x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), wb, si));
+                x.push_str(&num_data("bubbleSize", s.bubble_sizes.as_deref().or(Some(&s.values)), None, wb, si));
                 x.push_str("<c:bubble3D val=\"0\"/>");
             } else {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
@@ -619,7 +1135,7 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
             if let Some(c) = &s.categories {
                 x.push_str(&cat_data(c, &s.values, wb, si));
             }
-            x.push_str(&num_data("val", Some(&s.values), wb, si));
+            x.push_str(&num_data("val", Some(&s.values), s.number_format.as_deref(), wb, si));
             if matches!(g, G::Line { .. }) {
                 let _ = write!(x, "<c:smooth val=\"{}\"/>", s.smooth as u8);
             }
@@ -693,8 +1209,10 @@ fn dlbls(show: bool) -> String {
     )
 }
 
-fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
+/// Group `g` of `series`, each drawn as its kind in `kinds` (by series index).
+fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
+    let sers: String =
+        series.iter().map(|(i, s)| series_xml(s, *i, g, kinds.get(*i).copied().unwrap_or(ChartKind::ColumnClustered), wb, si)).collect();
     let dl = dlbls(ch.data_labels);
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -705,9 +1223,10 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
                 if bar { "bar" } else { "col" }
             )
         }
-        G::Line { stacked, .. } => format!(
-            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
-            if stacked { "stacked" } else { "standard" }
+        // Each series states its own markers; an empty group's say whether the chart has them.
+        G::Line { grouping, markers } => format!(
+            "<c:lineChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"{}\"/>{ax}</c:lineChart>",
+            u8::from(markers || !series.is_empty())
         ),
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/></c:pieChart>", ch.first_slice_angle % 360),
         G::Doughnut => format!(
@@ -716,7 +1235,11 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             ch.hole_size.clamp(10, 90)
         ),
         G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
-        G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
+        // Each series states its own lines; an empty group's style says whether the chart has them.
+        G::Scatter { lines } => {
+            let style = if lines || !series.is_empty() { "lineMarker" } else { "marker" };
+            format!("<c:scatterChart><c:scatterStyle val=\"{style}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>")
+        }
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
         }
@@ -793,119 +1316,130 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         let _ = write!(s, "<c:pivotSource><c:name>[{}]{}</c:name><c:fmtId val=\"0\"/></c:pivotSource>", esc(book_name), esc(link));
     }
     s.push_str("<c:chart>");
+    // `None` is the automatic title; an empty title is one that was turned off.
     match &ch.title {
         Some(t) if !t.is_empty() => {
             s.push_str(&title_xml(t));
             s.push_str("<c:autoTitleDeleted val=\"0\"/>");
         }
-        _ => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
+        Some(_) => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
+        None => s.push_str("<c:autoTitleDeleted val=\"0\"/>"),
     }
     s.push_str("<c:plotArea><c:layout/>");
     let all: Vec<(usize, &Series)> = ch.series.iter().enumerate().collect();
-    let primary_g;
-    let mut secondary: Option<G> = None;
-    if ch.kind == ChartKind::Combo {
-        // Series without a kind of their own: the first is a column, the others lines (as drawn).
-        let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
-        let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
-        let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
-        let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
-        primary_g = G::Bar { bar: false, grouping: "clustered" };
-        if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
-            s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
+    // A stock chart is one group of its 3 or 4 series (high-low-close, open-high-low-close);
+    // other charts get one group per kind their series are drawn as, on each axis, in the order
+    // they first appear (a line's markers and a scatter's lines are the series' own).
+    let stock = ch.kind == ChartKind::Stock;
+    let kinds = ch.series_kinds();
+    let group_of = |i: usize| match group_for(kinds.get(i).copied().unwrap_or(ChartKind::ColumnClustered)) {
+        G::Line { grouping, .. } => G::Line { grouping, markers: false },
+        G::Scatter { .. } => G::Scatter { lines: true },
+        g => g,
+    };
+    // A chart without axes (a pie or doughnut chart) has no secondary axes either: its series
+    // are all one group. (A combination chart's pies are drawn as columns, on axes.)
+    let has_axes = (0..all.len()).any(|i| axes_of(group_of(i)) != Axes::None);
+    let groups = |secondary: bool| {
+        let mut out: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        for &(i, x) in all.iter().filter(|(_, x)| stock || (x.secondary && has_axes) == secondary) {
+            let g = group_of(i);
+            match out.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, members)) => members.push((i, x)),
+                None => out.push((g, vec![(i, x)])),
+            }
         }
-        if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+        // The groups on one pair of axes share its kind of axes; one that can't (a pie beside
+        // columns, a scatter beside lines) is drawn in the nearest group that can.
+        // A combination chart is drawn on category axes (its series' kinds say how).
+        let family = if ch.kind == ChartKind::Combo {
+            Axes::Category
+        } else {
+            out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None)
+        };
+        // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
+        // lines, which join a line group already there rather than setting its grouping.
+        let (out, stock_lines): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, m)| *g != G::Stock || (3..=4).contains(&m.len()));
+        let stock_lines = stock_lines.into_iter().map(|(_, m)| (G::Line { grouping: "standard", markers: false }, m));
+        // One group per type on a pair of axes (as Excel keeps them; `Chart::series_kind` gives
+        // the series of one type one grouping). Groups that fit the axes come first, so a group
+        // moved onto them joins one of its type there rather than setting its grouping.
+        let (fits, moved): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, _)| fit_axes(*g, family) == *g);
+        let mut fitted: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        let moved = moved.into_iter().chain(stock_lines).map(|(g, m)| (fit_axes(g, family), m));
+        for (g, members) in fits.into_iter().chain(moved) {
+            match fitted.iter_mut().find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(&g)) {
+                Some((_, m)) => m.extend(members),
+                None => fitted.push((g, members)),
+            }
         }
-        if !sec.is_empty() {
-            let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                Some(b @ G::Bar { .. }) => b,
-                _ => G::Line { stacked: false, markers: false },
-            };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
-            secondary = Some(g);
+        // Each group's series in their own order.
+        for (_, members) in &mut fitted {
+            members.sort_by_key(|(i, _)| *i);
         }
-    } else {
-        primary_g = match group_for(ch.kind) {
-            // A stock chart has 3 or 4 series (high-low-close, open-high-low-close).
-            G::Stock if !(3..=4).contains(&ch.series.len()) => G::Line { stacked: false, markers: false },
+        fitted
+    };
+    let (mut primary, mut sec) = if stock { (groups(false), Vec::new()) } else { (groups(false), groups(true)) };
+    // With every series on the secondary axis, that axis is the only one.
+    if primary.is_empty() {
+        std::mem::swap(&mut primary, &mut sec);
+    }
+    // A chart without series still has a group of its kind, or it would not be read back (a
+    // stock group must hold series, so an empty stock chart has a line group).
+    if primary.is_empty() {
+        let g = match group_for(ch.kind) {
+            G::Stock => G::Line { grouping: "standard", markers: false },
             g => g,
         };
-        s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
+        primary.push((g, Vec::new()));
     }
-    match primary_g {
-        G::Pie | G::Doughnut => {}
-        G::Scatter { .. } | G::Bubble => {
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 1,
-                cross: 2,
-                pos: "b",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "l",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                crosses_max: false,
-            }));
-        }
-        G::Bar { bar: true, .. } => {
-            s.push_str(&axis_xml(&Ax {
-                cat: true,
-                id: 1,
-                cross: 2,
-                pos: "l",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "b",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                crosses_max: false,
-            }));
-        }
-        _ => {
-            s.push_str(&axis_xml(&Ax {
-                cat: true,
-                id: 1,
-                cross: 2,
-                pos: "b",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "l",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                crosses_max: false,
-            }));
-        }
+    for (g, members) in &primary {
+        s.push_str(&group_xml(*g, members, &kinds, ch, (1, 2), wb, si));
     }
-    if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    for (g, members) in &sec {
+        s.push_str(&group_xml(*g, members, &kinds, ch, (3, 4), wb, si));
+    }
+    let family = |gs: &[(G, Vec<(usize, &Series)>)]| gs.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
+    let primary_axes = family(&primary);
+    // The primary axes, placed by their kind.
+    let (cat, cat_pos, val_pos) = match primary_axes {
+        Axes::None => (true, "", ""),
+        Axes::Values => (false, "b", "l"),
+        Axes::Horizontal => (true, "l", "b"),
+        Axes::Category => (true, "b", "l"),
+    };
+    if primary_axes != Axes::None {
+        s.push_str(&axis_xml(&Ax {
+            cat,
+            id: 1,
+            cross: 2,
+            pos: cat_pos,
+            delete: false,
+            grid: false,
+            title: ch.x_title.as_deref(),
+            crosses_max: false,
+        }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 2,
+            cross: 1,
+            pos: val_pos,
+            delete: false,
+            grid: ch.gridlines,
+            title: ch.y_title.as_deref(),
+            crosses_max: false,
+        }));
+    }
+    // The secondary axes: their categories (or x values) hidden, their values on the far side.
+    let (cat, cat_pos, val_pos) = match family(&sec) {
+        Axes::None => (true, "", ""),
+        Axes::Values => (false, "b", "r"),
+        Axes::Horizontal => (true, "l", "t"),
+        Axes::Category => (true, "b", "r"),
+    };
+    if !cat_pos.is_empty() {
+        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, title: None, crosses_max: false }));
+        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: val_pos, delete: false, grid: false, title: None, crosses_max: true }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(

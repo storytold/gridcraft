@@ -33,7 +33,9 @@ mod parts;
 mod rules;
 
 pub(crate) use parts::password_attrs;
-use parts::{autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml};
+use parts::{
+    autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_filter, table_name, table_xml, thread_ids, threaded_xml, vml_xml,
+};
 use rules::{cf_rule_xml, solid_bar_x14, validation_xml, x14_cf_rule_xml};
 
 fn sqref(ranges: &[RangeRef]) -> String {
@@ -203,7 +205,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let filter = table_filter(sheet, t);
+            let xml = table_xml(t, cols, &name, out.table_id, &filter, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             part.features.table_parts.push(rels.add("table", &format!("../tables/table{n}.xml")));
         }
@@ -239,8 +242,10 @@ fn build_craft_cols(sheet: &Sheet, sid: &dyn Fn(gridcraft_model::StyleId) -> u32
             first: a,
             last: b,
             width: Some(px_to_col_width(w)),
+            // As Excel writes them: a width that AutoFit or a number format sized is bestFit too, so
+            // it keeps widening when the file is opened again; one set by hand is customWidth only.
             custom_width: i.size.is_some(),
-            best_fit: false,
+            best_fit: i.size.is_some() && !i.custom,
             hidden: i.hidden,
             outline_level: i.outline.min(7),
             collapsed: i.collapsed,
@@ -338,9 +343,12 @@ struct CellWriteInput<'a> {
 
 fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
     // Excel 2010 extensions: conditional formats, then sparklines.
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+    let has_kept_exts = !crate::extlist::sheet_exts(sheet, "").is_empty();
+    let has_exts = !x14_cf.is_empty() || !sheet.sparklines.is_empty() || has_kept_exts;
+    if has_exts {
         s.push_str("<extLst>");
     }
+    let exts_start = s.len();
     if !x14_cf.is_empty() {
         let _ = write!(s, "<ext uri=\"{EXT_X14_CF}\" xmlns:x14=\"{X14_NS}\"><x14:conditionalFormattings>{x14_cf}</x14:conditionalFormattings></ext>");
     }
@@ -365,7 +373,12 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+    if has_exts {
+        // Only a sheet with kept extensions scans what was just written for their URIs.
+        if has_kept_exts {
+            let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
+            s.push_str(&kept_exts);
+        }
         s.push_str("</extLst>");
     }
 }
@@ -450,8 +463,14 @@ fn write_sheet_drawing_rel(wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut R
             drels.add_uri(crate::chartex::REL_CHARTEX, &format!("../charts/chartEx{n}.xml"))
         } else {
             let name = format!("xl/charts/chart{}.xml", out.charts);
-            out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
-            drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
+            match crate::passthrough::kept_chart(wb, sheet, ch) {
+                // Unchanged since it was read: the original part, with what the model doesn't hold.
+                Some(k) => crate::passthrough::write_kept_chart(k, &name, &mut drels, out),
+                None => {
+                    out.part(&name, Some(CT_CHART), crate::chart::write_chart(wb, si, ch, &out.book_name).into_bytes());
+                    drels.add("chart", &format!("../charts/chart{}.xml", out.charts))
+                }
+            }
         };
         objs.push(Obj::Chart(ch, rid));
     }
