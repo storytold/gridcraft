@@ -1072,6 +1072,31 @@ fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() {
 }
 
 #[test]
+fn arabic_fallback_sets_latin_extended_a_in_the_extended_font() {
+    if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return;
+    }
+    // Noto Sans Arabic draws ő and Ş itself but lacks the Esperanto Ĉ and ĥ, which fall back to the standard face.
+    let text = "سلام ő Ĉu ĥ";
+    let items = arabic::layout(Font::Helvetica, text, TextDirection::Auto).unwrap().items;
+    // Drawn by the face itself or in the extended font, never in WinAnsi.
+    assert!(
+        items.iter().any(|item| matches!(item, arabic::Item::Glyph { source: text, .. } | arabic::Item::Ext { text, .. } if text.contains('Ĉ'))),
+        "{items:?}"
+    );
+    for item in items {
+        if let arabic::Item::Latin { text: drawn, .. } = &item {
+            assert!(!drawn.chars().any(|c| ext_code(c).is_some()), "{drawn:?} is set in WinAnsi, where it would print as ?");
+        }
+    }
+    let mut subset = arabic::Subset::default();
+    let body = subset.text(Font::Helvetica, text, 12.0, TextDirection::Auto).unwrap();
+    let ext = format!("/F{} ", EXT_FONT + Font::Helvetica.index() + 1);
+    assert_eq!(body.contains(&ext), subset.uses_ext[Font::Helvetica.index()], "the page declares the extended font it uses");
+    assert!(!body.contains("(?)") && !body.contains("?)"), "no letter falls back to ?: {body}");
+}
+
+#[test]
 fn arabic_joining_marks_styles_and_rotation() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
         return;
@@ -1146,7 +1171,7 @@ fn line_breaks_in_arabic_text_draw_as_spaces() {
     {
         let layout = arabic::layout(Font::Helvetica, text, direction).unwrap();
         for item in &layout.items {
-            if let arabic::Item::Latin { text: drawn, .. } = item {
+            if let arabic::Item::Latin { text: drawn, .. } | arabic::Item::Ext { text: drawn, .. } = item {
                 assert!(!drawn.chars().any(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')), "{drawn:?} from {text:?}");
             }
         }
@@ -1244,7 +1269,7 @@ fn arabic_explicit_base_changes_visual_order_and_preserves_logical_text() {
             .into_iter()
             .map(|item| match item {
                 arabic::Item::Glyph { source, .. } => source,
-                arabic::Item::Latin { text, .. } | arabic::Item::Cid { text, .. } => text,
+                arabic::Item::Latin { text, .. } | arabic::Item::Ext { text, .. } | arabic::Item::Cid { text, .. } => text,
             })
             .collect::<String>()
     };
@@ -1334,4 +1359,84 @@ fn shared_run_length_preserves_pixels_at_packet_boundaries() {
     }
     // Two equal bytes may now terminate a literal packet. PDF pixel values stay exact.
     assert_eq!(run_length(&[1, 2, 2, 3]), [0, 1, 255, 2, 0, 3, 128]);
+}
+
+#[test]
+fn latin_extended_letters_use_the_latin_font() {
+    let mut doc = PdfDoc::new();
+    let p = doc.add_page(612.0, 792.0);
+    p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "tőrű ŐŰ");
+    let c = page_content(&doc).to_string();
+    assert!(!c.contains("<0151>") && !c.contains("<0171>"), "ő/ű set in the CJK font: {c}");
+    // ő, ű, Ő, Ű are bytes 0xD1, 0xF1, 0xD0, 0xF0 of the Helvetica Latin Extended-A resource.
+    // Resources: the faces, then the CID font, then their Latin Extended-A twins.
+    let ext = format!("/F{}", EXT_FONT + 1);
+    let expected = format!(
+        "/F1 10 Tf\n1 0 0 1 10 772 Tm\n(t) Tj\n{ext} 10 Tf\n<D1> Tj\n/F1 10 Tf\n(r) Tj\n{ext} 10 Tf\n<F1> Tj\n/F1 10 Tf\n( ) Tj\n{ext} 10 Tf\n<D0F0> Tj\n"
+    );
+    assert!(c.contains(&expected), "ő/ű not set through the Latin resource: {c}");
+    let pdf = doc.finish().unwrap();
+    check_xref(&pdf).unwrap();
+    assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "CJK font used for Latin letters");
+    for name in ["/ohungarumlaut", "/uhungarumlaut", "/Ohungarumlaut", "/Uhungarumlaut"] {
+        assert!(find(&pdf, name.as_bytes()).is_some(), "missing glyph name {name}");
+    }
+    assert_eq!(text_width(Font::Helvetica, 10.0, "ő"), text_width(Font::Helvetica, 10.0, "o"));
+    assert_eq!(text_width(Font::TimesBold, 10.0, "Ű"), text_width(Font::TimesBold, 10.0, "U"));
+    assert_eq!(text_width(Font::Courier, 10.0, "ł"), 6.0);
+}
+
+#[test]
+fn latin_extended_resources_give_every_glyph_a_width() {
+    // Ccircumflex and other Extended-A names aren't in every standard font's metrics: the resource
+    // states each width, so no glyph gets a zero advance and overlaps the next letter.
+    for face in Font::ALL {
+        if face == Font::Symbol {
+            continue;
+        }
+        let mut doc = PdfDoc::new();
+        let p = doc.add_page(612.0, 792.0);
+        p.text(10.0, 20.0, 10.0, face, [0, 0, 0], "Ĉu ő");
+        let pdf = doc.finish().unwrap();
+        check_xref(&pdf).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        let name = face.base_name();
+        let dict = text
+            .split("<< /Type /Font /Subtype /Type1 /BaseFont /")
+            .find(|d| d.starts_with(&format!("{name} /Encoding << /Type /Encoding /Differences")))
+            .unwrap();
+        assert!(dict.contains("/FirstChar 128 /LastChar 255 /Widths ["), "{name}: {dict}");
+        let widths = dict.split("/Widths [").nth(1).and_then(|w| w.split(']').next()).unwrap();
+        let widths: Vec<u16> = widths.split_whitespace().map(|w| w.parse().unwrap()).collect();
+        assert_eq!(widths.len(), 128, "{name}");
+        assert!(widths.iter().all(|&w| w > 0), "{name}: {widths:?}");
+        // Ĉ (U+0108) is set at its base letter's width.
+        assert_eq!(widths[8], face.char_width('C'), "{name}");
+        let desc = dict.split("/FontDescriptor ").nth(1).and_then(|d| d.split(' ').next()).unwrap();
+        assert!(text.contains(&format!("{desc} 0 obj\n<< /Type /FontDescriptor /FontName /{name} ")), "{name}: descriptor {desc}");
+    }
+}
+
+#[test]
+fn latin_extended_letters_use_each_faces_own_resource() {
+    // Every face routed to a `/Differences` resource has the Latin glyphs; the symbolic standard
+    // fonts (Symbol, ZapfDingbats) lack them and are never routed there.
+    for face in Font::ALL {
+        let name = face.base_name();
+        if name.starts_with("Symbol") || name.starts_with("ZapfDingbats") {
+            continue;
+        }
+        let mut doc = PdfDoc::new();
+        let p = doc.add_page(612.0, 792.0);
+        p.text(10.0, 20.0, 10.0, face, [0, 0, 0], "ő");
+        let ext = Font::ALL.len() + 2 + face.index();
+        let c = page_content(&doc).to_string();
+        assert!(c.contains(&format!("/F{ext} 10 Tf\n")) && c.contains("<D1> Tj\n"), "{name}: {c}");
+        let pdf = doc.finish().unwrap();
+        check_xref(&pdf).unwrap();
+        let dict = format!("/BaseFont /{name} /Encoding << /Type /Encoding /Differences [128 /Amacron");
+        assert!(find(&pdf, dict.as_bytes()).is_some(), "{name}: no Latin Extended-A encoding");
+        assert!(find(&pdf, format!("/F{ext} ").as_bytes()).is_some(), "{name}: resource missing");
+        assert!(find(&pdf, CID_BASE_FONT.as_bytes()).is_none(), "{name}: CJK font used");
+    }
 }

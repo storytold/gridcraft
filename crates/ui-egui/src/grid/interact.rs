@@ -410,6 +410,13 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
     }
 }
 
+/// The link of cell `c` on the active sheet as the session holds it now: a click may have just
+/// committed an edit the frame's workbook snapshot predates (a `HYPERLINK` target cell).
+fn current_cell_link(app: &SheetApp, c: CellRef) -> Option<gridcraft_engine::model::Hyperlink> {
+    let d = app.session.active()?;
+    gridcraft_engine::links::cell_link(&d.wb, d.wb.active_sheet(), c)
+}
+
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
@@ -553,7 +560,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     } else if mods.command || sel_mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some(h) = current_cell_link(app, c)
             && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
@@ -570,7 +577,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some(h) = current_cell_link(app, c)
             && acts
             && !mods.any()
         {

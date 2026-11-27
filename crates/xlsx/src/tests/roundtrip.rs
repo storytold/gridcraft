@@ -277,7 +277,7 @@ fn sample() -> Workbook {
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
         criteria: vec![
-            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true }),
+            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true, identities: vec![] }),
             (1, FilterCriterion::Custom { a: (">=".into(), "5".into()), b: Some(("<".into(), "9".into())), and: true }),
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
@@ -352,7 +352,7 @@ fn sample() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![
-            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }),
+            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] }),
             (1, FilterCriterion::Icon { set: "3TrafficLights1".into(), id: Some(1) }),
         ],
         table_type: None,
@@ -428,6 +428,8 @@ fn sample() -> Workbook {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
@@ -1980,8 +1982,10 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
-    s.autofilter =
-        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
     s.rows.entry(1).or_default().hidden = true;
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -2023,8 +2027,10 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         table_type: None,
         connection_id: None,
     });
-    s.autofilter =
-        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("B1:B3"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);

@@ -15,7 +15,7 @@ fn kind(grouping: &str, marker: &str) -> ChartKind {
          </c:plotArea></c:chart></c:chartSpace>"
     );
     let root = parse(xml.as_bytes()).unwrap();
-    read_chart(&root).unwrap().kind
+    read_chart(&root).unwrap().0.kind
 }
 
 const NO_MARKER: &str = "<c:marker><c:symbol val=\"none\"/></c:marker>";
@@ -46,11 +46,11 @@ fn a_hundred_percent_stacked_line_series_in_a_combo_chart_keeps_its_kind_when_sa
         ser(0),
         ser(1)
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.kind, ChartKind::Combo);
     assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), [Some(ChartKind::ColumnClustered), Some(ChartKind::LineStacked100Markers)]);
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
-    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
     let kinds: Vec<Option<ChartKind>> = again.series.iter().map(|s| s.kind).collect();
     assert_eq!(kinds.first(), Some(&Some(ChartKind::ColumnClustered)), "{saved}");
     assert_eq!(kinds, [Some(ChartKind::ColumnClustered), Some(ChartKind::LineStacked100Markers)], "{saved}");
@@ -76,11 +76,11 @@ fn combo_line_series_keep_their_order_and_share_one_percent_stack_when_saved() {
     );
     let want =
         [Some(ChartKind::ColumnClustered), Some(ChartKind::LineStacked100Markers), Some(ChartKind::LineStacked100), Some(ChartKind::LineStacked100)];
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want);
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
     assert_eq!(saved.matches("percentStacked").count(), 1, "both 100% stacked series share one stack: {saved}");
-    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(again.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want, "{saved}");
 }
 
@@ -96,10 +96,10 @@ fn a_hundred_percent_stacked_line_on_the_secondary_axis_keeps_its_kind_when_save
         ser(0),
         ser(1)
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert!(ch.series.get(1).is_some_and(|s| s.secondary && s.kind == Some(ChartKind::LineStacked100Markers)));
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
-    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
     let got: Vec<(Option<ChartKind>, bool)> = again.series.iter().map(|s| (s.kind, s.secondary)).collect();
     assert_eq!(got, [(Some(ChartKind::ColumnClustered), false), (Some(ChartKind::LineStacked100Markers), true)], "{saved}");
 }
@@ -122,7 +122,7 @@ fn secondary_columns_and_hundred_percent_stacked_lines_keep_their_kinds_when_sav
         ser(2, ""),
         ser(3, NO_MARKER)
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     let want = [
         (Some(ChartKind::ColumnClustered), false),
         (Some(ChartKind::ColumnClustered), true),
@@ -131,7 +131,7 @@ fn secondary_columns_and_hundred_percent_stacked_lines_keep_their_kinds_when_sav
     ];
     assert_eq!(ch.series.iter().map(|s| (s.kind, s.secondary)).collect::<Vec<_>>(), want);
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
-    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(again.series.iter().map(|s| (s.kind, s.secondary)).collect::<Vec<_>>(), want, "{saved}");
 }
 
@@ -149,12 +149,12 @@ fn a_hundred_percent_stacked_line_group_with_mixed_markers_keeps_each_series_mar
     );
     // A 100% stacked line chart with markers; the second series keeps its own lack of them.
     let want = [None, Some(ChartKind::LineStacked100)];
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.kind, ChartKind::LineStacked100Markers);
     assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want);
     assert_eq!(ch.series_kinds(), [ChartKind::LineStacked100Markers, ChartKind::LineStacked100]);
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
-    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+    let again = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(again.kind, ChartKind::LineStacked100Markers, "{saved}");
     assert_eq!(again.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want, "{saved}");
 }
@@ -174,7 +174,7 @@ fn a_hundred_percent_stacked_line_group_after_a_stacked_one_on_the_same_axes_is_
         ser(0),
         ser(1)
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.series_kinds(), [ChartKind::LineStacked, ChartKind::LineStacked]);
     let saved = write_chart(&Workbook::default(), 0, &ch, "Book1");
     assert!(!saved.contains("percentStacked"), "{saved}");

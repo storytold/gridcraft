@@ -56,6 +56,9 @@ fn filter_operator(op: &str) -> &'static str {
     }
 }
 
+const GC_FILTER_EXT_URI: &str = "{D7C4E9A1-2943-4B8E-9A11-6F8B2C4D5E01}";
+const GC_FILTER_NS: &str = "https://gridcraft.app/ns/spreadsheetml/2026/filter";
+
 pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
     if criteria.is_empty() {
@@ -66,7 +69,7 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
     for (col, c) in criteria {
         let _ = write!(s, "<filterColumn colId=\"{col}\">");
         match c {
-            FilterCriterion::Values { values, blanks } => {
+            FilterCriterion::Values { values, blanks, .. } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
@@ -105,6 +108,24 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
             }
         }
         s.push_str("</filterColumn>");
+    }
+    let ext_cols: Vec<(u32, &[String])> = criteria
+        .iter()
+        .filter_map(|(col, c)| match c {
+            FilterCriterion::Values { identities, .. } if !identities.is_empty() => Some((*col, identities.as_slice())),
+            _ => None,
+        })
+        .collect();
+    if !ext_cols.is_empty() {
+        let _ = write!(s, "<extLst><ext uri=\"{GC_FILTER_EXT_URI}\" xmlns:gc=\"{GC_FILTER_NS}\"><gc:identities>");
+        for (col, ids) in ext_cols {
+            let _ = write!(s, "<gc:col colId=\"{col}\">");
+            for id in ids {
+                let _ = write!(s, "<gc:i v=\"{}\"/>", esc_attr(id));
+            }
+            s.push_str("</gc:col>");
+        }
+        s.push_str("</gc:identities></ext></extLst>");
     }
     s.push_str("</autoFilter>");
     s
