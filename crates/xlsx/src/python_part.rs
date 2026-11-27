@@ -47,10 +47,12 @@ pub const MAX_CODE_BYTES: usize = 64 * 1024 * 1024;
 /// The scripts read from a workbook's Python part, and what the cells took from them.
 #[derive(Default)]
 pub struct ScriptsIn {
-    scripts: Vec<String>,
+    /// Each script's code, `None` for a script whose code the parser dropped at the element cap:
+    /// a cell naming it keeps only its value, as for a script the part doesn't hold.
+    scripts: Vec<Option<String>>,
     /// Bytes of code the cells may still take ([`MAX_CODE_BYTES`] in all).
     budget: usize,
-    /// Python cells that kept only their value: no such script, or over the budget.
+    /// Python cells that kept only their value: no such script or code, or over the budget.
     missing: usize,
 }
 
@@ -89,21 +91,38 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
         }
     };
     let mut over = 0usize;
-    let parsed = xml::parse_streaming(&bytes, &["pythonScript"], &mut |el: El| {
+    let parsed = xml::parse_streaming(&bytes, SCRIPTS, &mut |el: El| {
         if out.scripts.len() < MAX_SCRIPTS {
-            out.scripts.push(script_code(&el));
+            // A script that lost a `code` at the element cap and kept no code after it (none, or an
+            // empty one) counts as missing code. One that lost no code and has none, or an empty
+            // one, reads as empty code, as before.
+            let code = script_code(&el);
+            out.scripts.push((!el.lost(SCRIPTS.children, "code") || !code.is_empty()).then_some(code));
         } else {
             over += 1;
         }
         Ok(())
     });
-    match parsed {
-        Ok(root) if root.name != "python" => {
+    let (dropped, unlisted) = match parsed {
+        Ok(xml::Streamed { root, .. }) if root.name != "python" => {
             cx.warn(format!("the Python part has the root <{}>; Python cells kept only their values", root.name));
             out.scripts.clear();
+            (0, 0)
         }
-        Ok(_) => {}
-        Err(e) => cx.warn(format!("the Python part is damaged ({e}); kept {} scripts", out.scripts.len())),
+        Ok(s) => (s.dropped, s.unlisted),
+        Err(f) => {
+            cx.warn(format!("the Python part is damaged ({}); kept {} scripts", f.error, out.scripts.len()));
+            (f.dropped, f.unlisted)
+        }
+    };
+    if dropped > 0 {
+        cx.warn(format!(
+            "the Python part: dropped {dropped} element(s), counting what they held, that a script may not hold (a second code, unknown elements, or more elements than a part may hold); a script that lost its code and kept no code after it counts as missing"
+        ));
+    }
+    // Unknown children that fit are read with their script but not kept: a save writes only the code.
+    if unlisted > 0 {
+        cx.warn(format!("the Python part: {unlisted} element(s) GridCraft does not read (unknown elements) were left out and will not be saved"));
     }
     if over > 0 {
         cx.warn(format!("the Python part holds more than {MAX_SCRIPTS} scripts; {over} were not read"));
@@ -117,6 +136,10 @@ pub fn read(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<ScriptsIn,
 /// `2 × (MAX_SCRIPT_CHARS + 1)` decoded characters cover the code kept, and two more escapes'
 /// worth keep the last of them, and the line break after it, from being cut.
 const MAX_ENCODED_CHARS: usize = 14 * (2 * (MAX_SCRIPT_CHARS + 1) + 2);
+
+/// The part is streamed one `pythonScript` at a time; a script's code is its first `code` child,
+/// the only one read, so one is all a script element keeps.
+const SCRIPTS: xml::Streaming<'static> = xml::Streaming { split: &["pythonScript"], children: &[("code", 1)] };
 
 /// A `pythonScript` element's code (ST_Xstring), with `\n` line breaks, cut after
 /// [`MAX_SCRIPT_CHARS`] characters. The limit is measured on the decoded code, so escapes in the
@@ -163,8 +186,9 @@ pub enum PyFormula {
     Not,
     /// A Python cell with this code.
     Code(PyCode),
-    /// A `PY(index, …)` call naming a script the part doesn't hold (or over the budget): the
-    /// cell keeps only its cached value, since no calculation can evaluate the formula.
+    /// A `PY(index, …)` call naming a script the part doesn't hold (or whose code was dropped, or
+    /// over the budget): the cell keeps only its cached value, since no calculation can evaluate
+    /// the formula.
     Missing,
 }
 
@@ -180,7 +204,7 @@ pub fn cell_code(scripts: &mut ScriptsIn, formula: &gridcraft_model::Formula, ra
     let Some((index, object, params)) = expr.as_deref().and_then(py_call) else {
         return PyCode::from_formula(raw).map_or(PyFormula::Not, PyFormula::Code);
     };
-    let code = scripts.scripts.get(index).map(|code| with_params(code, params));
+    let code = scripts.scripts.get(index).and_then(Option::as_deref).map(|code| with_params(code, params));
     match code.filter(|c| c.len() <= scripts.budget) {
         Some(code) => {
             scripts.budget -= code.len();
@@ -267,7 +291,7 @@ mod tests {
     }
 
     fn scripts(list: &[&str]) -> ScriptsIn {
-        ScriptsIn { scripts: list.iter().map(|s| s.to_string()).collect(), budget: MAX_CODE_BYTES, missing: 0 }
+        ScriptsIn { scripts: list.iter().map(|s| Some(s.to_string())).collect(), budget: MAX_CODE_BYTES, missing: 0 }
     }
 
     #[test]
@@ -297,7 +321,7 @@ mod tests {
     fn hostile_scripts_are_bounded() {
         // Many formulas naming one script take from one budget.
         let code = "x".repeat(1_000);
-        let mut s = ScriptsIn { scripts: vec![code], budget: 2_500, missing: 0 };
+        let mut s = ScriptsIn { scripts: vec![Some(code)], budget: 2_500, missing: 0 };
         let f = formula("_xlfn._xlws.PY(0,0)");
         let taken = (0..5).filter(|_| matches!(cell_code(&mut s, &f, ""), PyFormula::Code(_))).count();
         assert_eq!(taken, 2);
@@ -324,10 +348,11 @@ mod tests {
         let xml = write(&codes);
         assert!(xml.contains(NS) && xml.contains("<pythonScripts><pythonScript><code>a = 1\nb = \"two\" &amp; 'three' &lt;tag&gt;</code>"), "{xml}");
         let mut read = Vec::new();
-        let root = xml::parse_streaming(xml.as_bytes(), &["pythonScript"], &mut |el| {
+        let root = xml::parse_streaming(xml.as_bytes(), SCRIPTS, &mut |el| {
             read.push(script_code(&el));
             Ok(())
         })
+        .map(|s| s.root)
         .unwrap_or_default();
         assert_eq!(root.name, "python");
         assert_eq!(read, codes);

@@ -61,6 +61,21 @@ struct RowState {
     /// The cell being read lost its shared formula to a copy limit: its cached value is kept, even
     /// inside an array range (where a formula's cached values otherwise give way to the spill).
     shared_copy_refused: bool,
+    /// Cells and row properties read again where one was already read (see `read_craft_row`).
+    repeated: u64,
+    /// Cells placed out of column order or in another row's element.
+    elsewhere: u64,
+    /// The furthest cell read so far, in row-major order.
+    furthest: Option<CellRef>,
+    /// One bit per column: the columns of its own row the row elements read since the row number
+    /// last changed have held.
+    seen: Vec<u64>,
+    /// The row number of the row elements whose cells `seen` holds.
+    seen_row: Option<u32>,
+    /// How many of `seen`'s words, from the first, may hold a bit.
+    seen_words: usize,
+    /// Cell texts longer than Excel allows, counted as they are read (see `read_craft_cell`).
+    long: u64,
 }
 
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
@@ -182,7 +197,7 @@ fn from_craft_el(e: &craft_xml::El) -> El {
             craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
-    El { name, attrs, children, text }
+    El { name, attrs, children, text, cut: 0 }
 }
 
 fn to_range_ref(r: craft_xlsx::Range) -> RangeRef {
@@ -261,6 +276,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         cx.warn(w);
     }
     settle_python_spills_past_budget(&st, &mut sheet);
+    warn_row_state(cx, name, &st);
 
     apply_craft_sheet_part(cx, &sheet_part, &rels, name, too_many_merges, &mut sheet)?;
     let root = from_craft_el(&sheet_part.root);
@@ -721,6 +737,33 @@ fn read_protected_ranges(e: &El, sheet: &mut Sheet) {
     }
 }
 
+/// Says what the rows of sheet `name` read twice, placed elsewhere or read past Excel's length.
+fn warn_row_state(cx: &mut Ctx<'_>, name: &str, st: &RowState) {
+    if st.repeated > 0 {
+        // A later cell or row is read again where the earlier one was, as on main, which mostly
+        // leaves the last one read; not always: a cell repeating a picture cell's address replaces
+        // the cell's value, but the picture stays and is what is saved, and an empty cell repeating
+        // a value in a Python cell's spill leaves that value.
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell(s), or a row's properties, repeated an address or row already read; the later ones were read again",
+            st.repeated
+        ));
+    }
+    if st.elsewhere > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell(s) sat out of column order, or in another row's element, and were placed where their addresses say",
+            st.elsewhere
+        ));
+    }
+    if st.long > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell text(s) longer than Excel's limit of {} UTF-16 units were read; they were not cut to that length",
+            st.long,
+            gridcraft_core::MAX_CELL_CHARS
+        ));
+    }
+}
+
 /// Charges `n` cell elements against the workbook's [`MAX_CELLS`].
 fn charge_cells(cx: &mut Ctx<'_>, n: u64) -> Result<(), IoError> {
     cx.cells = cx.cells.saturating_add(n);
@@ -745,30 +788,99 @@ fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &
     if let Some(s) = row.style {
         info.style = Some(cx.style(Some(s)));
     }
-    if info != LineInfo::default() {
-        sheet.rows.insert(r, info);
+    // A row whose properties replace ones already read is counted. A repeated row without
+    // properties leaves the earlier ones, as on main, and isn't counted.
+    if info != LineInfo::default() && sheet.rows.insert(r, info).is_some() {
+        st.repeated = st.repeated.saturating_add(1);
+    }
+    // The rightmost column of the cells this row element has held so far: a cell not to its right
+    // is out of column order.
+    let mut rightmost: Option<u32> = None;
+    st.seen.resize(MAX_COLS.div_ceil(64) as usize, 0);
+    // A row element with another row number than the one before starts with no column held: the
+    // words the earlier ones may have set are cleared. Row elements of the same number in a row
+    // share the bits, so a cell repeating one of an earlier element for its row is seen.
+    if st.seen_row != Some(r) {
+        st.seen.iter_mut().take(st.seen_words).for_each(|w| *w = 0);
+        st.seen_row = Some(r);
+        st.seen_words = 0;
     }
     for c in &row.cells {
         charge_cells(cx, 1).map_err(|e| craft_xlsx::Error::TooLarge(e.to_string()))?;
         let pos = CellRef::new(c.at.row, c.at.col);
+        // Every cell is placed where its address says. A cell of this row element's own row at a
+        // column held already, by this element or by an element for the same row right before it,
+        // repeats it, whatever the reader stored for it. Past that, a cell at the furthest position
+        // read so far, in row-major order, repeats it; one before it repeats an address when a
+        // cell, a cell picture or a Python spill value is stored there. So a cell the reader stores
+        // nothing for (such as a blank cell without a style or a value inside another formula's array) is
+        // seen repeated by a cell of its own row in a later row element only when no element for
+        // another row came between them, or at the furthest position read so far; elsewhere it is
+        // counted as out of order when it is, or not at all. A cell of the element's own row takes
+        // one bit test; only a cell that isn't past the furthest one (never, in a file Excel
+        // wrote) is looked up, in up to three maps.
+        let past = st.furthest.is_none_or(|f| pos > f);
+        let (word, bit) = ((pos.col / 64) as usize, 1u64 << (pos.col % 64));
+        let mut held = false;
+        if pos.row == r
+            && let Some(w) = st.seen.get_mut(word)
+        {
+            held = *w & bit != 0;
+            *w |= bit;
+        }
+        let repeat = held
+            || !past
+                && (st.furthest == Some(pos)
+                    || sheet.cells.get(pos).is_some()
+                    || sheet.cell_pictures.contains_key(&pos)
+                    || sheet.spill.contains_key(&pos));
+        if repeat {
+            st.repeated = st.repeated.saturating_add(1);
+        } else if pos.row != r || rightmost.is_some_and(|m| pos.col <= m) {
+            // Out of column order, or naming another row than the one it sits in: placed where
+            // its address says, as it always has been, and said.
+            st.elsewhere = st.elsewhere.saturating_add(1);
+        }
+        if past {
+            st.furthest = Some(pos);
+        }
+        rightmost = rightmost.max(Some(pos.col));
         read_craft_cell(cx, sheet, st, c, pos);
+    }
+    // The words up to the rightmost cell's hold every bit this element's cells set.
+    if let Some(m) = rightmost {
+        st.seen_words = st.seen_words.max(((m / 64) as usize).saturating_add(1));
     }
     Ok(())
 }
 
 fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &craft_xlsx::Cell, pos: CellRef) {
     let style = cx.style((c.style != 0).then_some(c.style));
+    // Text longer than Excel allows is kept whole, since cutting it would lose the user's data at
+    // the next save; it is counted for the warning as the cell is read (see below).
+    let mut long = false;
     let value = match &c.value {
         CraftValue::Empty => Value::Empty,
-        CraftValue::Shared(i) => match cx.sst.get(*i as usize) {
-            Some(s) => Value::Text(s.clone()),
+        CraftValue::Shared(i) => match cx.sst.get(*i as usize).and_then(Option::as_ref) {
+            Some(s) => {
+                // A text within the limit in bytes is within it in units; only longer ones are looked up.
+                long = s.len() > gridcraft_core::MAX_CELL_CHARS as usize && cx.long_strings.contains(&(*i as usize));
+                Value::Text(s.clone())
+            }
+            // Past the table, or a string that lost text at the element cap and kept none.
             None => {
                 cx.warn("some cells refer to missing shared strings");
                 Value::Empty
             }
         },
-        CraftValue::Text(t) => Value::Text(t.as_ref().into()),
-        CraftValue::Inline(s) => Value::Text(s.text.as_ref().into()),
+        CraftValue::Text(t) => {
+            long = xml::exceeds_cell_text(t);
+            Value::Text(t.as_ref().into())
+        }
+        CraftValue::Inline(s) => {
+            long = xml::exceeds_cell_text(&s.text);
+            Value::Text(s.text.as_ref().into())
+        }
         CraftValue::Bool(b) => Value::Bool(*b),
         CraftValue::Error(e) => Value::Error(map_craft_error(*e)),
         CraftValue::Date(d) => match parse_iso_datetime(d, cx.date_system) {
@@ -827,6 +939,10 @@ fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &c
     let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
     let value = match spilled_from {
         Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
+            // A Python cell's spilled text is kept and saved, so a long one counts.
+            if long && matches!(value, Value::Text(_)) {
+                st.long = st.long.saturating_add(1);
+            }
             if !value.is_empty() {
                 sheet.spill.insert(pos, value);
             }
@@ -842,6 +958,14 @@ fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &c
         && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
     {
         sheet.spill_ranges.insert(pos, *r);
+    }
+    // A long text is counted as the cell is read, so one that a later cell at the same address
+    // replaces is still counted. Not counted, since the cell doesn't keep them: a picture's
+    // fallback (returned above), a value inside another formula's array, and the cached result of
+    // a formula that parses, which opening the workbook calculates again (one that doesn't parse
+    // keeps its cached text, and is counted).
+    if long && formula.as_ref().is_none_or(|f| f.expr.is_none()) && matches!(value, Value::Text(_)) {
+        st.long = st.long.saturating_add(1);
     }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
@@ -1105,6 +1229,7 @@ mod tests {
             pkg,
             report: Default::default(),
             sst: vec![],
+            long_strings: Default::default(),
             phonetics: vec![],
             xf_map: vec![],
             dxfs: vec![],

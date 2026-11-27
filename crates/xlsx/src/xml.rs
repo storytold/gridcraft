@@ -1,8 +1,9 @@
-//! A small XML tree built on `quick-xml`, with streaming of repeated elements (worksheet rows,
-//! shared strings) so large parts never need a full tree, plus escaping helpers for writing.
+//! A small XML tree built on `quick-xml`, with streaming of repeated elements (shared strings,
+//! Python scripts) so large parts never need a full tree, plus escaping helpers for writing.
 
 use std::fmt::Write as _;
 
+use gridcraft_core::MAX_CELL_CHARS;
 use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
 use quick_xml::Reader;
 use quick_xml::XmlVersion;
@@ -16,7 +17,7 @@ pub const MAX_DEPTH: usize = 256;
 /// Most elements kept in one part's parsed XML tree: an emptied `El` costs well over a hundred
 /// bytes, so a highly-compressible part of endless empty elements could fit the package byte
 /// limit and still take gigabytes of tree before any semantic check ran. Parts whose big runs
-/// matter (worksheet rows, shared strings) are streamed instead and never hold this tree.
+/// matter (shared strings, Python scripts) are streamed instead and never hold this tree.
 pub const MAX_XML_NODES: usize = 1_000_000;
 
 /// An element: local name (namespace prefix dropped), attributes by local name, children and
@@ -27,9 +28,26 @@ pub struct El {
     pub attrs: Vec<(String, String)>,
     pub children: Vec<El>,
     pub text: String,
+    /// Non-zero on a streamed element when the parser dropped something inside it at the element
+    /// cap, other than a direct child of a name the caller doesn't list (nothing the caller reads):
+    /// what it hands over is then not all the part held. An element inside it that lost part of
+    /// what it held is dropped whole, so each child handed over is complete, and the streamed
+    /// element has the bit of that child's name set ([`El::lost`]): bit `i` for the caller's
+    /// listed name at place `i`, counted from 0 (the names at place 31 and on share the last bit).
+    pub cut: u32,
+}
+
+/// The bit in [`El::cut`] of the caller's listed child name at place `i`.
+fn listed_bit(i: usize) -> u32 {
+    1 << i.min(31)
 }
 
 impl El {
+    /// Whether this streamed element lost, at the element cap, a child named `name`, one of the
+    /// `children` it was streamed with ([`Streaming::children`]).
+    pub fn lost(&self, children: &[(&str, usize)], name: &str) -> bool {
+        self.cut != 0 && children.iter().position(|(n, _)| *n == name).is_some_and(|i| self.cut & listed_bit(i) != 0)
+    }
     pub fn attr(&self, k: &str) -> Option<&str> {
         self.attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
     }
@@ -210,7 +228,7 @@ fn named_entity(name: &str) -> Option<char> {
 
 /// Parses a whole part into a tree.
 pub fn parse(xml: &[u8]) -> Result<El, IoError> {
-    parse_streaming(xml, &[], &mut |_| Ok(()))
+    parse_streaming(xml, Streaming { split: &[], children: &[] }, &mut |_| Ok(())).map(|s| s.root).map_err(|f| f.error)
 }
 
 /// The first element named `local_name` (namespace prefix dropped) in `xml`, read from its start tag
@@ -236,11 +254,157 @@ pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
     }
 }
 
-/// Parses a part; complete elements named in `split` that are children or grandchildren of the
-/// root (`sst/si`, `worksheet/sheetData/row`) are handed to `cb` and not kept in the returned
-/// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the
-/// tree.
-pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+/// How a part is streamed: complete elements named in `split` that are children or grandchildren of
+/// the root (`sst/si`, `python/pythonScripts/pythonScript`; see [`is_streamed`]) are handed to the
+/// callback instead of being kept in the tree, and each of them holds no more direct children of a
+/// name than `children` allows for it. The caller lists every child the schema allows the element, each with
+/// its own allowance (`("phoneticPr", 1)`: the one phonetic properties element a shared string may
+/// carry; `("code", 1)`: the one code a Python script holds), so a name that is not listed is one
+/// the schema does not know: such a name is admitted once, and no more than
+/// [`MAX_UNLISTED_CHILD_NAMES`] of them at all. So a crafted part cannot grow one streamed element
+/// without bound through any name, nor make the counting itself slow, nor use up a listed name's
+/// allowance with another name (an unknown child whose own descendants fill the element cap can
+/// still leave no room for what follows it): a child past its allowance is kept out of the tree
+/// once parsed, with its subtree
+/// (which holds nothing streamed: streamed elements sit at depth 1 or 2), and counted in
+/// [`Streamed::dropped`]. What a streamed element holds at any depth is bounded by
+/// [`MAX_XML_NODES`]: an element that would go past it is dropped and counted the same way, and
+/// so is each element holding it up to the streamed element's own child, which is lost whole.
+/// Dropping an element gives what it held back to the count, so the streamed element's later
+/// children are kept while they fit under the cap, and the rest of the part is still read.
+#[derive(Clone, Copy)]
+pub struct Streaming<'a> {
+    pub split: &'a [&'a str],
+    pub children: &'a [(&'a str, usize)],
+}
+
+/// Most distinct child names not listed in [`Streaming::children`] one streamed element may hold.
+/// Every child the schema allows is listed by its caller, so an unlisted name is one the schema does
+/// not know (an extension a future schema might add, or an invention); a few are tolerated once
+/// each, and refusing the rest keeps the per-name count a scan of a handful of entries instead of
+/// one that grows with every invented name. A listed name is never refused for the names an
+/// element already holds, only for its own allowance or the element cap.
+pub const MAX_UNLISTED_CHILD_NAMES: usize = 4;
+
+/// Whether cell text is longer than Excel's limit of characters per cell ([`MAX_CELL_CHARS`]),
+/// counted in UTF-16 units (a character outside the Basic Multilingual Plane counts as two). A
+/// file Excel wrote never is; one that is gets kept whole, since cutting it would lose the user's
+/// data at the next save, and the caller warns about it.
+pub fn exceeds_cell_text(text: &str) -> bool {
+    let limit = MAX_CELL_CHARS as usize;
+    // A character takes at least as many UTF-8 bytes as UTF-16 units and at most three bytes per
+    // unit (three bytes are one unit, four bytes two), so only a text between those lengths in
+    // bytes needs counting.
+    if text.len() <= limit {
+        return false;
+    }
+    if text.len() > limit.saturating_mul(3) {
+        return true;
+    }
+    utf16_units(text) > limit
+}
+
+/// The number of UTF-16 units in `text`, counted from its bytes: each byte is one unit, except a
+/// continuation byte (`10xxxxxx`), which adds none, and the first byte of a four-byte character
+/// (`11110xxx`), the only one taking two units, which adds two. Counting in blocks into
+/// byte-sized counters (a block is shorter than 256 bytes, so they cannot overflow) lets the
+/// compiler count many bytes per instruction.
+#[inline(never)]
+fn utf16_units(text: &str) -> usize {
+    let (mut continuations, mut four_byte) = (0usize, 0usize);
+    for block in text.as_bytes().chunks(192) {
+        let (mut block_continuations, mut block_four_byte) = (0u8, 0u8);
+        for &byte in block {
+            block_continuations += u8::from(byte & 0xC0 == 0x80);
+            block_four_byte += u8::from(byte >= 0xF0);
+        }
+        continuations = continuations.saturating_add(usize::from(block_continuations));
+        four_byte = four_byte.saturating_add(usize::from(block_four_byte));
+    }
+    text.len().saturating_sub(continuations).saturating_add(four_byte)
+}
+
+/// What a streamed parse leaves behind: the tree without the streamed elements, how many
+/// elements inside streamed elements were dropped, for exceeding [`Streaming::children`] or
+/// [`MAX_XML_NODES`], and how many children of a name not listed there the streamed elements
+/// handed out held. The caller turns non-zero counts into import warnings.
+pub struct Streamed {
+    pub root: El,
+    pub dropped: u64,
+    pub unlisted: u64,
+}
+
+/// A streamed parse that failed part-way, with what it had dropped until then, so the caller can
+/// still say so.
+#[derive(Debug)]
+pub struct StreamFailure {
+    pub error: IoError,
+    pub dropped: u64,
+    pub unlisted: u64,
+}
+
+/// The parser's counts while it streams a part.
+#[derive(Default)]
+struct Tally {
+    // Elements kept in the tree so far, so a pathological part that passes the byte limits can
+    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
+    // are handed out with it and do not stay in the tree, so a shared-string table or Python part
+    // of any size passes: `kept_at_start` remembers, for each open element, the count when it
+    // began and, for a streamed one ([`is_streamed`], tested once, at its start tag), whether its
+    // name counts are open (`Some(true)`) in `child_counts`.
+    kept: usize,
+    kept_at_start: Vec<(usize, Option<bool>)>,
+    // Elements inside streamed elements dropped (for exceeding their name's allowance, or the
+    // element cap), and the counts by name of the open streamed elements that have met a name that
+    // needs one (innermost last): a string of text and runs alone never opens a count list.
+    dropped: u64,
+    child_counts: Vec<Vec<(Slot, usize)>>,
+    // Children of unlisted names the closed streamed elements held, from their counts.
+    unlisted: u64,
+    /// Emptied count lists, reused for the next streamed element instead of allocated per element.
+    spare: Vec<Vec<(Slot, usize)>>,
+}
+
+impl Tally {
+    /// Puts away the name counts of the streamed element that has just closed, for the next one.
+    /// Its unlisted children are added up first: an unlisted name is admitted once, and its entry
+    /// is removed when the child is then dropped at the element cap, so the counts add up to the
+    /// unlisted children the element holds.
+    fn close_streamed(&mut self) {
+        if let Some(mut counts) = self.child_counts.pop() {
+            let held = counts.iter().filter(|(slot, _)| matches!(slot, Slot::Unlisted(_))).map(|(_, n)| *n as u64).sum::<u64>();
+            self.unlisted = self.unlisted.saturating_add(held);
+            counts.clear();
+            self.spare.push(counts);
+        }
+    }
+}
+
+/// A child name a streamed element has met: one listed in [`Streaming::children`], by its place
+/// in the list, or one not listed, by name.
+enum Slot {
+    Listed(usize),
+    Unlisted(String),
+}
+
+/// Parses a part, streaming the elements `how` names to `cb`.
+pub fn parse_streaming(xml: &[u8], how: Streaming<'_>, cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<Streamed, StreamFailure> {
+    let mut tally = Tally::default();
+    match stream(xml, how, cb, &mut tally) {
+        Ok(root) => Ok(Streamed { root, dropped: tally.dropped, unlisted: tally.unlisted }),
+        Err(error) => Err(StreamFailure { error, dropped: tally.dropped, unlisted: tally.unlisted }),
+    }
+}
+
+/// Whether an element named `name` with `ancestors` elements above it is one `how` streams: a child or
+/// grandchild of the root (`sst/si`, `python/pythonScripts/pythonScript`) named in `split`. A deeper
+/// element of the same name is an ordinary element of the tree.
+fn is_streamed(how: Streaming<'_>, ancestors: usize, name: &str) -> bool {
+    // Names are compared byte by byte: they are a few bytes long, and this runs for every element.
+    (1..=2).contains(&ancestors) && how.split.iter().any(|s| s.bytes().eq(name.bytes()))
+}
+
+fn stream(xml: &[u8], how: Streaming<'_>, cb: &mut dyn FnMut(El) -> Result<(), IoError>, tally: &mut Tally) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
     {
@@ -254,34 +418,88 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
-    // Elements kept in the tree so far, so a pathological part that passes the byte limits can
-    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
-    // are handed out with it and do not stay in the tree, so a streamed worksheet or shared-string
-    // table of any size passes: `kept_at_start` remembers the count when each open element began.
-    let mut kept = 0usize;
-    let mut kept_at_start: Vec<usize> = Vec::new();
     // Attach a finished element to its parent (or emit it / make it the root).
     fn finish(
         stack: &mut [El],
         root: &mut Option<El>,
         el: El,
-        split: &[&str],
+        how: Streaming<'_>,
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
-        kept: &mut usize,
-        kept_at_start: Option<usize>,
+        tally: &mut Tally,
+        opened: Option<(usize, Option<bool>)>,
     ) -> Result<(), IoError> {
-        let shallow = stack.len() <= 2;
+        let children = how.children;
+        // An element that had a start tag carries what was noted then; an empty one is tested here.
+        let (kept_at_start, streamed) = match opened {
+            Some((k, streamed)) => (Some(k), streamed.is_some()),
+            None => (None, is_streamed(how, stack.len(), &el.name)),
+        };
+        // Dropping an element releases what it held: the count goes back to where it began.
+        let release = |tally: &mut Tally| {
+            if let Some(k) = kept_at_start {
+                tally.kept = k;
+            }
+        };
+        // A dropped element is counted with everything it held, and releases it.
+        let drop_whole = |tally: &mut Tally| {
+            let held = kept_at_start.map_or(0, |k| tally.kept.saturating_sub(k));
+            tally.dropped = tally.dropped.saturating_add(1).saturating_add(held as u64);
+            release(tally);
+        };
         match stack.last_mut() {
             Some(parent) => {
-                if shallow && split.contains(&el.name.as_str()) {
+                // A direct child of the streamed element, counted against its name's allowance, and
+                // its name's place in the caller's list, looked up once (byte by byte, as in
+                // `is_streamed`).
+                let direct = tally.kept_at_start.last().is_some_and(|&(_, counted)| counted.is_some());
+                let listed = if direct && !streamed { children.iter().position(|(n, _)| n.bytes().eq(el.name.bytes())) } else { None };
+                if streamed {
                     cb(el)?;
                     // The element and everything parsed inside it have left the tree.
-                    if let Some(k) = kept_at_start {
-                        *kept = k;
+                    release(tally);
+                } else if direct && !admit(tally, children, listed, &el.name) {
+                    // The streamed element already holds all a legitimate one can of this name:
+                    // the child is dropped with its subtree (which holds nothing streamed), all of
+                    // it counted.
+                    drop_whole(tally);
+                } else if (tally.kept >= MAX_XML_NODES || el.cut != 0)
+                    && let Some(&(began, _)) = tally.kept_at_start.iter().take(3).rev().find(|(_, streamed)| streamed.is_some())
+                {
+                    // Inside a streamed element (they sit at depth 1 or 2). If the cap was already
+                    // reached before the innermost open one (the one this element sits in) began,
+                    // nothing in it can be kept, so the part is refused, as one that streams nothing is.
+                    if began >= MAX_XML_NODES {
+                        return Err(IoError::Xml(format!("the part holds more than {MAX_XML_NODES} elements")));
                     }
+                    // Inside a streamed element that has filled the element cap, or an element that
+                    // lost part of what it held to the cap: this element is dropped with what it
+                    // holds, all of it counted, and the rest of the part is still read. Its parent
+                    // is marked, so whatever held it goes whole too, up to the streamed element,
+                    // which is handed out marked as cut, with the bit of its own child's name set.
+                    drop_whole(tally);
+                    // Read again: admitting this child may have just opened the parent's counts.
+                    if tally.kept_at_start.last().is_some_and(|&(_, counted)| counted == Some(true))
+                        && let Some(counts) = tally.child_counts.last_mut()
+                        && let Some(count) = slot_count(counts, listed, &el.name)
+                    {
+                        // Dropped at the cap, not for its allowance: the slot it took is free again,
+                        // and an unlisted name left holding no child gives back its place among the
+                        // names the element may hold.
+                        *count = count.saturating_sub(1);
+                        if listed.is_none() {
+                            counts.retain(|(slot, n)| *n > 0 || matches!(slot, Slot::Listed(_)));
+                        }
+                    }
+                    // A direct child of a name the caller doesn't list is nothing it reads: losing
+                    // it doesn't cut the streamed element. A listed one marks its name's bit there.
+                    parent.cut |= match (direct, listed) {
+                        (false, _) => 1,
+                        (true, Some(i)) => listed_bit(i),
+                        (true, None) => 0,
+                    };
                 } else {
-                    *kept = kept.saturating_add(1);
-                    if *kept > MAX_XML_NODES {
+                    tally.kept = tally.kept.saturating_add(1);
+                    if tally.kept > MAX_XML_NODES {
                         return Err(IoError::Xml(format!("the part holds more than {MAX_XML_NODES} elements")));
                     }
                     parent.children.push(el);
@@ -295,6 +513,53 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         }
         Ok(())
     }
+    // Counts one more child of `name` (`listed`: its place in the caller's list) for its parent,
+    // the innermost open streamed element; `false` when the element already holds all the
+    // allowance for that name (one, for a name not listed), or already holds as many unlisted
+    // names as a legitimate element can.
+    fn admit(tally: &mut Tally, children: &[(&str, usize)], listed: Option<usize>, name: &str) -> bool {
+        let allowance = listed.and_then(|i| children.get(i)).map_or(1, |(_, a)| *a);
+        // A name without a limit is never refused, so it needs no count.
+        if allowance == usize::MAX {
+            return true;
+        }
+        // The first child that needs a count opens the element's count list.
+        let Some((_, Some(counted))) = tally.kept_at_start.last_mut() else { return true };
+        if !*counted {
+            *counted = true;
+            let counts = tally.spare.pop().unwrap_or_default();
+            tally.child_counts.push(counts);
+        }
+        let Some(counts) = tally.child_counts.last_mut() else { return true };
+        if let Some(count) = slot_count(counts, listed, name) {
+            if *count >= allowance {
+                return false;
+            }
+            *count += 1;
+            return true;
+        }
+        // A name this element has not seen yet: a listed one gets its entry (unless its allowance
+        // is zero); an unlisted one only while the element has room for another unknown name.
+        let unlisted_names = counts.iter().filter(|(slot, _)| matches!(slot, Slot::Unlisted(_))).count();
+        if allowance == 0 || (listed.is_none() && unlisted_names >= MAX_UNLISTED_CHILD_NAMES) {
+            return false;
+        }
+        let slot = match listed {
+            Some(i) => Slot::Listed(i),
+            None => Slot::Unlisted(name.to_string()),
+        };
+        counts.push((slot, 1));
+        true
+    }
+    // The count of the slot `name` takes (`listed`: its place in the caller's list), if it has one.
+    fn slot_count<'a>(counts: &'a mut [(Slot, usize)], listed: Option<usize>, name: &str) -> Option<&'a mut usize> {
+        let (_, count) = counts.iter_mut().find(|(slot, _)| match (slot, listed) {
+            (Slot::Listed(i), Some(j)) => *i == j,
+            (Slot::Unlisted(n), None) => n == name,
+            _ => false,
+        })?;
+        Some(count)
+    }
     loop {
         let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
         match ev {
@@ -302,17 +567,22 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                 if stack.len() >= MAX_DEPTH {
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
-                stack.push(start_el(&e));
-                kept_at_start.push(kept);
+                let el = start_el(&e);
+                let streamed = is_streamed(how, stack.len(), &el.name).then_some(false);
+                stack.push(el);
+                tally.kept_at_start.push((tally.kept, streamed));
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
+                finish(&mut stack, &mut root, el, how, cb, tally, None)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    let at_start = kept_at_start.pop();
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
+                    let opened = tally.kept_at_start.pop();
+                    if let Some((_, Some(true))) = opened {
+                        tally.close_streamed();
+                    }
+                    finish(&mut stack, &mut root, el, how, cb, tally, opened)?;
                 }
             }
             Event::Text(t) => {
@@ -351,8 +621,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        let at_start = kept_at_start.pop();
-        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
+        let opened = tally.kept_at_start.pop();
+        if let Some((_, Some(true))) = opened {
+            tally.close_streamed();
+        }
+        finish(&mut stack, &mut root, el, how, cb, tally, opened)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
@@ -485,6 +758,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cell_text_limit_counts_utf16_units_not_bytes() {
+        let limit = MAX_CELL_CHARS as usize;
+        // Three bytes and one UTF-16 unit each: past the limit in bytes, well within it in units.
+        let euros = "€".repeat(20_000);
+        assert!(!exceeds_cell_text(&euros), "20,000 euro signs are 20,000 units");
+        let accents = "é".repeat(limit + 1);
+        assert!(exceeds_cell_text(&accents), "32,768 two-byte characters exceed");
+        let more_euros = "€".repeat(limit + 1);
+        assert!(exceeds_cell_text(&more_euros), "32,768 three-byte characters exceed");
+        // Four bytes and two UTF-16 units each.
+        let emoji = "😀".repeat(16_384);
+        assert!(exceeds_cell_text(&emoji), "16,384 emoji are 32,768 units");
+        let emoji_and_letter = format!("{}x", "😀".repeat(16_383));
+        assert!(!exceeds_cell_text(&emoji_and_letter), "16,383 emoji and a letter are 32,767 units");
+    }
+
+    #[test]
+    fn cell_text_limit_matches_utf16_count_at_the_boundaries() {
+        let limit = MAX_CELL_CHARS as usize;
+        let chars = ["a", "é", "€", "😀"];
+        let mut checked = 0;
+        for body in chars {
+            for tail in chars {
+                let (body_units, tail_units) = (body.encode_utf16().count(), tail.encode_utf16().count());
+                // Texts of `body` characters then up to three `tail` ones, whose units land on
+                // the limit, one either side of it and near the byte bounds.
+                for tails in 0..4 {
+                    let tail_total = tails * tail_units;
+                    for target in [limit - 1, limit, limit + 1, limit + 2] {
+                        let Some(rest) = target.checked_sub(tail_total) else { continue };
+                        let count = rest / body_units;
+                        for n in [count.saturating_sub(1), count, count + 1] {
+                            let text = format!("{}{}", body.repeat(n), tail.repeat(tails));
+                            let expected = text.encode_utf16().count() > limit;
+                            assert_eq!(exceeds_cell_text(&text), expected, "{n} of {body:?} then {tails} of {tail:?}");
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // The byte bounds themselves: exactly at the limit in bytes, and three bytes per unit.
+        for text in [
+            "a".repeat(limit),
+            "a".repeat(limit + 1),
+            "€".repeat(limit),
+            format!("{}a", "€".repeat(limit)),
+            format!("{}é", "€".repeat(limit - 1)),
+            format!("{}😀", "€".repeat(limit - 1)),
+            String::new(),
+        ] {
+            assert_eq!(exceeds_cell_text(&text), text.encode_utf16().count() > limit);
+            checked += 1;
+        }
+        assert!(checked > 500);
+    }
+
+    #[test]
     fn si_without_phonetics_is_written_exactly_as_before() {
         for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
             assert_eq!(si_body(s, None), t_el(s));
@@ -493,22 +824,162 @@ mod tests {
 
     #[test]
     fn a_streamed_part_may_hold_more_elements_than_the_cap() {
-        // A worksheet of ordinary size: 5001 rows of 100 cells is 1,000,200 `c` and `v` elements,
-        // more than the cap, but the rows are streamed out one by one and never pile up in the
+        // 5001 streamed elements of 100 children each is 1,000,200 `c` and `v` elements, more than
+        // the cap, but the streamed elements are handed out one by one and never pile up in the
         // tree, so the part is read whole. Kept in a tree (no split), the same part is refused.
         let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(100));
         let xml = format!("<sheetData>{}</sheetData>", row.repeat(5001));
         let mut rows = 0usize;
-        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |r| {
+        let streamed = parse_streaming(xml.as_bytes(), Streaming { split: &["row"], children: &[("c", usize::MAX)] }, &mut |r| {
             assert_eq!(r.children.len(), 100);
             rows += 1;
             Ok(())
         })
         .unwrap();
         assert_eq!(rows, 5001);
-        assert!(root.children.is_empty());
+        assert!(streamed.root.children.is_empty());
+        assert_eq!(streamed.dropped, 0);
         let err = parse(xml.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    fn a_streamed_element_keeps_exactly_its_limit_of_children_and_drops_the_rest() {
+        // Exactly the limit: nothing dropped, every child kept. One more: the extra child is
+        // dropped and counted, the element keeps exactly the limit, and the parse goes on with the
+        // next streamed element untouched.
+        let how = Streaming { split: &["row"], children: &[("c", 3)] };
+        let full = b"<sheetData><row><c>1</c><c>2</c><c>3</c></row><row><c>4</c></row></sheetData>";
+        let mut seen = Vec::new();
+        let s = parse_streaming(full, how, &mut |r| {
+            seen.push(r.children.iter().map(|c| c.text.clone()).collect::<Vec<_>>());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, [vec!["1", "2", "3"], vec!["4"]]);
+        assert_eq!(s.dropped, 0);
+        let over = b"<sheetData><row><c>1</c><c>2</c><c>3</c><c>4</c></row><row><c>5</c><c>6</c><c>7</c><c>8</c><c>9</c></row></sheetData>";
+        let mut seen = Vec::new();
+        let s = parse_streaming(over, how, &mut |r| {
+            seen.push(r.children.iter().map(|c| c.text.clone()).collect::<Vec<_>>());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, [vec!["1", "2", "3"], vec!["5", "6", "7"]]);
+        assert_eq!(s.dropped, 3);
+        // The limit is on the streamed element's own children, by name: deeper nesting is not
+        // counted, elements outside the streamed ones are not limited at all, and a name not
+        // listed is allowed once (the second `extLst` is dropped).
+        let deep = b"<sheetData><cols><col/><col/><col/><col/><col/></cols><row><c><f/><v/><is/><x/></c><extLst/><extLst/></row></sheetData>";
+        let mut names = Vec::new();
+        let s = parse_streaming(deep, how, &mut |r| {
+            names = r.children.iter().map(|c| c.name.clone()).collect();
+            assert_eq!(r.children[0].children.len(), 4);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(names, ["c", "extLst"]);
+        assert_eq!(s.dropped, 1);
+        assert_eq!(s.root.child("cols").map(|c| c.children.len()), Some(5));
+    }
+
+    #[test]
+    fn a_streamed_element_holds_only_a_handful_of_unlisted_child_names() {
+        // Four invented names are admitted once each; the fifth and every later one is dropped
+        // and counted. The listed name is still admitted up to its own allowance after a
+        // thousand invented ones.
+        let mut row = String::from("<row>");
+        for i in 0..1000 {
+            row.push_str(&format!("<unknown{i}/>"));
+        }
+        row.push_str("<c/><c/><c/><c/></row>");
+        let xml = format!("<sheetData>{row}{row}</sheetData>");
+        let mut kept = Vec::new();
+        let s = parse_streaming(xml.as_bytes(), Streaming { split: &["row"], children: &[("c", 3)] }, &mut |r| {
+            kept.push(r.children.iter().map(|c| c.name.clone()).collect::<Vec<String>>());
+            Ok(())
+        })
+        .unwrap();
+        let mut expected: Vec<String> = (0..MAX_UNLISTED_CHILD_NAMES).map(|i| format!("unknown{i}")).collect();
+        expected.extend(["c", "c", "c"].map(String::from));
+        assert_eq!(kept, [expected.clone(), expected]);
+        assert_eq!(s.dropped, 2 * ((1000 - MAX_UNLISTED_CHILD_NAMES as u64) + 1));
+    }
+
+    #[test]
+    fn an_unlisted_name_dropped_at_the_element_cap_frees_its_place_among_the_names() {
+        // Four invented names each hold the element cap's worth of elements and are dropped at it,
+        // whole: the first row holds none of them, so a fifth invented name after them is admitted
+        // and counted as an unlisted child. A row that keeps four invented names still refuses a
+        // fifth.
+        let many = "<x/>".repeat(MAX_XML_NODES);
+        let crossing: String = (0..MAX_UNLISTED_CHILD_NAMES).map(|i| format!("<crossing{i}>{many}</crossing{i}>")).collect();
+        let four: String = (0..MAX_UNLISTED_CHILD_NAMES).map(|i| format!("<kept{i}/>")).collect();
+        let xml = format!("<sheetData><row><c/>{crossing}<fifth/></row><row>{four}<fifth/></row></sheetData>");
+        let mut kept = Vec::new();
+        let s = parse_streaming(xml.as_bytes(), Streaming { split: &["row"], children: &[("c", 1)] }, &mut |r| {
+            kept.push(r.children.iter().map(|c| c.name.clone()).collect::<Vec<String>>());
+            Ok(())
+        })
+        .unwrap();
+        let second: Vec<String> = (0..MAX_UNLISTED_CHILD_NAMES).map(|i| format!("kept{i}")).collect();
+        assert_eq!(kept, [vec!["c".to_string(), "fifth".to_string()], second]);
+        assert_eq!(s.unlisted, 1 + MAX_UNLISTED_CHILD_NAMES as u64);
+    }
+
+    #[test]
+    fn dropped_children_do_not_count_against_the_element_cap() {
+        // One streamed element stuffed with more `c` children than the element cap, each with a `v`
+        // inside: the excess is dropped as it is parsed, counted with what it holds, and the elements
+        // counted while each dropped child was open are counted back out, so the element keeps the
+        // ten its allowance lets through, and the `d` after them, instead of reaching the cap and
+        // dropping it.
+        let xml = format!("<sheetData><row>{}<d/></row></sheetData>", "<c><v>1</v></c>".repeat(MAX_XML_NODES + 1));
+        let mut rows = 0;
+        let s = parse_streaming(xml.as_bytes(), Streaming { split: &["row"], children: &[("c", 10), ("d", 1)] }, &mut |r| {
+            assert_eq!(r.children.len(), 11);
+            assert_eq!(r.cut, 0);
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(s.dropped, 2 * (MAX_XML_NODES as u64 + 1 - 10));
+    }
+
+    #[test]
+    fn a_limited_child_lost_at_the_cap_frees_its_place_for_a_later_one() {
+        // The first `code` is the first child that needs a count, and it crosses the cap: it is
+        // dropped and gives its place back, so the second `code` is kept.
+        let xml = format!("<p><s><code>{}</code><code>kept</code></s></p>", "<x/>".repeat(MAX_XML_NODES));
+        let mut kept = Vec::new();
+        parse_streaming(xml.as_bytes(), Streaming { split: &["s"], children: &[("code", 1)] }, &mut |s| {
+            kept = s.children.iter().map(|c| c.text.clone()).collect();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(kept, ["kept"]);
+    }
+
+    #[test]
+    fn a_streamed_element_says_which_listed_children_it_lost_at_the_element_cap() {
+        // Each string loses one part at the cap: a run whose `t` holds the crossing element (lost
+        // through what it held), a phonetic run that crosses it directly, an unlisted child (which
+        // cuts nothing), and nothing at all. The names it lost are the ones `lost` reports.
+        let many = "<x/>".repeat(MAX_XML_NODES);
+        let how = Streaming { split: &["si"], children: &[("t", usize::MAX), ("phoneticPr", 1), ("r", usize::MAX), ("rPh", usize::MAX)] };
+        let xml = format!(
+            "<sst><si><t>a</t><r><t>{many}</t></r></si><si><t>a</t><rPh>{many}</rPh></si><si><t>a</t><extra>{many}</extra></si><si><t>a</t></si></sst>"
+        );
+        let mut seen = Vec::new();
+        parse_streaming(xml.as_bytes(), how, &mut |si| {
+            let lost: Vec<&str> = how.children.iter().map(|(name, _)| *name).filter(|name| si.lost(how.children, name)).collect();
+            seen.push((si.cut != 0, lost.join(",")));
+            Ok(())
+        })
+        .unwrap();
+        let expected = [(true, "r"), (true, "rPh"), (false, ""), (false, "")];
+        assert_eq!(seen, expected.map(|(cut, lost)| (cut, lost.to_string())));
     }
 
     #[test]
@@ -517,6 +988,83 @@ mod tests {
         let xml = format!("<r>{}<y/></r>", "<x/>".repeat(MAX_XML_NODES + 1));
         let err = parse(xml.as_bytes()).unwrap_err();
         assert!(err.to_string().contains("elements"), "{err}");
+    }
+
+    #[test]
+    fn elements_past_the_cap_after_a_streamed_element_are_refused() {
+        // A streamed element's count list closes at its end tag, so elements past the cap outside
+        // any streamed element are refused, as in a part that streams nothing, not dropped.
+        let xml = format!("<sst><si><t>a</t></si>{}</sst>", "<x/>".repeat(MAX_XML_NODES + 1));
+        let mut strings = 0;
+        let parsed = parse_streaming(xml.as_bytes(), Streaming { split: &["si"], children: &[("t", 1)] }, &mut |_| {
+            strings += 1;
+            Ok(())
+        });
+        let Err(failure) = parsed else { panic!("a part past the element cap is refused") };
+        assert!(failure.error.to_string().contains("elements"), "{}", failure.error);
+        assert_eq!(strings, 1);
+    }
+
+    #[test]
+    fn a_part_whose_cap_is_filled_before_its_streamed_elements_is_refused() {
+        // The tree outside the strings already holds the cap when the first string begins: its
+        // text can't be kept, so the part is refused, as one that streams nothing is, instead of
+        // handing out strings that each lost their text. An empty string loses nothing and passes,
+        // as on main: the cap bounds the elements the parser holds, and an empty streamed element
+        // holds none.
+        let filler = "<x/>".repeat(MAX_XML_NODES);
+        let how = Streaming { split: &["si"], children: &[("t", usize::MAX)] };
+        let mut strings = 0;
+        let xml = format!("<sst>{filler}<si/><si><t>alpha</t></si><si><t>beta</t></si></sst>");
+        let parsed = parse_streaming(xml.as_bytes(), how, &mut |_| {
+            strings += 1;
+            Ok(())
+        });
+        let Err(failure) = parsed else { panic!("a part whose cap is filled outside its strings is refused") };
+        assert!(failure.error.to_string().contains("elements"), "{}", failure.error);
+        assert_eq!(strings, 1, "only the empty string is handed out");
+    }
+
+    #[test]
+    fn strings_that_hold_no_element_are_handed_out_with_the_cap_full_as_on_main() {
+        // With the tree outside the strings at the cap, or one under it, a string holding no
+        // element (self-closing, open and closed, or whitespace only) is handed out with nothing
+        // in it, and so is each of three in a row: the cap bounds the elements the parser holds,
+        // and such a string holds none. One under the cap, a string's text still fits.
+        let how = Streaming { split: &["si"], children: &[("t", usize::MAX)] };
+        for (fill, strings, expected) in [
+            (MAX_XML_NODES, "<si></si>", vec![""]),
+            (MAX_XML_NODES, "<si> </si>", vec![""]),
+            (MAX_XML_NODES - 1, "<si/><si><t>alpha</t></si>", vec!["", "alpha"]),
+            (MAX_XML_NODES, "<si/><si></si><si/>", vec!["", "", ""]),
+        ] {
+            let xml = format!("<sst>{}{strings}</sst>", "<x/>".repeat(fill));
+            let mut seen = Vec::new();
+            parse_streaming(xml.as_bytes(), how, &mut |si| {
+                assert_eq!(si.cut, 0, "{strings}");
+                seen.push(rich_text(&si));
+                Ok(())
+            })
+            .unwrap_or_else(|f| panic!("{strings} at {fill}: {}", f.error));
+            assert_eq!(seen, expected, "{strings} at {fill}");
+        }
+    }
+
+    #[test]
+    fn a_streamed_element_that_begins_inside_another_with_the_cap_full_is_refused() {
+        // The outer string's runs fill the cap, and the string inside it begins with the cap
+        // already full: its text can't be kept, so the part is refused, as on main, instead of
+        // handing out an inner string that lost its text.
+        let xml = format!("<sst><si>{}<si><t>inner</t></si></si></sst>", "<r/>".repeat(MAX_XML_NODES));
+        let how = Streaming { split: &["si"], children: &[("t", usize::MAX), ("r", usize::MAX)] };
+        let mut strings = 0;
+        let parsed = parse_streaming(xml.as_bytes(), how, &mut |_| {
+            strings += 1;
+            Ok(())
+        });
+        let Err(failure) = parsed else { panic!("a part whose cap is filled before an inner string begins is refused") };
+        assert!(failure.error.to_string().contains("elements"), "{}", failure.error);
+        assert_eq!(strings, 0);
     }
 
     #[test]
@@ -578,14 +1126,40 @@ mod tests {
     fn streaming_split() {
         let x = b"<r><row n='1'/><row n='2'><c/></row><other/></r>";
         let mut n = 0;
-        let root = parse_streaming(x, &["row"], &mut |e| {
+        let root = parse_streaming(x, Streaming { split: &["row"], children: &[("c", usize::MAX)] }, &mut |e| {
             assert_eq!(e.name, "row");
             n += 1;
             Ok(())
         })
-        .unwrap();
+        .unwrap()
+        .root;
         assert_eq!(n, 2);
         assert_eq!(root.children.len(), 1);
+    }
+
+    #[test]
+    fn an_element_deeper_than_the_streamed_level_sharing_a_split_name_is_neither_streamed_nor_held_to_the_allowances() {
+        // An element named in `split` (with a namespace prefix, dropped from its name) six levels
+        // below the root is not a child or grandchild of it, so it is an ordinary element of the
+        // tree: not streamed, kept with everything it holds, and nothing in it counted as dropped.
+        // Given children past the allowance on purpose, so counting them would show.
+        let xml = "<root><list><item><c/><c/></item><item><c/></item></list>\
+                   <outer><middle><inner><deeper><deepest><ns:item><c/><c/><c/></ns:item></deepest></deeper></inner></middle></outer>\
+                   </root>";
+        let mut streamed = Vec::new();
+        let s = parse_streaming(xml.as_bytes(), Streaming { split: &["item"], children: &[("c", 1)] }, &mut |r| {
+            streamed.push(r.children.len());
+            Ok(())
+        })
+        .unwrap();
+        // The two streamed elements, the first cut to its one allowed child.
+        assert_eq!(streamed, [1, 1]);
+        assert_eq!(s.dropped, 1);
+        let deep_item = ["outer", "middle", "inner", "deeper", "deepest", "item"]
+            .iter()
+            .try_fold(&s.root, |el, name| el.child(name))
+            .expect("the deeper element stays in the tree");
+        assert_eq!(deep_item.children.len(), 3);
     }
 
     #[test]

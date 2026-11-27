@@ -317,6 +317,327 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
     }
 }
 
+fn long_warning(n: u64) -> String {
+    format!("sheet \"Sheet1\": {n} cell text(s) longer than Excel's limit of 32767 UTF-16 units were read; they were not cut to that length")
+}
+
+#[test]
+fn long_text_in_a_python_spill_is_kept_and_warned_about() {
+    // A Python cell's spilled values are its result, kept and saved, so text in them longer than
+    // Excel allows in a cell is kept whole with the warning a plain cell's gets; at the limit, no warning.
+    let most = gridcraft_core::MAX_CELL_CHARS as usize;
+    let book = |n: usize| {
+        let data = format!(
+            "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A2\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row>\
+             <row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>{}</t></is></c></row></sheetData>",
+            "a".repeat(n)
+        );
+        crate::io::open_bytes("long.xlsx", &excel_shaped(&data, Some(&["[1, 'text']"]))).unwrap()
+    };
+    let long = |warnings: &[String]| warnings.iter().filter(|w| w.contains("longer than Excel's")).cloned().collect::<Vec<_>>();
+    let (wb, warnings) = book(most);
+    assert!(long(&warnings).is_empty(), "{warnings:?}");
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Text("a".repeat(most).into())));
+    let (wb, warnings) = book(most + 1);
+    assert_eq!(long(&warnings), [long_warning(1)], "{warnings:?}");
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Text("a".repeat(most + 1).into())));
+}
+
+#[test]
+fn a_repeated_address_in_a_python_spill_keeps_the_last_value_with_a_warning() {
+    // A2 lies in A1's spill and has the default style, so its value is kept only as part of the
+    // result, in the spill and not in a cell; a second A2, after B2, replaces it there, as on any
+    // cell, and is counted as a repeat, found by the column bitmap of row 2's element (the next
+    // test puts the second A2 in a later element, after another row's, where the spill finds it).
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row>\
+                <row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>5</v></c><c r=\"A2\"><v>9</v></c></row></sheetData>";
+    let (wb, warnings) = crate::io::open_bytes("repeat.xlsx", &excel_shaped(data, Some(&["[1, 2, 3]"]))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Number(9.0)));
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), Value::Number(5.0));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w
+                == "sheet \"Sheet1\": 1 cell(s), or a row's properties, repeated an address or row already read; the later ones were read again"),
+        "{warnings:?}"
+    );
+    assert!(!warnings.iter().any(|w| w.contains("out of column order")), "{warnings:?}");
+}
+
+#[test]
+fn a_repeated_address_in_a_python_spill_in_a_later_row_element_is_found_in_the_spill() {
+    // As above, but the second A2 sits in a second row element for row 2, after row 3's: the
+    // column bitmap has been cleared and A2 is not the furthest cell, so only the spill finds the
+    // repeat.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row>\
+                <row r=\"2\"><c r=\"A2\"><v>2</v></c><c r=\"B2\"><v>5</v></c></row><row r=\"3\"><c r=\"C3\"><v>7</v></c></row>\
+                <row r=\"2\"><c r=\"A2\"><v>9</v></c></row></sheetData>";
+    let (wb, warnings) = crate::io::open_bytes("repeat.xlsx", &excel_shaped(data, Some(&["[1, 2, 3]"]))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Number(9.0)));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w
+                == "sheet \"Sheet1\": 1 cell(s), or a row's properties, repeated an address or row already read; the later ones were read again"),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_long_spilled_text_is_counted_when_read_even_where_a_repeat_replaces_it() {
+    // A long A2 in A1's spill, then a second A2: the long text is counted as it is read, so a
+    // plain value replacing it leaves the count at one, and a second long one makes it two.
+    let long = format!("<c r=\"A2\" t=\"inlineStr\"><is><t>{}</t></is></c>", "a".repeat(gridcraft_core::MAX_CELL_CHARS as usize + 1));
+    let count = |second: &str| {
+        let data = format!(
+            "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row>\
+             <row r=\"2\">{long}{second}</row></sheetData>"
+        );
+        let (_, warnings) = crate::io::open_bytes("repeat.xlsx", &excel_shaped(&data, Some(&["[1, 2, 3]"]))).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("already read")), "{warnings:?}");
+        warnings.iter().filter(|w| w.contains("longer than Excel's")).cloned().collect::<Vec<_>>()
+    };
+    assert_eq!(count("<c r=\"A2\"><v>9</v></c>"), [long_warning(1)]);
+    assert_eq!(count(&long), [long_warning(2)]);
+}
+
+#[test]
+fn python_code_dropped_at_the_element_cap_leaves_its_cells_with_their_values() {
+    // The first script's code holds a million elements. With the `environmentDefinition` before
+    // the scripts in the tree, the last of them crosses the reader's element cap for a part, and
+    // the code element is dropped with the 999,999 it held: 1,000,001 elements. A script whose
+    // code was dropped is treated as missing, so A1, naming it, keeps its cached value and no
+    // Python code, through a save too. The second script is read whole, and the third, an empty
+    // `code` in the file, is empty code, as before.
+    let crowded = format!("x = 1{}", "<z/>".repeat(1_000_000));
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c><c r=\"B1\"><f>_xlfn._xlws.PY(1,0)</f><v>2</v></c>\
+                <c r=\"C1\"><f>_xlfn._xlws.PY(2,0)</f><v>3</v></c></row></sheetData>";
+    let bytes = excel_shaped(data, Some(&[&crowded, "y = 2", ""]));
+    let (_, warnings) = crate::io::open_bytes("crowded.xlsx", &bytes).unwrap();
+    assert!(
+        warnings.iter().any(|w| w.starts_with("the Python part: dropped 1000001 element(s)")
+            && w.ends_with("a script that lost its code and kept no code after it counts as missing")),
+        "{warnings:?}"
+    );
+    assert!(warnings.iter().any(|w| w.starts_with("1 Python cell(s) name code the file's Python part doesn't hold")), "{warnings:?}");
+    let mut s = s();
+    open(&mut s, "crowded.xlsx", &bytes);
+    let check = |s: &Session, when: &str| {
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let a1 = sh.cell(CellRef::parse("A1").unwrap()).unwrap_or_else(|| panic!("{when}: A1 is stored"));
+        assert_eq!(a1.value, Value::Number(1.0), "{when}");
+        assert!(a1.py.is_none() && a1.formula.is_none(), "{when}: A1 is a plain value");
+        assert_eq!(code(s, "B1").map(|p| p.code), Some("y = 2".to_string()), "{when}");
+        assert_eq!(code(s, "C1").map(|p| p.code), Some(String::new()), "{when}");
+    };
+    check(&s, "after open");
+    let saved = save(&mut s, "xlsx");
+    open(&mut s, "saved.xlsx", &saved);
+    check(&s, "after a save");
+}
+
+/// A1 naming the one script, `script` (a whole `pythonScript` element), read: A1's Python code, if
+/// any, and the warnings.
+fn a1_code_with_script(script: &str) -> (Option<String>, Vec<String>) {
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let good = excel_shaped(data, Some(&["MARKER"]));
+    let bytes = with_parts(
+        &good,
+        |name, text| {
+            if name == "xl/python/python1.xml" { text.replace("<pythonScript><code>MARKER</code></pythonScript>", script) } else { text.to_string() }
+        },
+        &[],
+    );
+    let (wb, warnings) = crate::io::open_bytes("script.xlsx", &bytes).unwrap();
+    let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).cloned();
+    (a1.and_then(|c| c.py.map(|p| p.code.clone())), warnings)
+}
+
+#[test]
+fn a_script_without_code_reads_as_empty_code_also_when_an_unknown_element_crosses_the_cap() {
+    // A script with no code reads as empty code. An unknown element in it that crosses the
+    // element cap is dropped and counted, but holds nothing the reader reads: the script still
+    // reads as empty code, not as missing.
+    for (script, dropped) in [
+        ("<pythonScript><other/></pythonScript>".to_string(), false),
+        (format!("<pythonScript><other>{}</other></pythonScript>", "<z/>".repeat(1_000_001)), true),
+    ] {
+        let (code, warnings) = a1_code_with_script(&script);
+        assert_eq!(code.as_deref(), Some(""), "{warnings:?}");
+        assert_eq!(warnings.iter().any(|w| w.starts_with("the Python part: dropped ")), dropped, "{warnings:?}");
+        assert!(!warnings.iter().any(|w| w.contains("doesn't hold")), "{warnings:?}");
+    }
+}
+
+#[test]
+fn a_script_whose_first_code_is_dropped_at_the_element_cap_takes_its_second_code() {
+    // The first code crosses the element cap and is dropped whole: it took no place in the
+    // script's allowance of one code, so the second code is read, and A1 takes it.
+    let (code, warnings) =
+        a1_code_with_script(&format!("<pythonScript><code>x = 1{}</code><code>y = 2</code></pythonScript>", "<z/>".repeat(1_000_001)));
+    assert_eq!(code.as_deref(), Some("y = 2"), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("the Python part: dropped ")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("doesn't hold")), "{warnings:?}");
+}
+
+#[test]
+fn a_script_whose_code_is_dropped_at_the_element_cap_before_an_empty_code_counts_as_missing() {
+    // The first code crosses the element cap and is dropped whole, and the code after it is empty:
+    // the script lost its code and kept none, so A1 keeps only its value, as when no code follows.
+    let (code, warnings) = a1_code_with_script(&format!("<pythonScript><code>x = 1{}</code><code/></pythonScript>", "<z/>".repeat(1_000_001)));
+    assert_eq!(code, None, "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("doesn't hold")), "{warnings:?}");
+}
+
+#[test]
+fn a_script_that_keeps_its_code_and_loses_a_second_one_past_the_element_cap_keeps_its_code() {
+    // The second code crosses the element cap; it is one more than a script holds, so it is
+    // dropped for that, and the script, which lost no code it reads, keeps its first code, empty
+    // or not.
+    for kept in ["y = 2", ""] {
+        let (code, warnings) =
+            a1_code_with_script(&format!("<pythonScript><code>{kept}</code><code>x = 1{}</code></pythonScript>", "<z/>".repeat(1_000_001)));
+        assert_eq!(code.as_deref(), Some(kept), "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.starts_with("the Python part: dropped ")), "{warnings:?}");
+        assert!(!warnings.iter().any(|w| w.contains("doesn't hold")), "{warnings:?}");
+    }
+}
+
+#[test]
+fn a_script_that_loses_an_unknown_element_at_the_element_cap_keeps_its_code() {
+    // The script's code comes first; an unknown element after it crosses the element cap and is
+    // dropped whole. The code was kept, so A1 keeps it.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let crowded = format!("</code><extra>{}</extra></pythonScript>", "<z/>".repeat(1_000_001));
+    let good = excel_shaped(data, Some(&["y = 2"]));
+    let bytes = with_parts(
+        &good,
+        |name, text| if name == "xl/python/python1.xml" { text.replace("</code></pythonScript>", &crowded) } else { text.to_string() },
+        &[],
+    );
+    let (wb, warnings) = crate::io::open_bytes("crowded.xlsx", &bytes).unwrap();
+    let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
+    assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some("y = 2"), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("the Python part: dropped ")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("doesn't hold")), "{warnings:?}");
+}
+
+#[test]
+fn an_empty_script_with_the_element_cap_full_is_read_and_the_part_fails_when_its_scripts_close() {
+    // The `environmentDefinition` and the filler before `pythonScripts` fill the part's element
+    // cap of a million. An empty script holds no element, so it is handed out as on main and
+    // reads as empty code; `pythonScripts` itself is then one element past the cap, so the part
+    // fails as it closes, and the warning counts the empty script among those kept. A1, naming
+    // it, keeps the empty code. With one element less of filler the part is whole.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let good = excel_shaped(data, Some(&["MARKER"]));
+    for (filler, script, damaged) in
+        [(999_999, "<pythonScript/>", true), (999_999, "<pythonScript></pythonScript>", true), (999_998, "<pythonScript/>", false)]
+    {
+        let scripts = format!("{}<pythonScripts>{script}</pythonScripts>", "<z/>".repeat(filler));
+        let bytes = with_parts(
+            &good,
+            |name, text| {
+                if name == "xl/python/python1.xml" {
+                    text.replace("<pythonScripts><pythonScript><code>MARKER</code></pythonScript></pythonScripts>", &scripts)
+                } else {
+                    text.to_string()
+                }
+            },
+            &[],
+        );
+        let (wb, warnings) = crate::io::open_bytes("full.xlsx", &bytes).unwrap();
+        let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
+        assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some(""), "{script} after {filler}: {warnings:?}");
+        let failed: Vec<&String> = warnings.iter().filter(|w| w.starts_with("the Python part is damaged")).collect();
+        let expected = "the Python part is damaged (the file contains invalid XML: the part holds more than 1000000 elements); kept 1 scripts";
+        assert_eq!(failed, if damaged { vec![expected] } else { vec![] }, "{script} after {filler}");
+        assert!(!warnings.iter().any(|w| w.contains("doesn't hold") || w.starts_with("the Python part: dropped")), "{warnings:?}");
+    }
+}
+
+#[test]
+fn a_damaged_python_part_still_reports_what_it_dropped_before_the_damage() {
+    // The script's second code is dropped, then the part ends in an unclosed comment: both the
+    // damage and the dropped element are warned about.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let good = excel_shaped(data, Some(&["x = 1</code><code>y = 2"]));
+    let bytes = with_parts(
+        &good,
+        |name, text| if name == "xl/python/python1.xml" { text.replace("</pythonScripts></python>", "<!-- ") } else { text.to_string() },
+        &[],
+    );
+    let (_, warnings) = crate::io::open_bytes("damaged.xlsx", &bytes).unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.starts_with("the Python part is damaged")).count(), 1, "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("the Python part: dropped 1 element(s)")), "{warnings:?}");
+}
+
+#[test]
+fn a_second_code_in_a_python_script_is_dropped_with_a_warning() {
+    // A script holds one code: the first is read, the second dropped and counted.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let (wb, warnings) = crate::io::open_bytes("twice.xlsx", &excel_shaped(data, Some(&["x = 1</code><code>y = 2"]))).unwrap();
+    let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
+    assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some("x = 1"));
+    assert!(warnings.iter().any(|w| w.starts_with("the Python part: dropped 1 element(s)")), "{warnings:?}");
+}
+
+fn unknown_warning(n: u64) -> String {
+    format!("the Python part: {n} element(s) GridCraft does not read (unknown elements) were left out and will not be saved")
+}
+
+fn unknown_warnings(warnings: &[String]) -> Vec<String> {
+    warnings.iter().filter(|w| w.contains("does not read")).cloned().collect()
+}
+
+#[test]
+fn a_script_with_an_unknown_child_keeps_its_code_and_warns_that_it_will_not_be_saved() {
+    // The unknown child is small, so nothing reaches an allowance or the element cap and nothing
+    // is dropped: the code is read, and the child, which a save does not write, is warned about.
+    let (code, warnings) = a1_code_with_script("<pythonScript><code>y = 2</code><extra>note</extra></pythonScript>");
+    assert_eq!(code.as_deref(), Some("y = 2"), "{warnings:?}");
+    assert_eq!(unknown_warnings(&warnings), [unknown_warning(1)], "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.starts_with("the Python part: dropped ")), "{warnings:?}");
+}
+
+#[test]
+fn unknown_children_across_two_scripts_are_counted_in_one_warning() {
+    // Two unknown children in the first script and one in the second: one warning, counting three.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c><c r=\"B1\"><f>_xlfn._xlws.PY(1,0)</f><v>2</v></c></row></sheetData>";
+    let scripts = ["x = 1</code><extra/><other>text</other><code>unread", "y = 2</code><extra/><code>unread"];
+    let (wb, warnings) = crate::io::open_bytes("unknown.xlsx", &excel_shaped(data, Some(&scripts))).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    let code = |cell: &str| sheet.cell(CellRef::parse(cell).unwrap()).and_then(|c| c.py.as_ref().map(|p| p.code.clone()));
+    assert_eq!(code("A1").as_deref(), Some("x = 1"), "{warnings:?}");
+    assert_eq!(code("B1").as_deref(), Some("y = 2"), "{warnings:?}");
+    assert_eq!(unknown_warnings(&warnings), [unknown_warning(3)], "{warnings:?}");
+}
+
+#[test]
+fn a_script_without_unknown_children_gives_no_unknown_element_warning() {
+    let (code, warnings) = a1_code_with_script("<pythonScript><code>y = 2</code></pythonScript>");
+    assert_eq!(code.as_deref(), Some("y = 2"), "{warnings:?}");
+    assert!(unknown_warnings(&warnings).is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn a_damaged_python_part_still_reports_unknown_children_read_before_the_damage() {
+    // The script, with one unknown child, closes before the part ends in an unclosed comment: both
+    // the damage and the unknown child are warned about, and the script's code is kept.
+    let data = "<sheetData><row r=\"1\"><c r=\"A1\"><f>_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
+    let good = excel_shaped(data, Some(&["x = 1</code><extra/><code>unread"]));
+    let bytes = with_parts(
+        &good,
+        |name, text| if name == "xl/python/python1.xml" { text.replace("</pythonScripts></python>", "<!-- ") } else { text.to_string() },
+        &[],
+    );
+    let (wb, warnings) = crate::io::open_bytes("damaged.xlsx", &bytes).unwrap();
+    assert_eq!(warnings.iter().filter(|w| w.starts_with("the Python part is damaged")).count(), 1, "{warnings:?}");
+    assert_eq!(unknown_warnings(&warnings), [unknown_warning(1)], "{warnings:?}");
+    let a1 = wb.sheet(0).unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().clone();
+    assert_eq!(a1.py.as_ref().map(|p| p.code.as_str()), Some("x = 1"), "{warnings:?}");
+}
+
 #[test]
 fn a_python_spill_whose_blank_cells_have_no_records_is_still_a_spill() {
     // A1's result spills over A1:A3, and the file holds no records for the blank A2 and A3.

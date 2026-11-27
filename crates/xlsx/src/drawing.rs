@@ -91,7 +91,7 @@ fn from_craft_el(e: &craft_xml::El) -> El {
             craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
-    El { name, attrs, children, text }
+    El { name, attrs, children, text, cut: 0 }
 }
 
 /// Colour of a DrawingML colour choice inside `e` (e.g. a `solidFill`).
