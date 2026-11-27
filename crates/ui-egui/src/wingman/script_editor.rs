@@ -7,7 +7,7 @@ use crate::{
     SheetApp,
     macro_editor::{self, Editor},
 };
-use gridcraft_engine::model::{Macro, Step, StepKind};
+use gridcraft_engine::model::{Macro, RepeatOf, Step, StepKind};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -106,7 +106,7 @@ pub(super) fn schemas(allow_write: bool) -> Vec<Value> {
         &[],
     )];
     if allow_write {
-        out.push(schema("edit_macro_draft","Edit the open native macro draft without saving or running it. Use its revision. Set description; splice steps at index (count+1 to append); or set fields at index to edit a step in place. New If/Repeat bodies are empty: insert children by parent path in the next edit.",
+        out.push(schema("edit_macro_draft","Edit the open native macro draft without saving or running it. Use its revision. Set description; splice steps at index (count+1 to append); or set fields at index to edit a step in place. New If/Repeat bodies are empty: insert children by parent path in the next edit. Inside a Repeat, set_cell may omit sheet for Row.cell(1,n) or Column.cell(n,1), matching its axis.",
             json!({"revision":{"type":"string"},"parent":list,"description":{"type":"string","maxLength":4096},"index":{"type":"integer","minimum":1},
                 "fields":flow::update_schema(),"remove":{"type":"integer","minimum":0,"maximum":64},"steps":{"type":"array","maxItems":64,"items":flow::step_schema()}}),
             &["revision"]));
@@ -144,7 +144,7 @@ struct NewStep {
     breakpoint: Option<bool>,
 }
 
-fn preview(step: &Step) -> Value {
+fn preview(step: &Step, within: Option<RepeatOf>) -> Value {
     let kind = match &step.kind {
         StepKind::Command { id, params } => {
             // Existing user-authored commands can contain credentials, file paths, or arbitrary JSON.
@@ -155,14 +155,29 @@ fn preview(step: &Step) -> Value {
                 "home.formatCells" => Some(("format_range", &["sheet", "range", "style"])),
                 "home.fillColor" => Some(("set_fill", &["sheet", "range", "color"])),
                 "home.fontColor" => Some(("set_ink", &["sheet", "range", "color"])),
+                "review.commentsToColumn" => Some((
+                    "comments_to_column",
+                    &["sheet", "sourceColumn", "destinationColumn", "mode", "startRow", "endRow", "destinationStartRow", "headerText", "headerRow"],
+                )),
                 _ => None,
             };
             if let Some((tool, keys)) = pair {
                 let mut p = serde_json::Map::new();
                 for &k in keys {
-                    if let Some(v) = params.get(k)
-                        && workbook::valid_field(k, v)
-                    {
+                    if let Some(v) = params.get(k) {
+                        let v = if tool == "comments_to_column" && matches!(k, "headerText" | "sheet") && v.as_object().is_some_and(|o| o.len() == 1)
+                        {
+                            v.get("$text").unwrap_or(v)
+                        } else {
+                            v
+                        };
+                        let repeat_cell = tool == "set_cell"
+                            && k == "cell"
+                            && params.get("sheet").is_none()
+                            && v.as_str().and_then(flow::relative_axis).is_some_and(|axis| Some(axis) == within);
+                        if !repeat_cell && !workbook::valid_field(k, v) {
+                            continue;
+                        }
                         p.insert(k.into(), v.clone());
                     }
                 }
@@ -183,11 +198,12 @@ pub(super) fn inspect(app: &SheetApp, args: &Value) -> Result<Value, String> {
     let ed = app.macros.editor.as_ref().ok_or("The macro editor has closed.")?;
     let opts: Read = serde_json::from_value(args.clone()).map_err(|_| "Invalid draft read arguments.")?;
     let steps = macro_editor::list_at(&ed.draft.steps, &opts.parent).ok_or("Unknown step list in this draft.")?;
+    let within = flow::enclosing_repeat(&ed.draft.steps, &opts.parent);
     let revision = ticket(ed, fingerprint(ed)?);
     let mut page = Vec::new();
     let mut bytes = 0;
     for step in steps.iter().skip(opts.offset).take(16) {
-        let mut item = preview(step);
+        let mut item = preview(step, within);
         let n = item.to_string().len();
         if n > 20 * 1024 {
             item = json!({"parametersOmitted":true,"reason":"step exceeds the preview limit"});
@@ -209,19 +225,29 @@ pub(super) fn inspect(app: &SheetApp, args: &Value) -> Result<Value, String> {
         "activeSheet":sheet,"selected":ed.selected,"count":steps.len(),"steps":page,"nextOffset":(end<steps.len()).then_some(end)}))
 }
 
-fn new_steps(app: &SheetApp, steps: &[NewStep]) -> Result<Vec<Step>, String> {
+fn new_steps(app: &SheetApp, steps: &[NewStep], within: Option<RepeatOf>) -> Result<Vec<Step>, String> {
     if steps.len() > 64 {
         return Err("Edit at most 64 macro steps at once.".into());
     }
     let mut result = Vec::new();
     for s in steps {
         // Reuse the worksheet-tool allowlist and validation used when saving native scripts.
-        let mut step = if let Some(step) = flow::create(&s.tool, &s.args)? {
+        let mut step = if let Some(step) = flow::create(&s.tool, &s.args, within)? {
             step
         } else {
             let one = workbook::script_steps(app, &json!({"name":"draft","steps":[{"tool":s.tool,"args":s.args}]}))?;
             let c = &one["commands"][0];
-            Step::command(c["command"].as_str().ok_or("Invalid step command.")?, c["params"].clone())
+            let mut params = c["params"].clone();
+            if s.tool == "comments_to_column" {
+                // Unlike a flat Automate script, native macro steps interpolate brace tokens.
+                // A literal header or sheet name supplied by the operator must survive replay.
+                for key in ["headerText", "sheet"] {
+                    if let Some(value) = params[key].as_str().filter(|v| v.contains("{{")) {
+                        params[key] = json!({"$text":value});
+                    }
+                }
+            }
+            Step::command(c["command"].as_str().ok_or("Invalid step command.")?, params)
         };
         step.note = s.note.clone().unwrap_or_default();
         step.enabled = s.enabled.unwrap_or(true);
@@ -259,6 +285,7 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Value, approved: bo
     }
     let mut selected = ed.selected.clone();
     if let Some(index) = edit.index {
+        let within = flow::enclosing_repeat(&draft.steps, &edit.parent);
         let list = macro_editor::list_mut(&mut draft.steps, &edit.parent).ok_or("Unknown parent step list.")?;
         let i = index.checked_sub(1).filter(|i| *i <= list.len()).ok_or("Step index is outside this draft.")?;
         if let Some(fields) = edit.fields {
@@ -267,7 +294,7 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Value, approved: bo
             }
             flow::update(list.get_mut(i).ok_or("No step at this index to update.")?, &fields)?;
         } else {
-            let insert = new_steps(app, edit.steps.as_deref().unwrap_or_default())?;
+            let insert = new_steps(app, edit.steps.as_deref().unwrap_or_default(), within)?;
             let count = edit.remove.unwrap_or(0);
             if count > 64 || count > list.len() - i || (insert.is_empty() && count == 0) {
                 return Err("Invalid number of steps to replace.".into());
@@ -383,16 +410,81 @@ pub(crate) fn controls(app: &mut SheetApp, ui: &mut egui::Ui, ed: &mut Editor) {
 mod tests {
     use super::*;
 
+    fn edit(app: &mut SheetApp, mut change: Value) -> Result<Value, String> {
+        change["revision"] = inspect(app, &json!({}))?["revision"].clone();
+        execute(app, "edit_macro_draft", &change, true)
+    }
+
+    #[test]
+    fn relative_writes_follow_the_nearest_repeat_and_round_trip_as_native_tokens() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.open_dialog("macroEditor", json!({"new":"Fill blank cells"}));
+        let write = |cell| json!({"tool":"set_cell","args":{"cell":cell,"input":"updated"}});
+        let insert = |parent, items: Value| json!({"parent":parent,"index":1,"steps":items});
+        let mut row = write("Row.cell(1,2)");
+        row["args"]["input"] = json!("={{Row.cell(1,1)}}");
+        let col = write("Column.cell(1048576,1)");
+        assert!(edit(&mut app, insert("", json!([row]))).is_err());
+        assert!(workbook::script_steps(&app, &json!({"name":"Flat","steps":[row]})).is_err());
+        edit(&mut app, insert("", json!([{"tool":"repeat","args":{"over":"A1:C9","of":"rows"}}]))).unwrap();
+        edit(&mut app, insert("1", json!([{"tool":"if","args":{"cell":"Row.cell(1,2)","op":"empty"}}]))).unwrap();
+        edit(&mut app, insert("1.1.then", json!([row]))).unwrap();
+        let read = |app: &SheetApp, path| inspect(app, &json!({"parent":path})).unwrap()["steps"][0]["data"]["step"].clone();
+        assert_eq!(read(&app, "1.1.then"), row);
+        edit(&mut app, insert("1.1.else", json!([{"tool":"repeat","args":{"over":"A1:C9","of":"columns"}}]))).unwrap();
+        edit(&mut app, insert("1.1.else.1", json!([col]))).unwrap();
+        assert_eq!(read(&app, "1.1.else.1"), col);
+        assert!(edit(&mut app, insert("1.1.else.1", json!([row]))).is_err());
+        assert!(edit(&mut app, json!({"index":1,"fields":{"of":"columns"}})).is_err());
+        for bad in [
+            "Row.cell(0,1)",
+            "Row.cell(1,0)",
+            "Row.cell(1,16385)",
+            "Row.cell(1,+3)",
+            "Row.cell(1,02)",
+            "Row.cell(1, 2)",
+            "Row.cell(1,2).offset(1,0)",
+            "row.cell(1,2)",
+            "C4",
+        ] {
+            assert!(edit(&mut app, insert("1", json!([write(bad)]))).is_err(), "{bad}");
+        }
+        assert!(edit(&mut app, insert("1.1.else.1", json!([write("Column.cell(1048577,1)")]))).is_err());
+        for key in ["sheet", "array", "foo", "input"] {
+            let mut bad = row.clone();
+            bad["args"][key] = json!(true);
+            assert!(edit(&mut app, insert("1", json!([bad]))).is_err(), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_reusable_comment_transfer_keeps_the_literal_header_and_waits_for_run() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let name = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        app.run("review.newNote", json!({"sheet":name,"cell":"AB2","text":"Keep me"})).unwrap();
+        app.open_dialog("macroEditor", json!({"new":"Extract notes"}));
+        let step = json!({"tool":"comments_to_column","args":{"sheet":name,"sourceColumn":"AB","destinationColumn":"AC","mode":"move","headerText":"{{literal}}"}});
+        edit(&mut app, json!({"index":1,"steps":[step]})).unwrap();
+        let draft = inspect(&app, &json!({})).unwrap();
+        assert_eq!(draft["steps"][0]["data"]["step"], step);
+        let stored = &app.macros.editor.as_ref().unwrap().draft.steps[0].kind;
+        assert!(
+            matches!(stored,StepKind::Command { id, params } if id=="review.commentsToColumn" && params["headerText"]==json!({"$text":"{{literal}}"}))
+        );
+        assert_eq!(app.session.active().unwrap().wb.active().unwrap().comments.len(), 1);
+        assert!(app.session.active().unwrap().wb.macros.is_empty());
+    }
+
     #[test]
     fn editing_a_conditional_header_preserves_both_branches_and_their_flags() {
         let mut session = gridcraft_engine::Session::new();
         session.new_workbook();
         let mut app = SheetApp::new(session, Default::default());
         app.open_dialog("macroEditor", json!({"new":"Two ways"}));
-        fn edit(app: &mut SheetApp, mut change: Value) -> Result<Value, String> {
-            change["revision"] = inspect(app, &json!({}))?["revision"].clone();
-            execute(app, "edit_macro_draft", &change, true)
-        }
         edit(&mut app, json!({"index":1,"steps":[{"tool":"if","args":{"cell":"A1","op":"gt","value":7}}]})).unwrap();
         edit(&mut app, json!({"parent":"1.then","index":1,"steps":[{"tool":"repeat","breakpoint":true,"args":{"over":"Input.data","max":2}}]}))
             .unwrap();

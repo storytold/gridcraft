@@ -1,6 +1,10 @@
 //! The control-flow header is editable independently of its nested lists. No API accepts
 //! raw commands or replaces a branch as a side effect of changing a condition.
-use gridcraft_engine::model::{CompareOp, RepeatOf, Step, StepKind};
+use crate::macro_editor;
+use gridcraft_engine::{
+    core::{MAX_COLS, MAX_ROWS},
+    model::{CompareOp, RepeatOf, Step, StepKind},
+};
 use serde_json::{Map, Value, json};
 
 fn fields(kind: &str) -> Value {
@@ -27,10 +31,26 @@ fn merge(a: &mut Value, b: Value) {
 
 pub(super) fn step_schema() -> Value {
     let mut variants = Vec::new();
-    for (kind, required) in [("command", &[][..]), ("if", &["cell", "op"]), ("repeat", &["over"]), ("stop", &[])] {
+    for (kind, required) in
+        [("set_cell", &[][..]), ("comments_to_column", &[]), ("command", &[]), ("if", &["cell", "op"]), ("repeat", &["over"]), ("stop", &[])]
+    {
         let mut p = fields("flags");
         let (names, args) = if kind == "command" {
-            (json!(["set_cell", "set_values", "format_range", "set_fill", "set_ink"]), json!({"type":"object"}))
+            (json!(["set_values", "format_range", "set_fill", "set_ink"]), json!({"type":"object"}))
+        } else if kind == "comments_to_column" {
+            (json!([kind]), super::workbook::comment_transfer_params())
+        } else if kind == "set_cell" {
+            let input = json!({"type":"string","maxLength":32767});
+            let literal = object(
+                json!({"sheet":{"type":"string"},"cell":{"type":"string","description":"Unqualified A1 cell address"},"input":input}),
+                &["sheet", "cell", "input"],
+            );
+            let relative = object(
+                json!({"cell":{"type":"string","pattern":r"^(Row\.cell\(1,[1-9][0-9]{0,4}\)|Column\.cell\([1-9][0-9]{0,6},1\))$",
+                "description":"In the nearest Repeat only: Row.cell(1,n), n=1..16384 for rows; Column.cell(n,1), n=1..1048576 for columns. Omit sheet."},"input":input}),
+                &["cell", "input"],
+            );
+            (json!(["set_cell"]), json!({"anyOf":[literal,relative]}))
         } else {
             (json!([kind]), object(fields(kind), required))
         };
@@ -38,6 +58,40 @@ pub(super) fn step_schema() -> Value {
         variants.push(object(p, &["tool", "args"]));
     }
     json!({"anyOf":variants})
+}
+
+/// Mirror the native interpreter's innermost iteration, through either arm of an If.
+/// list_at/split_path borrow existing steps without cloning a potentially large Repeat.
+pub(super) fn enclosing_repeat(steps: &[Step], mut path: &str) -> Option<RepeatOf> {
+    while !path.is_empty() {
+        let owner = path.strip_suffix(".then").or_else(|| path.strip_suffix(".else")).unwrap_or(path);
+        let (parent, index) = macro_editor::split_path(owner)?;
+        if let StepKind::Repeat { of, .. } = &macro_editor::list_at(steps, parent)?.get(index)?.kind {
+            return Some(*of);
+        }
+        path = parent;
+    }
+    None
+}
+
+/// Only canonical positive digits. No offset, formula, sheet prefix, or arbitrary token method.
+pub(super) fn relative_axis(s: &str) -> Option<RepeatOf> {
+    let (axis, n, max) = if let Some(n) = s.strip_prefix("Row.cell(1,").and_then(|n| n.strip_suffix(')')) {
+        (RepeatOf::Rows, n, MAX_COLS)
+    } else {
+        (RepeatOf::Columns, s.strip_prefix("Column.cell(")?.strip_suffix(",1)")?, MAX_ROWS)
+    };
+    (!n.starts_with('0') && n.bytes().all(|c| c.is_ascii_digit()) && n.parse::<u32>().ok()? <= max).then_some(axis)
+}
+
+fn uses_axis(steps: &[Step], axis: RepeatOf) -> bool {
+    steps.iter().any(|s| match &s.kind {
+        StepKind::Command { id, params } if id == "cell.set" => {
+            params.get("sheet").is_none() && params["cell"].as_str().and_then(relative_axis) == Some(axis)
+        }
+        StepKind::If { then, otherwise, .. } => uses_axis(then, axis) || uses_axis(otherwise, axis),
+        _ => false, // A nested Repeat owns its own Row/Column.
+    })
 }
 
 pub(super) fn update_schema() -> Value {
@@ -82,7 +136,13 @@ fn header_field(kind: &mut StepKind, k: &str, v: &Value) -> Result<(), String> {
             *value = v.clone()
         }
         (StepKind::Repeat { over, .. }, "over") => *over = text(v, 1024, true)?,
-        (StepKind::Repeat { of, .. }, "of") => *of = serde_json::from_value(v.clone()).map_err(|_| "Repeat of rows or columns.")?,
+        (StepKind::Repeat { of, body, .. }, "of") => {
+            let axis = serde_json::from_value(v.clone()).map_err(|_| "Repeat of rows or columns.")?;
+            if *of != axis && uses_axis(body, *of) {
+                return Err("Change or remove the current Repeat-relative cell writes before switching its axis.".into());
+            }
+            *of = axis;
+        }
         (StepKind::Repeat { max, .. }, "max") => *max = v.as_u64().filter(|n| (1..=100000).contains(n)).ok_or("Loop limit must be 1–100000.")? as u32,
         (StepKind::Stop { message, .. }, "message") => *message = text(v, 4096, false)?,
         (StepKind::Stop { rollback, .. }, "rollback") => *rollback = flag(v)?,
@@ -91,7 +151,22 @@ fn header_field(kind: &mut StepKind, k: &str, v: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn create(tool: &str, args: &Value) -> Result<Option<Step>, String> {
+pub(super) fn create(tool: &str, args: &Value, within: Option<RepeatOf>) -> Result<Option<Step>, String> {
+    if tool == "set_cell" && args.get("sheet").is_none() {
+        let axis = args["cell"]
+            .as_str()
+            .and_then(relative_axis)
+            .ok_or("A literal cell requires a sheet; relative destinations must be Row.cell(1,n) or Column.cell(n,1).")?;
+        if within != Some(axis) {
+            return Err("The destination must match the nearest enclosing Repeat's rows or columns.".into());
+        }
+        if args.as_object().is_none_or(|o| o.len() != 2) || !super::workbook::valid_field("input", &args["input"]) {
+            return Err("A Repeat-relative set_cell requires exactly cell and a text input.".into());
+        }
+        // The native macro interpreter resolves the sheet and cell on each iteration.
+        // Its ordinary cell.set dispatch rechecks current sheet/cell protection at that time.
+        return Ok(Some(Step::command("cell.set", args.clone())));
+    }
     let (kind, required): (_, &[&str]) = match tool {
         "if" => {
             (StepKind::If { cell: String::new(), op: CompareOp::Eq, value: Value::Null, then: Vec::new(), otherwise: Vec::new() }, &["cell", "op"])
@@ -116,7 +191,10 @@ pub(super) fn create(tool: &str, args: &Value) -> Result<Option<Step>, String> {
 fn safe_to_enable(step: &Step) -> bool {
     match &step.kind {
         StepKind::Command { id, .. } => {
-            matches!(id.as_str(), "cell.set" | "range.setValues" | "home.formatCells" | "home.fillColor" | "home.fontColor")
+            matches!(
+                id.as_str(),
+                "cell.set" | "range.setValues" | "home.formatCells" | "home.fillColor" | "home.fontColor" | "review.commentsToColumn"
+            )
         }
         kind => kind.children().flat_map(|list| list.iter()).filter(|s| s.enabled).all(safe_to_enable),
     }

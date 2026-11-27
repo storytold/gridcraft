@@ -3,11 +3,12 @@
 
 use crate::SheetApp;
 use gridcraft_engine::DocState;
-use gridcraft_engine::core::{CellRef, RangeRef, Value};
+use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters, letters_to_col};
 use gridcraft_engine::model::{Comment, Sheet, Visibility};
 use serde_json::{Value as Json, json};
 
-pub(in crate::wingman) const MENTIONS: &[&str] = &["@selection", "@read", "@cell", "@sheet", "@workbook", "@charts", "@comments", "@vba", "@macro"];
+pub(in crate::wingman) const MENTIONS: &[&str] =
+    &["@selection", "@read", "@cell", "@editor", "@sheet", "@workbook", "@charts", "@comments", "@vba", "@macro"];
 
 pub(super) fn sheet<'a>(d: &'a DocState, args: &Json) -> Result<&'a Sheet, String> {
     let i = match args["sheet"].as_str() {
@@ -18,12 +19,14 @@ pub(super) fn sheet<'a>(d: &'a DocState, args: &Json) -> Result<&'a Sheet, Strin
 }
 
 pub(super) fn clip(s: &str, chars: usize) -> String {
-    let mut it = s.chars();
-    let mut out = it.by_ref().take(chars).collect::<String>();
-    if it.next().is_some() {
-        out.push('…');
+    clipped(s, chars).0
+}
+
+fn clipped(s: &str, chars: usize) -> (String, bool) {
+    match s.char_indices().nth(chars) {
+        Some((end, _)) => (format!("{}…", &s[..end]), true),
+        None => (s.to_owned(), false),
     }
-    out
 }
 
 fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
@@ -63,10 +66,19 @@ fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
 }
 
 fn comment(c: &Comment, detail: bool) -> Json {
-    let mut out = json!({"author":clip(&c.author,128),"text":clip(&c.text,if detail {2048} else {256}),
-        "threaded":c.threaded,"resolved":c.resolved,"replyCount":c.replies.len()});
+    let message = |author: &str, text: &str, limit| {
+        let (author, author_cut) = clipped(author, 128);
+        let (text, text_cut) = clipped(text, limit);
+        json!({"author":author,"authorTruncated":author_cut,"text":text,"textTruncated":text_cut})
+    };
+    let mut out = message(&c.author, &c.text, if detail { 2048 } else { 256 });
+    out["threaded"] = json!(c.threaded);
+    out["resolved"] = json!(c.resolved);
+    out["replyCount"] = json!(c.replies.len());
+    let limit = if detail { 8 } else { 0 };
+    out["repliesTruncated"] = json!(c.replies.len() > limit);
     if detail {
-        out["replies"] = json!(c.replies.iter().take(8).map(|(by, msg)| json!({"author":clip(by,128),"text":clip(msg,256)})).collect::<Vec<_>>());
+        out["replies"] = json!(c.replies.iter().take(limit).map(|(by, msg)| message(by, msg, 256)).collect::<Vec<_>>());
     }
     out
 }
@@ -106,19 +118,30 @@ fn info(d: &DocState, offset: usize) -> Json {
         "activeCell":d.selection.active.a1(),"readOnly":d.read_only_source.is_some(),"protectedStructure":d.wb.protected_structure})
 }
 
-fn objects(d: &DocState, sh: &Sheet, kind: &str, offset: usize) -> Result<Json, String> {
+fn objects(d: &DocState, sh: &Sheet, kind: &str, column: Option<&str>, offset: usize) -> Result<Json, String> {
+    let column = match (kind, column) {
+        ("comments", Some(name)) => Some(letters_to_col(name).ok_or("Use worksheet column letters A through XFD.")?),
+        (_, Some(_)) => return Err("The column filter is only available for comments.".into()),
+        (_, None) => None,
+    };
     let data = match kind {
         "charts" => page(sh.charts.iter().skip(offset).map(|c|json!({"id":c.id,"type":format!("{:?}",c.kind),
             "title":c.title.as_deref().map(|s|clip(s,128)),"at":c.anchor.cell.a1(),"source":c.source.as_deref().map(|s|clip(s,240)),
             "series":c.series.len(),"xTitle":c.x_title.as_deref().map(|s|clip(s,128)),"yTitle":c.y_title.as_deref().map(|s|clip(s,128)),
             "legend":format!("{:?}",c.legend),"dataLabels":c.data_labels,"gridlines":c.gridlines})),offset,32),
-        "comments" => page(sh.comments.iter().skip(offset).map(|(cell,c)| json!({"cell":cell.a1(),"comment":comment(c,false)})),offset,32),
+        // Iterate stored notes/threads in address order, not every cell in a whole-column range.
+        "comments" => page(sh.comments.iter().filter(|(cell,_)| column.is_none_or(|col| col == cell.col)).skip(offset)
+            .map(|(cell,c)| json!({"cell":cell.a1(),"comment":comment(c,false)})),offset,32),
         "tables" => page(sh.tables.iter().skip(offset).map(|t|json!({"name":clip(&t.name,128),"range":t.range.a1(),"columns":t.columns.len()})),offset,32),
         "names" => page(d.wb.names.iter().filter(|n| !n.hidden && n.scope.is_none_or(|i|d.wb.sheet(i).is_some_and(|s|s.visibility==Visibility::Visible)))
             .skip(offset).map(|n|json!({"name":clip(&n.name,128),"refersTo":clip(&n.formula,256),"scope":n.scope.and_then(|i|d.wb.sheet(i)).map(|s|clip(&s.name,128))})),offset,32),
         _ => return Err("Unknown object category".into()),
     };
-    Ok(json!({"sheet":clip(&sh.name,128),"kind":kind,"page":data}))
+    let mut out = json!({"sheet":clip(&sh.name,128),"kind":kind,"page":data});
+    if let Some(col) = column {
+        out["column"] = json!(col_to_letters(col));
+    }
+    Ok(out)
 }
 
 fn cells(d: &DocState, sh: &Sheet, range: RangeRef, offset: usize) -> Json {
@@ -133,7 +156,7 @@ pub(super) fn query(app: &SheetApp, name: &str, args: &Json) -> Result<Json, Str
         "workbook_info" => Ok(info(d, offset)),
         "inspect_cell" => Ok(cell_data(d, sh, args["cell"].as_str().and_then(CellRef::parse).ok_or("Invalid cell address")?, true)),
         "read_range" => Ok(cells(d, sh, super::limited_range(args["range"].as_str().ok_or("Missing range")?)?, offset)),
-        "list_objects" => objects(d, sh, args["kind"].as_str().ok_or("Missing object category")?, offset),
+        "list_objects" => objects(d, sh, args["kind"].as_str().ok_or("Missing object category")?, args["column"].as_str(), offset),
         _ => Err("Unknown inspection tool".into()),
     }
 }
@@ -155,7 +178,8 @@ pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, S
         }
         "cell" => Ok(cell_data(d, sh, d.selection.active, true)),
         "macro" => super::super::script_editor::inspect(app, &json!({})),
-        "sheet" => {
+        "editor" if super::super::script_editor::owner(app).is_some() => super::super::script_editor::inspect(app, &json!({})),
+        "sheet" | "editor" => {
             // Computing the used rectangle scans occupied rows. Limit this to one explicitly
             // requested worksheet, rather than scanning every tab for a workbook summary.
             let mut info = sheet_info(sh);
@@ -163,8 +187,8 @@ pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, S
             Ok(info)
         }
         "workbook" => Ok(info(d, 0)),
-        "charts" => objects(d, sh, "charts", 0),
-        "comments" => objects(d, sh, "comments", 0),
+        "charts" => objects(d, sh, "charts", None, 0),
+        "comments" => objects(d, sh, "comments", None, 0),
         "vba" => Ok(json!({"embeddedVbaBytes":d.wb.vba_project.as_ref().map(|b|b.len()),
             "capability":"GridCraft preserves an embedded VBA project as opaque bytes. Paste module text for review or formatting; binary modules cannot be read, rewritten or run by Wingman."})),
         _ => {

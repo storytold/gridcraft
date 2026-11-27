@@ -57,10 +57,15 @@ The initial access setting accepts `ask`, `write`, `write_mcp`, or `minimal` in 
 - `Add a column chart for @read A1:B12 and give it the title “Weekly sales”.`
 - `Summarize @comments, then propose a reply for the active cell.`
 - `Sort @read A1:E30 by column C descending and keep the header row.`
+- `In @editor, move the comments in column AB into the same rows in AC. Center a header in AC1 that says xyz.`
+
+With the worksheet open, `@editor` refers to that sheet; in the native Macro Editor it refers to the open draft. In **Read / write**, the column transfer writes the full note or thread locally, even when the model only saw a short preview. **Copy** keeps the comments in AB; **move** also removes them. By default AB9 goes to AC9. If AB1 also has a comment, ask to start the output at AC2 so AC1 can hold the header without losing the first note. Rows without comments stay untouched. Occupied output cells cause the whole transfer to stop. Ctrl+Z reverses the transfer and header together.
 
 References capture workbook data when you send. The selected endpoint receives the message, those references, and any subsequent workbook-tool results. **Deny** refuses the proposed edit and ends the turn, including any queued calls. **Stop** cancels a reply in progress. Neither undoes an earlier approved edit. If the sheet, selection or workbook revision changes before a tool runs, Wingman stops rather than operating on a new target. Changes go through GridCraft's own commands and undo history.
 
 Enter sends; Shift+Enter adds a line. `/mode chat|read|write|mcp` changes access; `/settings` opens JSON; `/help` lists commands. `/new` starts a conversation and keeps the previous one under **Threads** for that agent. `/clear` discards the current conversation. Threads are held in memory, not in the spreadsheet. The desktop control command `view.wingman` toggles the dock or accepts `{"on":true}` / `{"on":false}`.
+
+To reuse the comment extraction in another run, open a native macro for editing and ask Wingman to add the same column transfer as a step. Approving the draft does not move anything; the command reads the sheet's then-current comments when you run the saved macro.
 
 ### Undo and the Macro Editor
 
@@ -72,7 +77,7 @@ For example, ask “Change step 1’s condition to `A1 > 10` and keep both branc
 
 **Updating a column with Excel VBA:** Select a few representative rows, choose **Chat only**, and ask “Using `@selection`, draft a VBA Sub that fills blank cells in column D from column C on the Orders sheet, skipping the header. Return one VBA code block.” If revising an existing module, paste only the source you want to share with the selected model. **Copy code** copies that block without the surrounding explanation; **Copy** copies the whole reply, including a plain-text VBA reply. Review and paste the code into the intended module in Excel’s Visual Basic Editor, then save the workbook as `.xlsm`. Nothing is installed or run by copying.
 
-For the same update entirely in GridCraft, open or create a native macro under **Automate → Macros**. In its editor, choose **Read / write**, attach `@macro`, and ask for the equivalent Repeat and If steps. Review each proposed edit, **Save** the draft, and use **Run Macro** yourself when ready.
+For the same update entirely in GridCraft, open or create a native macro under **Automate → Macros**. In its editor, choose **Read / write**, attach `@macro`, and ask for the equivalent Repeat and If steps. For example, bind the input to C:D’s data rows: inside a row Repeat, `Row.cell(1,2)` is that row’s D cell, and the formula `={{Row.cell(1,1)}}` links it to C on the same row. The reference is resolved when the macro runs, not when the model proposes the step. Review each edit, **Save** the draft, and use **Run Macro** yourself when ready.
 
 ### Connect external tools
 

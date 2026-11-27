@@ -76,6 +76,33 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn moving_a_note_requires_approval_and_undo_restores_it_along_with_the_header() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Services::default());
+        let sheet = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        let cell = |app: &mut SheetApp, at: &str| execute(app, "inspect_cell", &json!({"sheet":sheet,"cell":at}), false).unwrap();
+        let note = "=1+1\nkeep this as text";
+        execute(&mut app, "set_note", &json!({"sheet":sheet,"cell":"AB9","text":note}), true).unwrap();
+        let args = json!({"sheet":sheet,"sourceColumn":"AB","destinationColumn":"AC","headerText":"xyz","mode":"move"});
+        assert!(execute(&mut app, "comments_to_column", &args, false).is_err());
+        let original = cell(&mut app, "AB9")["comment"].clone();
+        assert_eq!(original["text"], note);
+        execute(&mut app, "comments_to_column", &args, true).unwrap();
+        let extracted = cell(&mut app, "AC9");
+        assert_eq!(extracted["value"], note);
+        assert!(extracted.get("formula").is_none());
+        assert!(cell(&mut app, "AB9")["comment"].is_null());
+        assert_eq!(cell(&mut app, "AC1")["value"], "xyz");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(cell(&mut app, "AB9")["comment"], original);
+        assert!(cell(&mut app, "AC9")["value"].is_null());
+        assert!(cell(&mut app, "AC1")["value"].is_null());
+        app.run("edit.redo", json!({})).unwrap();
+        assert_eq!(cell(&mut app, "AC9")["value"], note);
+    }
+
+    #[test]
     fn an_approved_matrix_round_trips_as_one_native_step_among_manual_edits() {
         let mut session = Session::new();
         session.new_workbook();

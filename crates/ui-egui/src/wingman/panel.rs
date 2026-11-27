@@ -290,6 +290,11 @@ impl PanelState {
                     ui.weak(format!("{}: {} · {}!{}", l.tr("Current selection"), d.display_title(), s.name, d.selection.current().a1()));
                 }
                 ui.monospace(&call.name);
+                if call.name == "comments_to_column" {
+                    ui.weak(l.tr(
+                        "Copy keeps the original notes and threads. Move removes them after writing their text. Undo restores the entire change.",
+                    ));
+                }
                 ScrollArea::vertical().id_salt("wingman_args").max_height((ctx.content_rect().height() * 0.22).max(48.0)).show(ui, |ui| {
                     ui.monospace(call.preview());
                 });

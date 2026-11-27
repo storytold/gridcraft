@@ -51,6 +51,18 @@ macro_rules! tool {
     };
 }
 
+const COMMENTS_TO_COLUMN: Tool = tool!(
+    "comments_to_column",
+    "Extract full notes and comment threads as literal text. By default rows stay aligned; destinationStartRow maps startRow (default 1) to a different starting row, preserving gaps. Copy keeps originals (default); use move only when asked to remove them. Optional headerText is centered (headerRow defaults to 1). Rejects occupied destinations rather than overwriting. One undo step; do not reconstruct text from inspection previews.",
+    Some("review.commentsToColumn"),
+    ["sheet", "sourceColumn", "destinationColumn"],
+    ["mode", "startRow", "endRow", "destinationStartRow", "headerText", "headerRow"]
+);
+
+pub(super) fn comment_transfer_params() -> Json {
+    COMMENTS_TO_COLUMN.params()
+}
+
 const TOOLS: &[Tool] = &[
     tool!("workbook_info", "Inspect visible sheets and the active selection; no local file paths.", None, [], ["offset"]),
     tool!(
@@ -60,8 +72,20 @@ const TOOLS: &[Tool] = &[
         ["range"],
         ["sheet", "offset"]
     ),
-    tool!("inspect_cell", "Inspect one cell's value, formula, style and comment thread.", None, ["cell"], ["sheet"]),
-    tool!("list_objects", "List charts, comments, tables or defined names; each page has up to 32 entries.", None, ["kind"], ["sheet", "offset"]),
+    tool!(
+        "inspect_cell",
+        "Inspect one cell's value, formula, style and comment thread. Truncation flags mark incomplete comment previews.",
+        None,
+        ["cell"],
+        ["sheet"]
+    ),
+    tool!(
+        "list_objects",
+        "List charts, comments (including notes), tables or defined names. For comments, optionally filter by worksheet column, e.g. AB. Pass page.nextOffset with the same filter for the next page; null means finished.",
+        None,
+        ["kind"],
+        ["sheet", "column", "offset"]
+    ),
     tool!(
         "find_commands",
         "Look up GridCraft commands, ribbon paths and parameter hints. Documentation only; a listed command is not permission to run it.",
@@ -166,6 +190,7 @@ const TOOLS: &[Tool] = &[
     ),
     tool!("set_comment", "Create or edit a threaded cell comment.", Some("review.newComment"), ["sheet", "cell", "text"], []),
     tool!("set_note", "Create or edit a classic cell note.", Some("review.newNote"), ["sheet", "cell", "text"], []),
+    COMMENTS_TO_COLUMN,
     tool!("reply_comment", "Reply to an existing threaded cell comment.", Some("review.replyComment"), ["sheet", "cell", "text"], []),
     tool!(
         "resolve_comment",
@@ -213,7 +238,7 @@ const TOOLS: &[Tool] = &[
     tool!("rename_sheet", "Rename a visible worksheet, preserving references through the engine.", Some("sheet.rename"), ["sheet", "name"], []),
     tool!(
         "save_script",
-        "Store (never run) a native Automate script. Each step has a tool (set_cell, set_values, format_range, set_fill or set_ink) and args including its target sheet. Set replace=true to overwrite.",
+        "Store (never run) a native Automate script. Each step has a tool (set_cell, set_values, format_range, set_fill, set_ink or comments_to_column) and args including its target sheet. Set replace=true to overwrite.",
         Some("automate.newScript"),
         ["name", "steps"],
         ["replace"]
@@ -235,6 +260,12 @@ fn object(properties: Json, required: &[&str]) -> Json {
 fn field(k: &str) -> Json {
     let boolean = || json!({"type":"boolean"});
     match k {
+        "sourceColumn" | "destinationColumn" => json!({"type":"string","maxLength":3,"description":"Excel column letters, A through XFD"}),
+        "mode" => json!({"type":"string","enum":["copy","move"],"default":"copy"}),
+        "startRow" | "endRow" | "destinationStartRow" | "headerRow" => {
+            json!({"type":"integer","minimum":1,"maximum":gridcraft_engine::core::MAX_ROWS})
+        }
+        "headerText" => string(32767),
         "cell" | "at" => json!({"type":"string","description":"Unqualified A1 cell address","maxLength":20}),
         "range" => {
             json!({"type":"string","description":"One literal A1 address or rectangular A1:B5 range, not a named, whole-row or whole-column reference","maxLength":42})
@@ -465,6 +496,7 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
                 | "size_columns"
                 | "sort_rows"
                 | "filter_column"
+                | "comments_to_column"
                 | "clear_contents"
                 | "fill_right"
                 | "fill_down"
@@ -558,8 +590,8 @@ pub(super) fn script_steps(app: &SheetApp, args: &Json) -> Result<Json, String> 
         let tool = lookup(step["tool"].as_str().ok_or("Expected tool name")?)?;
         // When the user later runs this script outside Wingman, every saved command
         // must still honor its explicit sheet and recheck protection in the engine.
-        if !matches!(tool.name, "set_cell" | "set_values" | "format_range" | "set_fill" | "set_ink") {
-            return Err("Only sheet-qualified cell, matrix, and style steps can be stored by Wingman.".into());
+        if !matches!(tool.name, "set_cell" | "set_values" | "format_range" | "set_fill" | "set_ink" | "comments_to_column") {
+            return Err("Only sheet-qualified cell, matrix, style and comment transfer steps can be stored by Wingman.".into());
         }
         let id = tool.command.ok_or("Only editable tools can be saved as script steps")?;
         validate(&tool.params(), &step["args"], tool.name)?;

@@ -7,6 +7,8 @@ use serde_json::{Value as Json, json};
 
 use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_ranges, target_sheet};
 
+mod comment_column;
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -43,6 +45,15 @@ pub fn specs() -> Vec<CommandSpec> {
             undoable: true,
         },
         cmd!(query "review.checkAccessibility", "Check Accessibility", ["Review", "Accessibility"], None, "{} → issues", has_doc, accessibility),
+        cmd!(
+            "review.commentsToColumn",
+            "Transfer Comment Text to Column",
+            [],
+            None,
+            "{sheet?, sourceColumn: A..XFD, destinationColumn: A..XFD, startRow?: 1-based inclusive, endRow?: inclusive, destinationStartRow?: maps startRow to this row (same rows by default), mode?: copy|move (default copy), headerText?, headerRow?: 1-based (default 1)} → {count,mode,sourceColumn,destinationColumn,headerCell}; notes and threaded comments go to empty cells preserving row spacing",
+            has_doc,
+            comment_column::transfer
+        ),
         cmd!(noundo "review.previousComment", "Previous Comment", ["Review", "Comments"], None, "{} → {sheet, cell}", has_comments, |s, _| {
             step_comment(s, false)
         }),

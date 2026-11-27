@@ -24,6 +24,7 @@ fn hint(name: &str) -> &'static str {
         "@selection" => "Selected cells",
         "@read" => "Read a range: @read B2:D8 or @read 'Q1 Sales'!B2:D8",
         "@cell" => "Active cell",
+        "@editor" => "Active worksheet or open native macro draft",
         "@sheet" => "Current sheet",
         "@workbook" => "Workbook overview",
         "@charts" => "Charts on this sheet",
