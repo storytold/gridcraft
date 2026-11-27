@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (one workbook-wide reference rewrite; formula printer dialects and parsing from tokens; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (paper names and sizes in one table, `model::paper`; earlier: one workbook-wide reference rewrite; formula printer dialects and parsing from tokens; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -17,7 +17,7 @@ including tests, 2026-10-10.
 | L1 | `formula` | ~1.7k | Tokenizer, parser (also from another syntax's tokens: `parse_tokens`), AST, printer (A1 and R1C1, or any syntax through a `Dialect` and `print_with`), reference adjustment for copy, fill and structural edits |
 | L1 | `functions` | ~13.4k | The function library: `FnSpec` registry (name, arity, category, scalar args, signature, description) and pure implementations; automatic array lifting |
 | L1 | `math` | ~1.1k | Equations: LaTeX laid out by RaTeX (MIT, pinned) into plain glyph, rule and path data, and LaTeX to Office Math; every entry point capped and panic-guarded |
-| L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
+| L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings (paper names and sizes in `paper`, the one table file formats and print layout read), protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
@@ -272,6 +272,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Paper sizes: `model::paper` (`canonical`, `size_pt`, `for_size`) replaces the engine's `known_paper` and the XLSX alias list; an empty `PrintSettings::paper` means no paper is stated (no reader sets it yet); `for_size` picks the nearest paper; Statement, Envelope #10 and Envelope DL are accepted by Page Setup and Size |
 | 2026-11-13 | minor | Reference rewriting: `Workbook::rewrite_references` as the one walker for every reference-moving edit; rule formulas re-hosted by how their ranges moved and moved with a cut |
 | 2026-11-13 | minor | Formula printer dialects: a `Dialect` trait states how another syntax spells references, names, functions, booleans, separators and operators, and `print_with` prints through it (`print`/`print_r1c1` are the A1 and R1C1 dialects, output unchanged); `parse_tokens` builds an `Expr` from another tokenizer's tokens, with `Tok::Ref` for a reference it has already read (every accepted tree prints as text that parses back to it: refused off the grid, for a negative or non-finite number, a sheet name empty or holding `:`, a word or function name the A1 tokenizer would not read as one, a word before `(`, a trim operator, tokens after `Eof`, or any other tree whose printed text reads back differently (numbers compared as printed); spaces only intersect between operands; text and nesting bounded as formula text is; `Tok` is `#[non_exhaustive]`) |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |

@@ -16,9 +16,71 @@ pub const MAX_CSV_BYTES: usize = 512 << 20;
 
 pub use craft_csv::{decode_text, sniff_delimiter};
 
+/// Excel's `sep=` line: a first line `sep=` plus one character names the delimiter and isn't data.
+/// Returns the delimiter it names (`None`: the line names none, so nothing is split) and the bytes
+/// to skip, line end included. Observed in Excel 16.0 (build 17932, Windows): spaces anywhere in the
+/// line are ignored, `SEP=` is the same, the line may be quoted as a whole field, and `sep=` with
+/// nothing after it (or a non-ASCII character) is dropped and splits nothing. Two characters after
+/// `=` (a tab counts: `sep=|<tab>`), or the line anywhere but first, is data.
+pub(crate) fn sep_line(text: &str, quote: char) -> Option<(Option<char>, usize)> {
+    let end = text.find(['\r', '\n']).unwrap_or(text.len());
+    let skip = match text.get(end..end + 2) {
+        Some("\r\n") => end + 2,
+        _ if end < text.len() => end + 1,
+        _ => end,
+    };
+    let line: String = text.get(..end)?.chars().filter(|&c| c != ' ').collect();
+    let line = line.strip_prefix(quote).and_then(|l| l.strip_suffix(quote)).unwrap_or(&line);
+    let rest = line.get(..4).filter(|p| p.eq_ignore_ascii_case("sep=")).and_then(|_| line.get(4..))?;
+    let mut chars = rest.chars();
+    match (chars.next(), chars.next()) {
+        (None, _) => Some((None, skip)),
+        (Some(c), None) => Some((Some(c).filter(char::is_ascii), skip)),
+        _ => None,
+    }
+}
+
 /// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
 fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
     craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
+}
+
+/// The delimiter and quote character to read `text` with. craft-csv always splits and unquotes, so
+/// for a `sep=` line that names no delimiter (each line is one field) or names the quote (nothing is
+/// quoted), a character `text` doesn't hold stands in: a Unicode noncharacter (U+FDD0 to U+FDEF,
+/// which exchanged text doesn't use), else any other. A text that holds every character leaves
+/// none, and is refused rather than split at one of its own.
+fn stand_ins(text: &str, delim: Option<char>, quote: Option<char>) -> Result<(char, char), IoError> {
+    if let (Some(d), Some(q)) = (delim, quote) {
+        return Ok((d, q));
+    }
+    let [d, q] = unused_chars(text)
+        .ok_or_else(|| IoError::Format("the file holds every character, so its fields can't be read without a delimiter".into()))?;
+    Ok((delim.unwrap_or(d), quote.unwrap_or(q)))
+}
+
+/// Two characters `text` doesn't hold: noncharacters when it leaves two of them free, else the
+/// first two free scalar values (a 136 KiB bitset, only for a text holding all 32 noncharacters).
+fn unused_chars(text: &str) -> Option<[char; 2]> {
+    const FIRST: u32 = 0xFDD0;
+    let mut used = 0u32;
+    for c in text.chars() {
+        if let Some(i) = (c as u32).checked_sub(FIRST).filter(|&i| i < 32) {
+            used |= 1 << i;
+        }
+    }
+    let mut free = (0..32).filter(|i| used & (1 << i) == 0).filter_map(|i| char::from_u32(FIRST + i));
+    if let (Some(d), Some(q)) = (free.next(), free.next()) {
+        return Some([d, q]);
+    }
+    let mut all = vec![0u64; 0x11_0000 / 64];
+    for c in text.chars() {
+        if let Some(w) = all.get_mut(c as usize / 64) {
+            *w |= 1 << (c as u32 % 64);
+        }
+    }
+    let mut free = (0..0x11_0000u32).filter(|&u| all.get(u as usize / 64).is_some_and(|w| w & (1 << (u % 64)) == 0)).filter_map(char::from_u32);
+    Some([free.next()?, free.next()?])
 }
 
 /// How many rows and bytes of a text file are read to decide each column's date order.
@@ -254,16 +316,34 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
 pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, ReadReport), IoError> {
     let text = decode_text(bytes);
     let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
-    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
-    if delim == quote {
-        return Err(IoError::Format("the delimiter and quote character must differ".into()));
-    }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
-    let mut report = ReadReport::default();
-    date_warnings(&date_columns, &mut report);
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
-    wb.csv_delimiter = u8::try_from(delim).ok();
+    // A detected delimiter: a `sep=` line names it (and isn't data), else the text shows it.
+    let sep = if opts.delimiter == 0 { sep_line(&text, quote) } else { None };
+    let (body, delim, quote) = match sep {
+        Some((d, skip)) => {
+            // Saved again with it only when the text would be read with it again without the line
+            // (Excel saves with its list separator and drops the line); else with the CSV default,
+            // comma. `sep=;` over `a;b,c` keeps commas: detection would pick them.
+            let body = text.get(skip..).unwrap_or_default();
+            wb.csv_delimiter =
+                d.filter(|d| [',', ';', '\t'].contains(d) && sniff_delimiter(body, quote) as char == *d).and_then(|d| u8::try_from(d).ok());
+            // `sep="`: Excel splits at the quotes, so nothing is quoted.
+            (body, d, Some(quote).filter(|q| d != Some(*q)))
+        }
+        None => {
+            let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
+            if delim == quote {
+                return Err(IoError::Format("the delimiter and quote character must differ".into()));
+            }
+            wb.csv_delimiter = u8::try_from(delim).ok();
+            (text.as_str(), Some(delim), Some(quote))
+        }
+    };
+    let (delim, quote) = stand_ins(body, delim, quote)?;
+    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(body, delim, quote), opts.date_system) } else { vec![] };
+    let mut report = ReadReport::default();
+    date_warnings(&date_columns, &mut report);
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
@@ -271,7 +351,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
     let mut too_many = false;
-    parse_records(&text, delim, quote, |rec| {
+    parse_records(body, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
         }
@@ -300,9 +380,9 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                     },
                     None => StyleId::DEFAULT,
                 };
-                Cell { value: p.value, formula: None, style, py: None }
+                Cell { value: gridcraft_core::cap_value(p.value), formula: None, style, py: None }
             } else {
-                Cell::value(Value::Text(Arc::from(f)))
+                Cell::value(Value::Text(Arc::from(gridcraft_core::cap_text(f))))
             };
             sheet.cells.set(pos, cell);
         }
@@ -339,7 +419,25 @@ pub fn write_csv(sheet: &Sheet, delimiter: u8, cell_text: impl FnMut(CellRef) ->
 }
 
 /// [`write_csv`] with the output cap `limit` (bytes) given.
-pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_delimited(sheet, delimiter, limit, true, cell_text)
+}
+
+/// The sheet as tab-separated text (`.tsv`, `.txt`), like [`write_csv`] with tabs. Such a file is
+/// read with tabs given, never by detection, so a first cell like `sep=;` stays data without the
+/// `sep=` line a CSV needs: that line would come back as an extra row.
+pub fn write_tsv(sheet: &Sheet, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_delimited(sheet, b'\t', MAX_CSV_BYTES, false, cell_text)
+}
+
+/// [`write_csv_limited`], and with `sep_guard` a first row that reads as a `sep=` line gets one.
+fn write_delimited(
+    sheet: &Sheet,
+    delimiter: u8,
+    limit: usize,
+    sep_guard: bool,
+    mut cell_text: impl FnMut(CellRef) -> String,
+) -> Result<Vec<u8>, IoError> {
     let delim = if delimiter == 0 { ',' } else { delimiter as char };
     let mut out = String::new();
     let Some(r) = sheet.used_range() else { return Ok(Vec::new()) };
@@ -370,6 +468,19 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
         if out.len() > limit {
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
+    }
+    // A `sep=` line naming the delimiter, which GridCraft and Excel both drop on opening, goes first
+    // when the file wouldn't reopen in the same columns without it: a first row that would read as
+    // Excel's `sep=` line (a lone `sep=;` cell) stays data, and output that detection would read
+    // with another delimiter (`a,b;x` once `"a,b"` lost its quotes) keeps its own.
+    let first_is_sep = out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some());
+    if sep_guard && (first_is_sep || sniff_delimiter(&out, '"') != delim as u8) {
+        let line = format!("sep={delim}\r\n");
+        // The line counts against the cap like the rows.
+        if out.len().saturating_add(line.len()) > limit {
+            return Err(too_large(format!("more than {} MiB with its sep= line", limit >> 20)));
+        }
+        out.insert_str(0, &line);
     }
     Ok(out.into_bytes())
 }
