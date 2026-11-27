@@ -91,7 +91,8 @@ fn click_at(h: &mut H, pos: egui::Pos2) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     press(h, pos, true);
     press(h, pos, false);
-    h.run_steps(3);
+    // The runtime takes one press per frame: the release arrives in the next frame.
+    h.run_steps(4);
 }
 
 fn key(h: &mut H, k: Key, m: Modifiers) {

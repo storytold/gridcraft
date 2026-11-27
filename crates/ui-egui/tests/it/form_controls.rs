@@ -38,6 +38,7 @@ fn fixture() -> (Harness, Ids) {
     let button = id(s.execute("insert.button", json!({"at": "E12", "text": "Mark it", "macro": "Mark"})).unwrap());
     s.execute("selection.set", json!({"cell": "A20"})).unwrap();
     let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
         .with_size(vec2(1400.0, 900.0))
         .with_step_dt(1.0 / 60.0)
         .with_os(egui::os::OperatingSystem::Mac)
@@ -591,6 +592,7 @@ fn insert_tab() -> Harness {
     let mut app = SheetApp::new(s, Default::default());
     app.ui.ribbon_tab = "Insert".into();
     let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
         .with_size(vec2(1400.0, 900.0))
         .with_step_dt(1.0 / 60.0)
         .with_os(egui::os::OperatingSystem::Mac)

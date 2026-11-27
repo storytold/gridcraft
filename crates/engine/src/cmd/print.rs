@@ -11,7 +11,7 @@
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
-use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{Alignment, CellPicture, Image, SheetViewMode};
 use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
     Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
@@ -34,49 +34,6 @@ use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
-type DecodedPicture = (Vec<u8>, u32, u32);
-
-/// What one PDF render shares across the pages an object spans.
-#[derive(Default)]
-struct PicCache {
-    /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
-    decoded: std::collections::HashMap<(usize, usize), Option<DecodedPicture>>,
-    /// Laid-out charts (with their [`chart_cost`]) keyed by (sheet, chart), rendered once however
-    /// many pages they touch. Only charts that can still be drawn are kept.
-    charts: std::collections::HashMap<(usize, usize), (Vec<gridcraft_chart::Prim>, usize)>,
-    /// Charts too big for what was left of the budget: never drawn, so not rendered again.
-    rejected_charts: std::collections::HashSet<(usize, usize)>,
-    /// Bytes of picture pixels embedded so far, and chart cost units emitted so far. Each page an
-    /// object touches gets its own copy in the PDF, so a workbook-controlled anchor over thousands
-    /// of pages would multiply them without bound.
-    image_bytes: usize,
-    chart_prims: usize,
-}
-
-impl PicCache {
-    /// The chart's primitives for one more page, or `None` once they no longer fit
-    /// [`MAX_CHART_PRIMS`]. `render` runs at most once per chart; a chart that doesn't fit is
-    /// dropped at once and remembered, so its vectors are never retained.
-    fn chart(&mut self, key: (usize, usize), render: impl FnOnce() -> Vec<gridcraft_chart::Prim>) -> Option<&[gridcraft_chart::Prim]> {
-        if self.rejected_charts.contains(&key) {
-            return None;
-        }
-        let (prims, cost) = match self.charts.remove(&key) {
-            Some(cached) => cached,
-            None => {
-                let prims = render();
-                let cost = chart_cost(&prims);
-                (prims, cost)
-            }
-        };
-        if self.chart_prims.saturating_add(cost) > MAX_CHART_PRIMS {
-            self.rejected_charts.insert(key);
-            return None;
-        }
-        self.chart_prims += cost;
-        Some(&self.charts.entry(key).or_insert((prims, cost)).0)
-    }
-}
 
 /// What a chart's drawing costs in the PDF: one unit per primitive plus one per path point (a
 /// smoothed line holds thousands of points, each written out) and per point of a wedge's outline.
@@ -93,8 +50,6 @@ fn chart_cost(prims: &[gridcraft_chart::Prim]) -> usize {
         .fold(0, usize::saturating_add)
 }
 
-/// Most picture pixel bytes (RGBA, before PDF packing) one render embeds across all pages.
-const MAX_EMBEDDED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 /// Most chart cost units (primitives and path points, see [`chart_cost`]) one render draws across all pages.
 const MAX_CHART_PRIMS: usize = 4_000_000;
 
@@ -102,8 +57,8 @@ const MAX_CHART_PRIMS: usize = 4_000_000;
 use layout::bands;
 pub(crate) use layout::split_bands;
 pub use layout::{PrintOptions, SheetLayout, layout_sheet, layouts, paper_size, print_range};
-use layout::{known_paper, seg_size, segments};
-use objects::draw_objects;
+use layout::{seg_size, segments};
+use objects::{PicCache, draw_objects};
 #[cfg(test)]
 use text::{center_across_width, wrap_lines};
 
@@ -114,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" or several areas \"A1:B5,D1:E5\", one run of pages each (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),
@@ -141,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3|Statement|Envelope #10|Envelope DL (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -164,7 +119,14 @@ const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this P
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
+    render_pdf_with_image_budget(wb, layouts, file, path, gridcraft_pdf::MAX_DOC_IMAGE_BYTES)
+}
+
+/// [`render_pdf`] keeping at most `image_bytes` of picture data in the document (tests lower it
+/// to exercise the cap without building gigabytes of pictures).
+fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, image_bytes: u64) -> Result<RenderedPdf> {
     let mut doc = PdfDoc::new();
+    doc.set_image_budget(image_bytes);
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
@@ -173,7 +135,8 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut pending_links = Vec::new();
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
-    // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
+    // spanning 40 pages was decoded 40 times (#2389). Each page still keeps its own copy in the
+    // PDF, within the document's image budget.
     let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
@@ -197,7 +160,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block(pg, &b, lay.settings.gridlines, &mut cf, &mut pics);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock {
                         page: page_index,
@@ -346,8 +309,9 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
     let paper = match str_param(p, "paper") {
         None => None,
         Some(name) => {
-            known_paper(name).ok_or_else(|| bad(CMD, format!("unknown paper size `{name}`")))?;
-            Some(name.trim().to_string())
+            // Stored under its table name, which every file format knows.
+            let paper = gridcraft_model::paper::canonical(name).ok_or_else(|| bad(CMD, format!("unknown paper size `{name}`")))?;
+            Some(paper.to_string())
         }
     };
     let margin_src = p.get("margins").filter(|m| m.is_object()).unwrap_or(p);

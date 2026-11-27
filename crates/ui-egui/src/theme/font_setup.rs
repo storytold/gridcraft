@@ -526,6 +526,11 @@ pub(super) fn font_definitions_impl(
     if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
         fonts.families.insert(FontFamily::Proportional, ui);
     }
+    // The framework's signature family follows the proportional one; a family left out draws
+    // missing-glyph boxes. Its semibold role falls back to the proportional family when the
+    // definitions have no semibold family.
+    let proportional = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    fonts.families.insert(craft_ui::fonts::FontRef::signature().family(), proportional);
     // Installed workbook fonts, so a cell's chosen font actually renders in it. They are bound
     // after the proportional chain has the script faces, which their chains end with.
     for (family, faces) in installed {
