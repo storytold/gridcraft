@@ -337,6 +337,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Uloží sešit pod jiným názvem nebo do jiné složky.",
         "Print Active Sheets" => "Vytisknout aktivní listy",
         "Print Entire Workbook" => "Vytisknout celý sešit",
+        "Print Selection" => "Vytisknout výběr",
         "Fit Sheet on One Page" => "Přizpůsobit list na jednu stránku",
         "Page Setup…" => "Vzhled stránky…",
         "Page {page} of {pages}" => "Stránka {page} z {pages}",
