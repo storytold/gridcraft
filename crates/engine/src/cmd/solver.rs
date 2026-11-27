@@ -28,9 +28,11 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, DefinedName, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::check_arrays;
 use super::whatif::Trial;
-use super::{CommandSpec, Ctx, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, str_param};
+use super::{
+    CommandSpec, Ctx, DocState, EngineError, Result, Session, SpillReplacement, bad, bool_param, check_arrays, check_spill_targets, cmd, edit,
+    f64_param, has_doc, str_param,
+};
 use gridcraft_core::split_sheet;
 
 mod evolutionary;
@@ -203,6 +205,8 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
         return Ok(json!({"model": model}));
     }
     let model = parse_model(s, &params)?;
+    let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
+    model.check_trial_variables(sh)?;
     let (budget, gap) = (model.max_evals, model.gap);
     let keep = bool_param(&params, "keep").unwrap_or(true);
     let save = bool_param(&params, "saveModel").unwrap_or(true);
@@ -216,8 +220,6 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(why.into()));
     }
-    let d = s.doc()?;
-    let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
     let x0: Vec<f64> = model.vars.iter().map(|c| as_num(&sh.value(*c))).map(|v| if v.is_finite() { v } else { 0.0 }).collect();
     let mut ev = Evaluator {
         trial: Trial::new(d),

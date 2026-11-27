@@ -1,9 +1,8 @@
-use crate::cmd::{SpillReplacement, check_spill_targets};
 use gridcraft_core::split_areas;
 
 use super::{
     CMD, CellRef, DEFAULT_EVALS, DefinedName, EngineError, Json, MAX_CONSTRAINTS, MAX_EVALS, MAX_POPULATION, MAX_VARS, MIN_POPULATION, RangeRef,
-    Result, Session, Workbook, bad, bool_param, f64_param, json, split_sheet, str_param,
+    Result, Session, Sheet, SpillReplacement, Workbook, bad, bool_param, check_spill_targets, f64_param, json, split_sheet, str_param,
 };
 
 // ---------------------------------------------------------------- model
@@ -135,6 +134,18 @@ pub(super) struct Model {
     pub(super) max_evals: u64,
     /// Integer Optimality, as a fraction.
     pub(super) gap: f64,
+}
+
+impl Model {
+    /// Trial runs assign values to decision cells. Model save/load only reference them.
+    pub(super) fn check_trial_variables(&self, sh: &Sheet) -> Result<()> {
+        if sh.spill_ranges.is_empty() {
+            return Ok(());
+        }
+        let mut targets: Vec<RangeRef> = self.vars.iter().copied().map(RangeRef::cell).collect();
+        targets.sort_unstable_by_key(|r| r.start.row);
+        check_spill_targets(sh, &targets, SpillReplacement::Whole)
+    }
 }
 
 /// Cells of `"B2:B4,D1"` on one sheet (row-major per area, in order), at most `cap`.
@@ -287,8 +298,6 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     if vars.iter().any(|c| sh.cell(*c).is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
         return Err(EngineError::Other("Variable cells must hold constants, not formulas.".into()));
     }
-    let targets: Vec<RangeRef> = vars.iter().copied().map(RangeRef::cell).collect();
-    check_spill_targets(sh, &targets, SpillReplacement::Whole)?;
     let mut cons = Vec::new();
     let mut scalar = 0usize;
     if let Some(list) = p.get("constraints") {

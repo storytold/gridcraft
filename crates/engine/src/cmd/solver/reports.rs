@@ -408,9 +408,9 @@ pub(super) fn report(s: &mut Session, p: &Json) -> Result<Json> {
         Some(_) => return Err(bad(REPORT_CMD, "`model` must be data.solver params")),
     };
     let model = parse_model(s, &params)?;
-    let prob = build_problem(&model);
-    let d = s.doc()?;
     let sh = d.wb.sheet(model.sheet).ok_or(EngineError::NoDocument)?;
+    model.check_trial_variables(sh)?;
+    let prob = build_problem(&model);
     let current: Vec<f64> = model.vars.iter().map(|c| as_num(&sh.value(*c))).collect();
     // `{cell: number}` maps; cells they leave out keep their current values.
     let point = |key: &str| -> Result<Vec<f64>> {

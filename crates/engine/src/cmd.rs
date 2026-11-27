@@ -664,17 +664,27 @@ pub(crate) enum SpillReplacement {
 /// Refuses output into generated array cells before a command writes or starts trial
 /// calculations. Generated cells need not have stored content, including when their result is
 /// blank, so checking the cell store or a post-edit content diff cannot establish editability.
-/// `targets` are the non-overlapping ranges the command actually writes or clears. Work is
-/// bounded by those ranges and the existing spills; no worksheet-sized range is expanded.
+/// `targets` are the non-overlapping ranges the command actually writes or clears, with
+/// both their start and end rows in ascending order. Use the footprint's bounds and row
+/// order to skip disjoint ranges before checking exact coverage.
 pub(crate) fn check_spill_targets(sh: &gridcraft_model::Sheet, targets: &[RangeRef], replacement: SpillReplacement) -> Result<()> {
+    if sh.spill_ranges.is_empty() {
+        return Ok(());
+    }
+    let Some(bounds) = targets.iter().copied().reduce(|a, b| a.union(&b)) else { return Ok(()) };
     for (&anchor, spill) in &sh.spill_ranges {
-        let covered = targets.iter().filter_map(|r| r.intersection(spill)).fold(0u64, |n, r| n.saturating_add(r.count()));
+        if !bounds.intersects(spill) {
+            continue;
+        }
+        let first = targets.partition_point(|r| r.end.row < spill.start.row);
+        let candidates = || targets[first..].iter().take_while(|r| r.start.row <= spill.end.row);
+        let covered = candidates().filter_map(|r| r.intersection(spill)).fold(0u64, |n, r| n.saturating_add(r.count()));
         if covered == 0 {
             continue;
         }
         let allowed = match replacement {
             SpillReplacement::Whole => covered == spill.count(),
-            SpillReplacement::Anchor => targets.iter().any(|r| r.contains(anchor)),
+            SpillReplacement::Anchor => candidates().any(|r| r.contains(anchor)),
         };
         if !allowed {
             return Err(EngineError::Other("You can't change part of an array.".into()));

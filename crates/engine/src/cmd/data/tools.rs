@@ -132,7 +132,8 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
-        let mut targets = Vec::new();
+        let has_spills = !sh.spill_ranges.is_empty();
+        let mut targets: Vec<RangeRef> = Vec::new();
         for (i, row) in (r.start.row..=r.end.row).enumerate() {
             let text = sh.value(CellRef::new(row, r.start.col)).display();
             let parts: Vec<String> = match &fixed {
@@ -154,8 +155,16 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
             for (j, part) in parts.into_iter().enumerate() {
                 out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
             }
-            if let (Some(first), Some(last)) = (out.get(start), out.last()) {
-                targets.push(RangeRef::new(first.0, last.0));
+            if has_spills && let (Some(first), Some(last)) = (out.get(start), out.last()) {
+                // Consecutive rows of equal width form a single exact destination range.
+                if let Some(previous) = targets.last_mut()
+                    && previous.end.row.checked_add(1) == Some(first.0.row)
+                    && previous.end.col == last.0.col
+                {
+                    previous.end = last.0;
+                } else {
+                    targets.push(RangeRef::new(first.0, last.0));
+                }
             }
         }
         check_spill_targets(sh, &targets, SpillReplacement::Whole)?;

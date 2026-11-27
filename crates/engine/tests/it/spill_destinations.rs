@@ -71,7 +71,12 @@ fn text_to_columns_checks_each_rows_actual_fields_instead_of_a_bounding_box() {
     set(&mut s, "D2", "=SEQUENCE(2,2)");
     set(&mut s, "H1", "=SUM(D2#)");
     assert_spill(&s, "D2", 10.0);
-    refuses_unchanged(&mut s, "data.textToColumns", json!({"range": "A1:A2", "delimiters": [","], "destination": "D2"}));
+    let params = json!({"range": "A1:A2", "delimiters": [","], "destination": "D2"});
+    refuses_unchanged(&mut s, "data.textToColumns", params.clone());
+
+    set(&mut s, "A2", "'33,44");
+    s.execute("data.textToColumns", params).unwrap();
+    assert_eq!(value(&s, "E3"), Value::Number(44.0));
 }
 
 #[test]
@@ -146,6 +151,26 @@ fn what_if_variables_refuse_spill_members_even_without_keeping_solution() {
         "data.solver",
         json!({"objective": "B1", "variables": "A2", "constraints": ["A2 <= 10"], "method": "simplex", "keep": false, "saveModel": false}),
     );
+}
+
+#[test]
+fn solver_can_save_and_load_a_model_whose_trial_variable_now_spills() {
+    let mut s = session();
+    set(&mut s, "B1", "=2*A2");
+    let model = json!({"objective": "B1", "variables": "A2", "constraints": ["A2 <= 10"], "method": "simplex"});
+    s.execute("data.solverSaveModel", json!({"to": "J1", "model": model})).unwrap();
+
+    set(&mut s, "A1", "=SEQUENCE(3)");
+    set(&mut s, "H1", "=SUM(A1#)");
+    assert_spill(&s, "A1", 6.0);
+    let loaded = s.execute("data.solverLoadModel", json!({"from": "J1"})).unwrap();
+    assert_eq!(loaded["model"]["variables"], "A2");
+    let saved = s.execute("data.solverSaveModel", json!({"to": "J10"})).unwrap();
+    assert_eq!(saved["range"], "J10:J13");
+    assert_spill(&s, "A1", 6.0);
+
+    refuses_unchanged(&mut s, "data.solverReport", json!({"reports": ["answer"]}));
+    refuses_unchanged(&mut s, "data.solver", model);
 }
 
 #[test]
