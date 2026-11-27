@@ -3,6 +3,8 @@
 /// Returns the Russian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Линейное приближение",
+        "Growth Trend" => "Экспоненциальное приближение",
         "Diagram" => "Схема",
         "Decorative Text" => "Декоративный текст",
         "Paste" => "Вставить",
@@ -303,6 +305,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Указание",
         "Calculate" => "Вычисление",
         "Select destination and press Enter or choose Paste" => "Выберите место вставки и нажмите Enter или выберите «Вставить»",
+        "Extend Selection" => "Расширить выделение",
+        "Add or Remove Selection" => "Добавить или удалить выделение",
         "General" => "Общий",
         "Number" => "Числовой",
         "Currency" => "Денежный",
@@ -389,6 +393,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Последние",
         "No recent workbooks yet." => "Недавних книг пока нет.",
         "More workbooks" => "Другие книги",
+        "More entries not shown" => "Показаны не все элементы",
         "Modified" => "Изменён",
         "Not available" => "Недоступен",
         "Just now" => "Только что",
@@ -430,6 +435,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Сохранить книгу под другим именем или в другой папке.",
         "Print Active Sheets" => "Напечатать активные листы",
         "Print Entire Workbook" => "Напечатать всю книгу",
+        "Print Selection" => "Напечатать выделенный диапазон",
         "Fit Sheet on One Page" => "Вписать лист на одну страницу",
         "Page Setup…" => "Параметры страницы…",
         "Page {page} of {pages}" => "Страница {page} из {pages}",
@@ -482,6 +488,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Action" => "Действие",
         "Action Journal" => "Журнал действий",
         "Add" => "Добавить",
+        "Paste Special|Add" => "Добавить",
         "Add Chart Element" => "Добавить элемент диаграммы",
         "Add subtotal to (columns, e.g. C,D):" => "Добавить итоги по (столбцы, например C,D):",
         "Add to Dictionary" => "Добавить в словарь",
@@ -544,6 +551,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Columns (blank = all, e.g. A,C):" => "Столбцы (пусто = все, например A,C):",
         "Combo" => "Комбинированная",
         "Comma" => "Запятая",
+        "Text to Columns|Comma" => "Запятая",
         "Comment:" => "Комментарий:",
         "Comments and notes (C)" => "Комментарии и заметки (C)",
         "Comments pane" => "Область комментариев",
@@ -1065,6 +1073,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Distinct Count" => "Число уникальных",
+        "Summarize by Distinct Count" => "Итоги по числу уникальных",
+        "A calculated field can't use Distinct Count." => "Вычисляемое поле не может использовать число уникальных.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "В этой книге есть сводная таблица с полем значений «Число уникальных». В файле .xlsx оно сохраняется как обычное Количество вместе с меткой, которую читает только GridCraft, поэтому команда Обновить в Excel превращает его в обычное количество."
+        }
         "My list has headers" => "Мои данные содержат заголовки",
         "Sort by" => "Сортировать по",
         "Then by" => "Затем по",
@@ -1206,6 +1220,29 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Fill Months" => "Заполнить по месяцам",
         "Fill Years" => "Заполнить по годам",
         "Auto Fill Options" => "Параметры автозаполнения",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Новое правило форматирования",
+        "Edit Formatting Rule" => "Изменение правила форматирования",
+        "Select a Rule Type" => "Выбор типа правила",
+        "Edit the Rule Description" => "Изменение описания правила",
+        "Format all cells based on their values" => "Форматировать все ячейки на основе их значений",
+        "Format only cells that contain" => "Форматировать только ячейки, которые содержат",
+        "Format only top or bottom ranked values" => "Форматировать только значения, имеющие верхний или нижний рейтинг",
+        "Format only values that are above or below average" => "Форматировать только значения выше или ниже среднего",
+        "Format only unique or duplicate values" => "Форматировать только уникальные или повторяющиеся значения",
+        "Use a formula to determine which cells to format" => "Использовать формулу для определения форматируемых ячеек",
+        "This rule type isn't available yet." => "Этот тип правила пока недоступен.",
+        "Format Style:" => "Стиль формата:",
+        "2-Color Scale" => "Двухцветная шкала",
+        "3-Color Scale" => "Трехцветная шкала",
+        "Midpoint" => "Средняя точка",
+        "Lowest value" => "Наименьшее значение",
+        "Highest value" => "Наибольшее значение",
+        "Percent" => "Процент",
+        "Percentile" => "Процентиль",
+        "Formula" => "Формула",
+        "More Rules…" => "Другие правила…",
+        // Conditional formatting: the formatting presets the rule editor offers.
         _ => return None,
     })
 }

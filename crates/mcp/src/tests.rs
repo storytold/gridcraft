@@ -512,6 +512,15 @@ fn control_auth_handshake_and_compare() {
     assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
 }
 
+#[test]
+fn a_relative_token_root_is_refused_before_it_is_selected() {
+    // The app may point the tokens at its own private profile, but only at an absolute folder: a
+    // relative one would resolve against whatever directory the process was started in. (A
+    // successful selection is process-wide, so this test only exercises the refusal.)
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("relative/tokens")).is_err());
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("")).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn control_token_file_is_private() {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::adjust::{Axis, Edit, adjust, rename_sheet, shift_relative};
+use crate::adjust::{Axis, Edit, adjust, rename_sheet, shift_relative, transpose_relative};
 
 fn rt(src: &str) -> String {
     match parse(src) {
@@ -180,6 +180,28 @@ fn copy_shift() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn copy_transpose() -> Result<(), Box<dyn std::error::Error>> {
+    let at = gridcraft_core::CellRef::new;
+    // The row of each reference drives its new column and the other way round (Excel, observed:
+    // A1 → F6 carrying =B1+1 comes out as =F7+1).
+    let e = parse("B1+SUM(B1:C3)+Sheet2!A1")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "F7+SUM(F7:H8)+Sheet2!F6");
+    // The turn is around the two positions of the formula's cell, not around A1.
+    let e = parse("G3+SUM(1:2)")?;
+    assert_eq!(print(&transpose_relative(e, at(1, 2), at(9, 5))), "G14+SUM(E$8:F$1048576)");
+    // A reference pinned with `$` is left exactly as it stands.
+    let e = parse("$B$1+B$1+$B1+SUM($B$1:$C$3)")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "$B$1+B$1+$B1+SUM($B$1:$C$3)");
+    // Whole rows and columns come back as a cell range open to the sheet's edge.
+    let e = parse("SUM(1:2)+SUM(B:D)")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "SUM(F$6:G$1048576)+SUM($F7:$XFD9)");
+    // Off the grid is #REF!, like a copy that runs past the edge.
+    let e = parse("A16384+B1")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "#REF!+F7");
+    Ok(())
+}
+
+#[test]
 fn insert_delete() -> Result<(), Box<dyn std::error::Error>> {
     let ins = Edit::Insert { axis: Axis::Rows, at: 2, count: 2 };
     let e = parse("A1+A3+SUM(A2:A5)+Other!A3")?;
@@ -238,6 +260,10 @@ fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Erro
     let e = rename_sheet(parse("Data!MyName")?, "Data", "It's");
     assert_eq!(e, Expr::Name("It's!MyName".into()));
     assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
+    // A sheet whose name holds a '!' splits at the last one: renaming "A" leaves "A!B"'s names alone.
+    let e = Expr::Name("A!B!MyName".into());
+    assert_eq!(rename_sheet(e.clone(), "A", "Z"), e);
+    assert_eq!(rename_sheet(e, "a!b", "Z"), Expr::Name("Z!MyName".into()));
     Ok(())
 }
 

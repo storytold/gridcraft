@@ -24,7 +24,12 @@ fn serial(sys: DateSystem, y: i32, m: u32, d: u32) -> R<f64> {
 }
 
 pub(super) fn basis_arg(a: &[Arg], i: usize) -> R<u32> {
-    let b = opt_num(a, i, 0.0)?.trunc();
+    let raw = opt_num(a, i, 0.0)?;
+    // Excel rejects any negative basis before truncation: -0.9 would truncate to -0.0 and slip through.
+    if raw < 0.0 {
+        return Err(CellError::Num);
+    }
+    let b = raw.trunc();
     if !(0.0..=4.0).contains(&b) {
         return Err(CellError::Num);
     }
