@@ -1100,3 +1100,25 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
 }
+
+#[test]
+fn json_without_sheets_keeps_its_text_defaults() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    // Saved and opened as GridCraft JSON, with the sheet list emptied in between: the reset to a
+    // new workbook carries the text defaults across with the macros.
+    let mut saved = Workbook::new();
+    saved.text_defaults.asian = gridcraft_model::ScriptDefault {
+        language: Some("ja".into()),
+        country: Some("JP".into()),
+        font: Some("Noto Sans CJK JP".into()),
+        ..Default::default()
+    };
+    saved.macros.push(gridcraft_model::Macro { name: "Totals".into(), ..Default::default() });
+    let mut v: serde_json::Value = serde_json::from_slice(&save_bytes(&saved, "book.json")?)?;
+    v["sheets"] = serde_json::json!([]);
+    let (wb, warnings) = open_bytes("book.json", v.to_string().as_bytes())?;
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!wb.sheets.is_empty(), "a workbook without sheets opens as a new one");
+    assert_eq!(wb.text_defaults, saved.text_defaults);
+    assert_eq!(wb.macros, saved.macros);
+    Ok(())
+}
