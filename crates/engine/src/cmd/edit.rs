@@ -295,14 +295,22 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             // with nothing stored in it.
             let used = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| whole.intersection(&u));
             let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, whole)).unwrap_or_default();
-            let cells: Vec<(CellRef, Cell)> = match (cx.wb.sheet(sheet), used) {
-                (Some(sh), Some(r)) => sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect(),
-                _ => Vec::new(),
+            let bulk_all = what == "all" && skip.is_empty();
+            let mut cells: Vec<(CellRef, Cell)> = if bulk_all {
+                if let (Some(sh), Some(r)) = (cx.wb.sheet(sheet), used) {
+                    cx.changed.extend(sh.cells.iter_range(r).map(|(c, _)| (sheet, c)));
+                }
+                Vec::new()
+            } else {
+                let cells: Vec<(CellRef, Cell)> = match (cx.wb.sheet(sheet), used) {
+                    (Some(sh), Some(r)) => sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect(),
+                    _ => Vec::new(),
+                };
+                // Report every stored cell we touch, even beyond a million coordinates in a sparse
+                // selection. Removed formula anchors must also reach calc so their spills disappear.
+                cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
+                cells
             };
-            // Report every stored cell we touch, even beyond a million coordinates in a sparse
-            // selection. Removed formula anchors must also reach calc so their spills disappear.
-            cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
-            let mut cells = cells;
             if what == "contents" {
                 for (_, cell) in cells.iter_mut() {
                     let checkbox = cx.wb.styles.get(cell.style).num_fmt.as_str() == "checkbox";
@@ -331,19 +339,26 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 .unwrap_or_default();
             cx.changed.extend(metadata.into_iter().map(|c| (sheet, c)));
             let sh = cx.sheet_mut(sheet)?;
-            for (c, mut cell) in cells {
-                match what {
-                    "all" => {
-                        sh.remove_cell(c);
+            let bulk_take = bulk_all || (what == "contents" && skip.is_empty() && cells.iter().all(|(_, cell)| cell.is_blank()));
+            if bulk_take {
+                if let Some(r) = used {
+                    sh.take_cells(r);
+                }
+            } else {
+                for (c, mut cell) in cells {
+                    match what {
+                        "all" => {
+                            sh.remove_cell(c);
+                        }
+                        "contents" => {
+                            sh.set_cell(c, cell);
+                        }
+                        "formats" => {
+                            cell.style = StyleId::DEFAULT;
+                            sh.cells.set(c, cell);
+                        }
+                        _ => {}
                     }
-                    "contents" => {
-                        sh.set_cell(c, cell);
-                    }
-                    "formats" => {
-                        cell.style = StyleId::DEFAULT;
-                        sh.cells.set(c, cell);
-                    }
-                    _ => {}
                 }
             }
             if matches!(what, "all" | "comments") {

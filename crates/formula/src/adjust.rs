@@ -122,14 +122,19 @@ fn shift_line(v: u32, abs: bool, d: i64, max: u32) -> Option<u32> {
     if (0..max as i64).contains(&n) { Some(n as u32) } else { None }
 }
 
-fn shift_ref(r: Reference, dr: i64, dc: i64) -> Option<Reference> {
-    let kind = match &r.kind {
+/// Shifts a [`RefKind`]'s relative coordinates by `(dr, dc)` without cloning sheet names.
+/// Returns `None` if any relative coordinate leaves the worksheet grid (`#REF!`).
+pub fn shift_ref_kind(kind: &RefKind, dr: i64, dc: i64) -> Option<RefKind> {
+    Some(match kind {
         RefKind::Cell(a) => RefKind::Cell(shift_anchor(a, dr, dc)?),
         RefKind::Range(a, b) => RefKind::Range(shift_anchor(a, dr, dc)?, shift_anchor(b, dr, dc)?),
         RefKind::Rows(r0, a0, r1, a1) => RefKind::Rows(shift_line(*r0, *a0, dr, MAX_ROWS)?, *a0, shift_line(*r1, *a1, dr, MAX_ROWS)?, *a1),
         RefKind::Cols(c0, a0, c1, a1) => RefKind::Cols(shift_line(*c0, *a0, dc, MAX_COLS)?, *a0, shift_line(*c1, *a1, dc, MAX_COLS)?, *a1),
-    };
-    Some(Reference { sheet: r.sheet, kind })
+    })
+}
+
+fn shift_ref(r: Reference, dr: i64, dc: i64) -> Option<Reference> {
+    Some(Reference { sheet: r.sheet, kind: shift_ref_kind(&r.kind, dr, dc)? })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

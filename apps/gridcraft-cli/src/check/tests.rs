@@ -92,6 +92,25 @@ fn book(cells: &[(&str, &str, Value)]) -> Workbook {
     wb
 }
 
+#[test]
+fn round_trip_diff_does_not_equate_distinct_absolute_shifts() {
+    let shared_book = |text| {
+        let base = Arc::new(gridcraft_engine::formula::parse(text).unwrap());
+        let mut wb = Workbook::new();
+        let sheet = wb.sheet_mut(0).unwrap();
+        for (cell, dr) in [("B1", -2), ("B2", -1)] {
+            sheet.set_cell(at(cell), Cell::formula(Formula::from_shared(Arc::clone(&base), dr, 0)));
+        }
+        wb
+    };
+    let a = shared_book("A1");
+    let b = shared_book("A2");
+    let categories = fidelity::diff_workbooks(&a, &b, &Options::default());
+    let formulas = categories.iter().find(|c| c.name == "formulas").unwrap();
+    assert_eq!(formulas.diffs, 1);
+    assert!(formulas.examples[0].ends_with("!B2: =#REF! → =A1"), "{formulas:?}");
+}
+
 fn check(wb: &Workbook, opts: &Options) -> FileReport {
     let bytes = gridcraft_engine::io::save_bytes(wb, "t.xlsx").unwrap();
     check_bytes("t.xlsx", &bytes, opts)

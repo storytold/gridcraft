@@ -224,7 +224,7 @@ fn ribbon_paste_pastes_the_system_clipboard_like_cmd_v() {
     h.get_by_role_and_label(Role::Button, "Paste").click();
     h.run_steps(2);
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
-    assert_eq!(sh.cell(CellRef::parse("B9").unwrap()).unwrap().formula.as_ref().unwrap().text, "C8*2");
+    assert_eq!(sh.cell(CellRef::parse("B9").unwrap()).unwrap().formula.as_ref().unwrap().text(), "C8*2");
 
     // Nothing on the system clipboard (an image, say): GridCraft's own copy is pasted.
     clipboard.borrow_mut().0.clear();
@@ -232,7 +232,7 @@ fn ribbon_paste_pastes_the_system_clipboard_like_cmd_v() {
     h.get_by_role_and_label(Role::Button, "Paste").click();
     h.run_steps(2);
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
-    assert_eq!(sh.cell(CellRef::parse("B12").unwrap()).unwrap().formula.as_ref().unwrap().text, "C11*2");
+    assert_eq!(sh.cell(CellRef::parse("B12").unwrap()).unwrap().formula.as_ref().unwrap().text(), "C11*2");
 }
 
 #[test]

@@ -618,3 +618,22 @@ fn wrappers_stacked_across_levels_are_bounded_as_a_whole() {
     assert!(parse(&format!("{}1{}", "(".repeat(200), ")".repeat(200))).is_ok());
     assert!(parse(&format!("={}", vec!["A1%"; 100].join("+"))).is_ok(), "siblings are not stacked");
 }
+
+#[test]
+fn print_shifted_matches_shift_relative_including_oob_spill_and_trim() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        "A1+$B$2+C$3+$D4",
+        "SUM(A2:B10)+INDEX(Sheet1!$A$1:$C$100,MATCH(A2,Sheet1!$A$1:$A$100,0),2)",
+        "A1#+B2:.C5+1:3+A:B",
+        "IF(A2=\"hello\",B2*2,C2)",
+    ];
+    for src in cases {
+        let e = parse(src)?;
+        for (dr, dc) in [(0, 0), (5, 0), (100, 3), (-1, 0), (0, -2), (-5, -5)] {
+            let expected = print(&adjust::shift_relative(e.clone(), dr, dc));
+            let actual = print_shifted(&e, dr, dc);
+            assert_eq!(actual, expected, "src={src} dr={dr} dc={dc}");
+        }
+    }
+    Ok(())
+}

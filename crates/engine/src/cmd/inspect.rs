@@ -103,7 +103,7 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
         for col in r.start.col..=r.end.col {
             let c = CellRef::new(row, col);
             let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
-                json!(format!("={}", f.text))
+                json!(format!("={}", f.text()))
             } else if formatted {
                 json!(crate::display::cell_text(&d.wb, sh, c))
             } else {
@@ -127,7 +127,7 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
         "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
-        "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
+        "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text())),
         "text": crate::display::cell_text(&d.wb, sh, c),
         "input": sh.input_text(c),
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),

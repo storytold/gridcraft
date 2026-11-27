@@ -177,7 +177,10 @@ fn xlsb_scalar_caches_rk_unicode_visibility_and_epochs_survive_xlsx_save() {
             assert_eq!(&wb.sheets[0].value(CellRef::new(2, col as u32)), expected);
         }
         for col in 10..=13 {
-            assert_eq!(wb.sheets[0].cell(CellRef::new(2, col)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("1"));
+            assert_eq!(
+                wb.sheets[0].cell(CellRef::new(2, col)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+                Some("1".to_string())
+            );
         }
         let (roundtrip, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
         assert_eq!(roundtrip.date_system, wb.date_system);
@@ -414,15 +417,21 @@ fn xlsb_formulas_defined_names_and_external_links_delegate_to_craft_xlsx() {
     let (wb, report) = read_xlsb(&bytes).unwrap();
     assert_eq!(wb.names.len(), 1);
     assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str(), wb.names[0].scope), ("Rate", "Hidden!$A$1", None));
-    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Hidden!$A$1"));
-    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Rate"));
+    assert_eq!(
+        wb.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("Hidden!$A$1".to_string())
+    );
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()), Some("Rate".to_string()));
     assert!(wb.sheets[0].cell(CellRef::new(0, 2)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(99.0)));
     assert!(report.warnings.iter().any(|w| w.contains("external link")), "{:?}", report.warnings);
 
     let (rt, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(rt.names.len(), 1);
-    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Hidden!$A$1"));
-    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Rate"));
+    assert_eq!(
+        rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("Hidden!$A$1".to_string())
+    );
+    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()), Some("Rate".to_string()));
     assert_eq!(rt.sheets[0].value(CellRef::new(0, 2)), Value::Number(99.0));
 }
 
@@ -541,16 +550,22 @@ fn xlsb_external_book_formulas_and_names_decode_and_roundtrip_through_xlsx() {
     let (wb, _) = read_xlsb(&bytes).unwrap();
     let c0 = wb.sheets[0].cell(CellRef::new(0, 0)).unwrap();
     assert_eq!(c0.value, Value::Number(99.0));
-    assert_eq!(c0.formula.as_ref().map(|f| f.text.as_str()), Some("[1]Data!$A$1"));
+    assert_eq!(c0.formula.as_ref().map(|f| f.text().into_owned()), Some("[1]Data!$A$1".to_string()));
     let c1 = wb.sheets[0].cell(CellRef::new(0, 1)).unwrap();
     assert_eq!(c1.value, Value::Number(12.5));
-    assert_eq!(c1.formula.as_ref().map(|f| f.text.as_str()), Some("[1]!ExtName"));
+    assert_eq!(c1.formula.as_ref().map(|f| f.text().into_owned()), Some("[1]!ExtName".to_string()));
 
     let saved = write_xlsx(&wb).unwrap();
     let (rt, _) = read_xlsx(&saved).unwrap();
-    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]Data!$A$1"));
+    assert_eq!(
+        rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("[1]Data!$A$1".to_string())
+    );
     assert_eq!(rt.sheets[0].value(CellRef::new(0, 0)), Value::Number(99.0));
-    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]!ExtName"));
+    assert_eq!(
+        rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("[1]!ExtName".to_string())
+    );
     assert_eq!(rt.sheets[0].value(CellRef::new(0, 1)), Value::Number(12.5));
 
     // Verify the external workbook target relationship survives XLSB -> XLSX -> read_xlsx -> XLSX.
@@ -673,7 +688,10 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     assert!(report.warnings.iter().any(|w| w.contains("unresolved or non-workbook external links")), "{:?}", report.warnings);
     assert!(report.warnings.iter().any(|w| w.contains("replaced with their cached values")), "{:?}", report.warnings);
     assert!(wb.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
-    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
+    assert_eq!(
+        wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("[1]SheetA!$A$1".to_string())
+    );
 
     // Also verify numeric structured-table headers like `SUM(Sales[2024])` are not mistaken for
     // external ordinals when an omitted DDE link triggers ordinal remapping.
@@ -689,7 +707,10 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     let (reopened, rep2) = read_xlsx(&saved).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
     assert!(reopened.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
-    assert_eq!(reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
+    assert_eq!(
+        reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()),
+        Some("[1]SheetA!$A$1".to_string())
+    );
 
     let saved2 = write_xlsx(&reopened).unwrap();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();

@@ -55,7 +55,7 @@ fn inserting_rows_and_moving_keep_the_mark() {
     s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
     let f = formula(&s, "D2");
     assert!(f.dynamic);
-    assert_eq!(f.text, "SUMPRODUCT(B2:B4*C2:C4)");
+    assert_eq!(f.text(), "SUMPRODUCT(B2:B4*C2:C4)");
     assert!(saved_dynamic(&s, "D2"));
     s.execute("selection.set", json!({"range": "D2"})).unwrap();
     s.execute("edit.cut", json!({})).unwrap();

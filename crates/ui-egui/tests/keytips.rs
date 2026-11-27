@@ -176,7 +176,7 @@ fn legacy_paste_special_keeps_formulas_when_requested() {
     assert_eq!(value(&h, "D4"), Value::Empty);
     key(&mut h, Key::Enter);
     let sh = h.state().session.active().unwrap().wb.active().unwrap();
-    assert_eq!(sh.cell(CellRef::parse("D4").unwrap()).unwrap().formula.as_ref().unwrap().text, "20+22");
+    assert_eq!(sh.cell(CellRef::parse("D4").unwrap()).unwrap().formula.as_ref().unwrap().text(), "20+22");
     assert_eq!(value(&h, "D4"), Value::Number(42.0));
     assert_eq!(value(&h, "E4"), Value::Number(99.0));
     assert!(h.state().editor.is_none());

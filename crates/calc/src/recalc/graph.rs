@@ -223,11 +223,74 @@ pub(super) struct Taken {
     wide: HashMap<usize, Vec<bool>>,
 }
 
+/// Compact dependent set for a single precedent cell: 1–2 dependents are stored inline with zero
+/// heap allocation (covering >95% of cells on multi-million-formula workbooks).
+#[derive(Clone, Debug)]
+enum DepSet {
+    One(Key),
+    Two(Key, Key),
+    Many(HashSet<Key>),
+}
+
+impl DepSet {
+    fn insert(&mut self, k: Key) {
+        match self {
+            DepSet::One(a) => {
+                if *a != k {
+                    *self = DepSet::Two(*a, k);
+                }
+            }
+            DepSet::Two(a, b) => {
+                if *a != k && *b != k {
+                    let mut s = HashSet::with_capacity_and_hasher(4, Default::default());
+                    s.insert(*a);
+                    s.insert(*b);
+                    s.insert(k);
+                    *self = DepSet::Many(s);
+                }
+            }
+            DepSet::Many(s) => {
+                s.insert(k);
+            }
+        }
+    }
+
+    /// Removes `k`; returns `true` when the set is now empty and should be removed from the map.
+    fn remove(&mut self, k: &Key) -> bool {
+        match self {
+            DepSet::One(a) => a == k,
+            DepSet::Two(a, b) => {
+                if a == k {
+                    *self = DepSet::One(*b);
+                } else if b == k {
+                    *self = DepSet::One(*a);
+                }
+                false
+            }
+            DepSet::Many(s) => {
+                s.remove(k);
+                s.is_empty()
+            }
+        }
+    }
+
+    fn push_into(&self, out: &mut Vec<Key>) {
+        match self {
+            DepSet::One(a) => out.push(*a),
+            DepSet::Two(a, b) => {
+                out.push(*a);
+                out.push(*b);
+            }
+            DepSet::Many(s) => out.extend(s.iter().copied()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Graph {
     pub(super) nodes: HashMap<Key, Node>,
     /// single cell → dependents
-    cell_deps: HashMap<Key, HashSet<Key>>,
+    cell_deps: HashMap<Key, DepSet>,
     /// (sheet, col) → row intervals of the ranges (up to `WIDE` columns) that cover the column
     col_deps: HashMap<(usize, u32), Intervals<Key>>,
     /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
@@ -275,17 +338,35 @@ impl Graph {
 
     pub(super) fn insert(&mut self, k: Key, node: Node) {
         self.remove(k);
-        let (cells, cols, wide) = Self::entries(&node.areas);
-        for c in cells {
-            self.cell_deps.entry(c).or_default().insert(k);
-        }
-        for (s, c, r0, r1) in cols {
-            self.col_deps.entry((s, c)).or_default().insert(r0, r1, k);
-            self.unsettled_cols.insert((s, c));
-        }
-        for (s, r) in wide {
-            self.wide_deps.entry(s).or_default().insert(r.start.row, r.end.row, (r.start.col, r.end.col, k));
-            self.unsettled_wide.insert(s);
+        self.insert_fresh(k, node);
+    }
+
+    /// Inserts `k` when the caller knows `k` is not already in the graph (used by `Calc::rebuild`).
+    /// Fast-paths the common single-cell-precedents case without allocating or sorting temporary vectors.
+    pub(super) fn insert_fresh(&mut self, k: Key, node: Node) {
+        let add_dep = |cell_deps: &mut HashMap<Key, DepSet>, c: Key, k: Key| match cell_deps.entry(c) {
+            std::collections::hash_map::Entry::Occupied(mut e) => e.get_mut().insert(k),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(DepSet::One(k));
+            }
+        };
+        if node.areas.iter().all(|a| a.range.is_single()) {
+            for a in &node.areas {
+                add_dep(&mut self.cell_deps, (a.sheet, a.range.start), k);
+            }
+        } else {
+            let (cells, cols, wide) = Self::entries(&node.areas);
+            for c in cells {
+                add_dep(&mut self.cell_deps, c, k);
+            }
+            for (s, c, r0, r1) in cols {
+                self.col_deps.entry((s, c)).or_default().insert(r0, r1, k);
+                self.unsettled_cols.insert((s, c));
+            }
+            for (s, r) in wide {
+                self.wide_deps.entry(s).or_default().insert(r.start.row, r.end.row, (r.start.col, r.end.col, k));
+                self.unsettled_wide.insert(s);
+            }
         }
         if node.dynamic {
             self.dynamic.insert(k);
@@ -297,11 +378,10 @@ impl Graph {
         let Some(old) = self.nodes.remove(&k) else { return };
         let (cells, cols, wide) = Self::entries(&old.areas);
         for c in cells {
-            if let Some(v) = self.cell_deps.get_mut(&c) {
-                v.remove(&k);
-                if v.is_empty() {
-                    self.cell_deps.remove(&c);
-                }
+            if let Some(v) = self.cell_deps.get_mut(&c)
+                && v.remove(&k)
+            {
+                self.cell_deps.remove(&c);
             }
         }
         for (s, c, r0, r1) in cols {
@@ -343,7 +423,7 @@ impl Graph {
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-            out.extend(v.iter().copied());
+            v.push_into(out);
         }
         if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
             v.query(c.row, c.row, &mut |k| out.push(*k));
@@ -363,7 +443,7 @@ impl Graph {
     /// graph must not change while `taken` is in use.
     pub(super) fn dependents_untaken(&self, sheet: usize, c: CellRef, taken: &mut Taken, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-            out.extend(v.iter().copied());
+            v.push_into(out);
         }
         if let Some(v) = self.col_deps.get(&(sheet, c.col)) {
             v.query_untaken(c.row, c.row, taken.cols.entry((sheet, c.col)).or_default(), &mut |k| {
@@ -388,13 +468,13 @@ impl Graph {
         if range.count() <= 4096 {
             for c in range.iter() {
                 if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-                    out.extend(v.iter().copied());
+                    v.push_into(out);
                 }
             }
         } else {
             for ((s, c), v) in &self.cell_deps {
                 if *s == sheet && range.contains(*c) {
-                    out.extend(v.iter().copied());
+                    v.push_into(out);
                 }
             }
         }

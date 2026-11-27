@@ -942,7 +942,7 @@ fn error_checking(s: &mut Session, _: &Json) -> Result<Json> {
         for (c, cell) in sh.cells.iter() {
             if let Some(e) = cell.value.as_error() {
                 out.push(
-                    json!({"sheet": sh.name, "cell": c.a1(), "error": e.as_str(), "formula": cell.formula.as_ref().map(|f| format!("={}", f.text))}),
+                    json!({"sheet": sh.name, "cell": c.a1(), "error": e.as_str(), "formula": cell.formula.as_ref().map(|f| format!("={}", f.text()))}),
                 );
             }
             if out.len() >= 10_000 {
@@ -969,7 +969,7 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
             d.wb.sheet(sheet)
                 .and_then(|sh| sh.cell(at))
                 .and_then(|c| c.formula.as_ref())
-                .map(|f| f.text.clone())
+                .map(|f| f.text().into_owned())
                 .ok_or_else(|| EngineError::Other("The cell has no formula.".into()))?
         }
     };

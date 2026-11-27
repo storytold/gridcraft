@@ -387,7 +387,7 @@ fn content_diff(a: &Workbook, b: &Workbook) -> Option<String> {
         for c in x.cells.diff(&y.cells) {
             let content = |s: &Sheet| {
                 s.cell(c).filter(|c| has_content(c)).map(|c| match &c.formula {
-                    Some(f) => format!("={}", f.text),
+                    Some(f) => format!("={}", f.text()),
                     None => format!("{:?}", c.value),
                 })
             };
@@ -477,7 +477,7 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
             let python_error = matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
                 && vb == Value::Error(CellError::Value);
             if !same_value(&va, &vb) && !python_error {
-                let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
+                let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text())).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
         }
@@ -496,7 +496,7 @@ fn recalc_diff(wb: &Workbook) -> Result<(), String> {
 }
 
 fn normalized_formula(f: &Formula) -> String {
-    let text = Formula::new(&f.text).text;
+    let text = Formula::new(&f.text()).text().into_owned();
     if f.array.is_some() { format!("{{={text}}}") } else { format!("={text}") }
 }
 

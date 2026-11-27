@@ -152,11 +152,18 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
     let mut r = CalcReport { stale_cache: !trust_cache, ..Default::default() };
     let vnames = volatile_names(cached);
     let mut volatile: HashSet<Key> = HashSet::new();
+    let mut vol_cache: HashMap<usize, bool> = HashMap::new();
     for (si, sh) in cached.sheets.iter().enumerate() {
         for (c, cell) in sh.cells.iter() {
             if let Some(f) = &cell.formula {
                 r.formula_cells += 1;
-                if f.expr_arc().is_some_and(|e| is_volatile(&e, &vnames)) {
+                let is_vol = if let Some((base, _, _)) = f.expr_shifted() {
+                    let ptr = std::sync::Arc::as_ptr(base) as usize;
+                    *vol_cache.entry(ptr).or_insert_with(|| is_volatile(base, &vnames))
+                } else {
+                    f.expr_arc().is_some_and(|e| is_volatile(&e, &vnames))
+                };
+                if is_vol {
                     volatile.insert((si, c));
                 }
             }
@@ -179,6 +186,9 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
     }
 
     let mut bad: Vec<(Key, Vec<String>)> = Vec::new();
+    let mut funcs_cache: HashMap<usize, Vec<String>> = HashMap::new();
+    let no_fn = vec!["(no function)".to_string()];
+    let unparsed_fn = vec!["(unparsed)".to_string()];
     for (si, sh) in cached.sheets.iter().enumerate() {
         for (c, cell) in sh.cells.iter() {
             let Some(f) = &cell.formula else { continue };
@@ -192,19 +202,29 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
             }
             r.checked += 1;
             let actual = fresh.sheet(si).and_then(|s| s.cell(c)).map(|x| x.value.scalar()).unwrap_or_default();
-            let funcs = match f.expr_arc() {
-                Some(e) => {
-                    let names = functions_of(&e);
-                    if names.is_empty() { vec!["(no function)".to_string()] } else { names }
-                }
-                None => vec!["(unparsed)".to_string()],
+            let owned_funcs: Vec<String>;
+            let funcs: &[String] = if let Some((base, _, _)) = f.expr_shifted() {
+                let ptr = std::sync::Arc::as_ptr(base) as usize;
+                funcs_cache.entry(ptr).or_insert_with(|| {
+                    let names = functions_of(base);
+                    if names.is_empty() { no_fn.clone() } else { names }
+                })
+            } else {
+                owned_funcs = match f.expr_arc() {
+                    Some(e) => {
+                        let names = functions_of(&e);
+                        if names.is_empty() { no_fn.clone() } else { names }
+                    }
+                    None => unparsed_fn.clone(),
+                };
+                &owned_funcs
             };
             let bool_as_number = bool_cached_as_number(&cell.value, &actual);
             let ok = bool_as_number || values_match(&cell.value, &actual, opts.tolerance);
             if bool_as_number {
                 r.bool_as_number += 1;
             }
-            for n in &funcs {
+            for n in funcs {
                 let st = r.functions.entry(n.clone()).or_default();
                 st.checked += 1;
                 if !ok {
@@ -216,7 +236,7 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
             } else {
                 r.mismatched += 1;
                 *r.signatures.entry(format!("{} → {}", type_name(&cell.value), type_name(&actual))).or_default() += 1;
-                bad.push(((si, c), funcs));
+                bad.push(((si, c), funcs.to_vec()));
             }
         }
     }

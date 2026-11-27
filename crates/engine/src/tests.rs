@@ -150,7 +150,7 @@ fn editing_a_name_renames_it_in_formulas() {
     let names: Vec<&str> = d.wb.names.iter().map(|n| n.name.as_str()).collect();
     assert_eq!(names, ["Other", "Cost"]);
     let b1 = d.wb.active().unwrap().cell(CellRef::parse("B1").unwrap()).and_then(|c| c.formula.clone()).unwrap();
-    assert_eq!(b1.text, "Cost*2");
+    assert_eq!(b1.text(), "Cost*2");
     assert_eq!(v(&s, "B1"), Value::number(42.0));
     assert!(s.execute("formulas.defineName", json!({"name": "X", "oldName": "Missing"})).is_err());
 }
@@ -169,8 +169,9 @@ fn renaming_a_name_leaves_let_and_lambda_locals_alone() {
     )
     .unwrap();
     s.execute("formulas.defineName", json!({"name": "Fee", "refersTo": "=2", "oldName": "Rate"})).unwrap();
-    let formula =
-        |s: &Session, at: &str| s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text.clone();
+    let formula = |s: &Session, at: &str| {
+        s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text().into_owned()
+    };
     assert_eq!(formula(&s, "A1"), "LET(Rate,3,Rate*10)+Fee");
     assert_eq!(formula(&s, "A2"), "LAMBDA(Rate,Rate+1)(Fee)");
     assert_eq!(v(&s, "A1"), Value::number(32.0));
@@ -549,9 +550,9 @@ fn bulk_formula_history_is_bounded_and_latest_edit_still_undoes() {
     doc.wb = current;
     doc.undo = history;
     session.execute("edit.undo", json!({})).unwrap();
-    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, "B1+3");
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text(), "B1+3");
     session.execute("edit.redo", json!({})).unwrap();
-    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, "B1+4");
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().cells.get(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text(), "B1+4");
 }
 
 #[test]
@@ -2708,7 +2709,7 @@ fn autosum_over_whole_rows_is_one_undo_step_within_the_data() {
 }
 
 fn formula_at(s: &Session, a: &str) -> Option<String> {
-    s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.as_ref().map(|f| f.text.clone()))
+    s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.as_ref().map(|f| f.text().into_owned()))
 }
 
 #[test]
@@ -4340,8 +4341,8 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
         assert_eq!(v(&s, "B1"), Value::from("Original data"));
         assert_eq!(
-            s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.as_ref().map(|f| f.text.as_str()),
-            Some("42")
+            s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.as_ref().map(|f| f.text().into_owned()),
+            Some("42".to_string())
         );
         s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
@@ -4529,8 +4530,8 @@ fn xls_formulas_calculate_with_legacy_implicit_intersection() {
     let saved = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
     let (wb, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
     let f = |a1: &str| wb.sheets[1].cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.clone()).unwrap();
-    assert_eq!(f("A1").text, "@Data!A1:G1");
-    assert_eq!((f("H1").text.as_str(), f("H1").array), ("SUM(Data!$A$2:$A$3*2)", gridcraft_core::RangeRef::parse("H1")));
+    assert_eq!(f("A1").text(), "@Data!A1:G1");
+    assert_eq!((f("H1").text().into_owned(), f("H1").array), ("SUM(Data!$A$2:$A$3*2)".to_string(), gridcraft_core::RangeRef::parse("H1")));
     let mut sheet = String::new();
     std::io::Read::read_to_string(
         &mut zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap().by_name("xl/worksheets/sheet2.xml").unwrap(),
@@ -7919,8 +7920,8 @@ fn table_rename_renames_every_reference() {
     let wb = &s.doc().unwrap().wb;
     let sh = &wb.sheets[0];
     assert_eq!(
-        sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).map(|f| (f.text.clone(), f.array, f.dynamic)),
-        Some((array.text.clone(), array.array, array.dynamic))
+        sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).map(|f| (f.text().into_owned(), f.array, f.dynamic)),
+        Some((array.text().into_owned(), array.array, array.dynamic))
     );
     assert_eq!(wb.names.iter().find(|n| n.name == "Tot").map(|n| n.formula.clone()).as_deref(), Some("SUM(Data[v])"));
     assert!(matches!(&sh.cond_formats[0].rule, gridcraft_model::CfRule::Expression { formula, .. } if formula.contains("Data[v]")));
@@ -8488,4 +8489,60 @@ fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
     s.execute("selection.set", json!({"range": "C3:D3"})).unwrap();
     s.execute("edit.paste", json!({})).unwrap();
     assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+}
+
+#[test]
+fn xlsx_shared_aggregate_filtered_div_matches_non_shared_cells() {
+    use std::io::{Cursor, Write};
+    let mut rows = String::new();
+    for r in 2..=21u32 {
+        let key = if r % 5 == 2 { 3 } else { 1 };
+        rows.push_str(&format!(
+            r#"<row r="{r}"><c r="A{r}"><v>{key}</v></c><c r="C{r}"><v>{}</v></c><c r="D{r}"><v>{}</v></c><c r="E{r}"><v>{}</v></c></row>"#,
+            r * 10,
+            r * 100,
+            r * 1000
+        ));
+    }
+    rows.push_str(
+        r#"<row r="30"><c r="G30"><f t="shared" ref="G30:I30" si="0">AGGREGATE(14,6,C$2:C$21/($A$2:$A$21=3),1)</f></c><c r="H30"><f t="shared" si="0"/></c><c r="I30"><f t="shared" si="0"/></c></row>"#,
+    );
+    rows.push_str(
+        r#"<row r="31"><c r="G31"><f>AGGREGATE(14,6,C$2:C$21/($A$2:$A$21=3),1)</f></c><c r="H31"><f>AGGREGATE(14,6,D$2:D$21/($A$2:$A$21=3),1)</f></c><c r="I31"><f>AGGREGATE(14,6,E$2:E$21/($A$2:$A$21=3),1)</f></c></row>"#,
+    );
+    let sheet_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{rows}</sheetData></worksheet>"#
+    );
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let parts: &[(&str, &[u8])] = &[
+        (
+            "[Content_Types].xml",
+            br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#,
+        ),
+        (
+            "_rels/.rels",
+            br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#,
+        ),
+        (
+            "xl/workbook.xml",
+            br#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#,
+        ),
+        (
+            "xl/_rels/workbook.xml.rels",
+            br#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#,
+        ),
+        ("xl/worksheets/sheet1.xml", sheet_xml.as_bytes()),
+    ];
+    for (name, data) in parts {
+        zip.start_file(*name, opts).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let (mut wb, _) = crate::io::open_bytes("shared_agg.xlsx", &bytes).unwrap();
+    gridcraft_calc::Calc::new().recalc_all(&mut wb);
+    let sh = wb.sheet(0).unwrap();
+    let val = |a1: &str| sh.value(CellRef::parse(a1).unwrap());
+    assert_eq!([val("G30"), val("H30"), val("I30")], [Value::Number(170.0), Value::Number(1700.0), Value::Number(17000.0)]);
+    assert_eq!([val("G30"), val("H30"), val("I30")], [val("G31"), val("H31"), val("I31")]);
 }

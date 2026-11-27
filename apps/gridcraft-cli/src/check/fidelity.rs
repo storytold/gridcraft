@@ -2,6 +2,56 @@ use super::calc::formula_text;
 use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
 use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
+use gridcraft_engine::{formula::Expr, model::Formula};
+use std::{collections::HashMap, sync::Arc};
+
+const MAX_CACHED_PAIRS: usize = 65_536;
+
+#[derive(Default)]
+struct FormulaPairs {
+    equivalent_bases: HashMap<(usize, usize), bool>,
+    left: String,
+    right: String,
+}
+
+impl FormulaPairs {
+    fn same_text(&mut self, a: &Formula, b: &Formula) -> bool {
+        use gridcraft_engine::formula::printer::write_shifted_into;
+
+        if !a.is_shared() || !b.is_shared() {
+            return a.text() == b.text();
+        }
+        let (Some((ba, dra, dca)), Some((bb, drb, dcb))) = (a.expr_shifted(), b.expr_shifted()) else {
+            return a.text() == b.text();
+        };
+        // Identical templates produce identical text under the same actual shift. Render all
+        // other pairs: an equal relative delta alone does not preserve text near a grid edge.
+        if (dra, dca) == (drb, dcb) && self.same_base(ba, bb) {
+            return true;
+        }
+        self.left.clear();
+        self.right.clear();
+        write_shifted_into(&mut self.left, ba, i64::from(dra), i64::from(dca));
+        write_shifted_into(&mut self.right, bb, i64::from(drb), i64::from(dcb));
+        self.left == self.right
+    }
+
+    fn same_base(&mut self, a: &Arc<Expr>, b: &Arc<Expr>) -> bool {
+        if Arc::ptr_eq(a, b) {
+            return true;
+        }
+        let key = (Arc::as_ptr(a) as usize, Arc::as_ptr(b) as usize);
+        if let Some(&same) = self.equivalent_bases.get(&key) {
+            return same;
+        }
+        let same = a == b;
+        if self.equivalent_bases.len() < MAX_CACHED_PAIRS {
+            self.equivalent_bases.insert(key, same);
+        }
+        same
+    }
+}
+
 // ---------------------------------------------------------------- round trip
 
 /// Writes `wb` with GridCraft's XLSX writer, validates the package against itself and against
@@ -112,6 +162,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
     let mut comments = Diffs::new("comments", m);
     let mut hyperlinks = Diffs::new("hyperlinks", m);
     let mut pivots = Diffs::new("pivots", m);
+    let mut pair_cache = FormulaPairs::default();
     for (sa, sb) in a.sheets.iter().zip(b.sheets.iter()) {
         let name = quote_sheet(&sa.name);
         let mut cell = |c: CellRef, ca: Option<&Cell>, cb: Option<&Cell>| {
@@ -120,9 +171,19 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
             if va != vb {
                 values.push(|| format!("{name}!{}: {} → {}", c.a1(), value_show(&va), value_show(&vb)));
             }
-            let (fa, fb) = (opt_formula(ca), opt_formula(cb));
-            if fa != fb {
-                formulas.push(|| format!("{name}!{}: {fa} → {fb}", c.a1()));
+            let fa = ca.and_then(|x| x.formula.as_ref());
+            let fb = cb.and_then(|x| x.formula.as_ref());
+            if fa.is_some() || fb.is_some() {
+                let same = match (fa, fb) {
+                    (Some(a_f), Some(b_f)) if a_f.array == b_f.array => pair_cache.same_text(a_f, b_f),
+                    _ => false,
+                };
+                if !same {
+                    let (fa_str, fb_str) = (opt_formula(ca), opt_formula(cb));
+                    if fa_str != fb_str {
+                        formulas.push(|| format!("{name}!{}: {fa_str} → {fb_str}", c.a1()));
+                    }
+                }
             }
             let (na, nb) = (num_fmt(a, ca), num_fmt(b, cb));
             if na != nb {

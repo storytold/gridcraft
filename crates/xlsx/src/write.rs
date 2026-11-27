@@ -108,10 +108,13 @@ impl Sst {
 /// Package being assembled.
 pub struct Out {
     parts: Vec<(String, Vec<u8>)>,
+    /// Large worksheet parts compressed immediately as they are produced so only one sheet's
+    /// uncompressed XML lives in RAM at a time (critical for 32-bit WASM heap limits).
+    staged_sheets: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
+    staged_names: Vec<String>,
     overrides: Vec<(String, String)>,
     defaults: BTreeMap<String, String>,
     pub dxfs: Vec<Style>,
-    /// Number format ids assigned so far (inline `x14:dxf` formats); `styles.xml` adds the rest.
     pub num_fmts: crate::styles::NumFmts,
     /// Excel 2010 conditional format rules written so far (each needs a unique id).
     pub x14_cf_rules: u32,
@@ -144,6 +147,8 @@ pub struct Out {
     pub functions: FunctionInfo,
     /// Defined names analysed for implicit intersection, shared by every formula written.
     pub(crate) names: crate::array_formula::NameCache,
+    /// Expansion charge of shared formulas emitted so far, across worksheets.
+    pub(crate) shared_formula_bytes: u64,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
 }
@@ -159,6 +164,25 @@ impl Out {
             self.media.entry((ext.to_string(), sha2::Sha256::digest(&data).into())).or_insert_with(|| file.to_string());
         }
         self.parts.push((name.to_string(), data));
+    }
+    /// Stores a worksheet part, immediately deflating large sheets (`>= 256 KiB`) into the staging
+    /// zip so uncompressed XML from earlier sheets is freed before the next sheet is generated.
+    pub fn worksheet_part(&mut self, name: &str, content_type: &str, data: Vec<u8>) {
+        const STAGE_THRESHOLD: usize = 256 * 1024;
+        if data.len() < STAGE_THRESHOLD {
+            self.part(name, Some(content_type), data);
+            return;
+        }
+        self.overrides.push((format!("/{name}"), content_type.to_string()));
+        let writer = self.staged_sheets.get_or_insert_with(|| zip::ZipWriter::new(std::io::Cursor::new(Vec::new())));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .last_modified_time(zip::DateTime::default());
+        if writer.start_file(name, opts).is_ok() && std::io::Write::write_all(writer, &data).is_ok() {
+            self.staged_names.push(name.to_string());
+        } else {
+            self.parts.push((name.to_string(), data));
+        }
     }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
@@ -304,6 +328,8 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     validate_xlsx_workbook(wb)?;
     let mut out = Out {
         parts: vec![],
+        staged_sheets: None,
+        staged_names: vec![],
         overrides: vec![],
         defaults: BTreeMap::new(),
         dxfs: vec![],
@@ -329,6 +355,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         kept: Default::default(),
         functions,
         names: Default::default(),
+        shared_formula_bytes: 0,
         python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);
@@ -462,22 +489,66 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         let _ = write!(ct, "<Override PartName=\"{}\" ContentType=\"{}\"/>", esc_attr(part), esc_attr(t));
     }
     ct.push_str("</Types>");
-    let mut zip = ZipOut::new();
-    zip.add("[Content_Types].xml", ct.as_bytes())?;
-    // Excel's order: rels, workbook rels, workbook, the rest, document properties last. libmagic (PHP
-    // `finfo`, `file`) recognises an OOXML package only when an `xl/` entry name appears within the
-    // first few KB, so no user-sized part (document properties, a long description) may precede it.
-    let rank = |n: &str| match n {
+    finish_zip_parts(ct.as_bytes(), std::mem::take(&mut out.parts), out.staged_sheets.take())
+}
+
+fn part_rank(name: &str) -> u8 {
+    match name {
         "_rels/.rels" => 0,
         "xl/_rels/workbook.xml.rels" => 1,
         "xl/workbook.xml" => 2,
         n if n.starts_with("docProps/") => 4,
         _ => 3,
-    };
-    let mut parts = std::mem::take(&mut out.parts);
-    parts.sort_by_key(|(n, _)| rank(n));
-    for (name, data) in &parts {
-        zip.add(name, data)?;
+    }
+}
+
+fn copy_staged_entries(
+    staged_archive: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>,
+    zw: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>,
+) -> Result<(), IoError> {
+    for i in 0..staged_archive.len() {
+        let entry = staged_archive.by_index_raw(i).map_err(|e| IoError::Zip(e.to_string()))?;
+        zw.raw_copy_file(entry).map_err(|e| IoError::Zip(e.to_string()))?;
+    }
+    Ok(())
+}
+
+fn finish_zip_parts(
+    content_types: &[u8],
+    mut parts: Vec<(String, Vec<u8>)>,
+    staged: Option<zip::ZipWriter<std::io::Cursor<Vec<u8>>>>,
+) -> Result<Vec<u8>, IoError> {
+    parts.sort_by_key(|(n, _)| part_rank(n));
+    if let Some(staged) = staged {
+        let staged_buf = staged.finish().map_err(|e| IoError::Zip(e.to_string()))?.into_inner();
+        let mut staged_archive = zip::ZipArchive::new(std::io::Cursor::new(staged_buf)).map_err(|e| IoError::Zip(e.to_string()))?;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .last_modified_time(zip::DateTime::default());
+        let write_entry = |zw: &mut zip::ZipWriter<std::io::Cursor<Vec<u8>>>, name: &str, data: &[u8]| -> Result<(), IoError> {
+            zw.start_file(name, opts).map_err(|e| IoError::Zip(e.to_string()))?;
+            std::io::Write::write_all(zw, data).map_err(|e| IoError::Zip(e.to_string()))?;
+            Ok(())
+        };
+        write_entry(&mut zw, "[Content_Types].xml", content_types)?;
+        let mut staged_copied = false;
+        for (name, data) in parts {
+            if !staged_copied && part_rank(&name) >= 3 {
+                copy_staged_entries(&mut staged_archive, &mut zw)?;
+                staged_copied = true;
+            }
+            write_entry(&mut zw, &name, &data)?;
+        }
+        if !staged_copied {
+            copy_staged_entries(&mut staged_archive, &mut zw)?;
+        }
+        return Ok(zw.finish().map_err(|e| IoError::Zip(e.to_string()))?.into_inner());
+    }
+    let mut zip = ZipOut::new();
+    zip.add("[Content_Types].xml", content_types)?;
+    for (name, data) in parts {
+        zip.add(&name, &data)?;
     }
     zip.finish()
 }
@@ -581,7 +652,7 @@ fn write_sheets(
         let (xml, mut rels) = crate::sheet_write::write_sheet(wb, i, i == active, out);
         pivots.add_sheet(wb, i, out, &mut rels);
         let name = format!("xl/worksheets/sheet{}.xml", i + 1);
-        out.part(&name, Some(CT_WORKSHEET), xml.into_bytes());
+        out.worksheet_part(&name, CT_WORKSHEET, xml.into_bytes());
         if !rels.is_empty() {
             out.part(&format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1), None, rels.xml().into_bytes());
         }

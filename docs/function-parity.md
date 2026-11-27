@@ -140,6 +140,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-28 | minor | In a shared formula, a tail-called defined-name LAMBDA uses its own reference shift, just as in a non-tail call. `FILTER` evaluates volatile include expressions once, even when the include has the shape of an indexed match (#4836) |
 | 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
 | 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; a tiny step with a large residual continues iterating |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |

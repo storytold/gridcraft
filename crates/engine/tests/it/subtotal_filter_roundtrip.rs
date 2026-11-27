@@ -24,7 +24,7 @@ fn assert_values_survive(wb: &Workbook) {
     for (a, b) in wb.sheets.iter().zip(&back.sheets) {
         for (c, cell) in a.cells.iter() {
             if cell.formula.is_some() {
-                assert_eq!(cell.value, b.value(c), "{}!{} ({:?})", a.name, c.a1(), cell.formula.as_ref().map(|f| &f.text));
+                assert_eq!(cell.value, b.value(c), "{}!{} ({:?})", a.name, c.a1(), cell.formula.as_ref().map(|f| f.text()));
             }
         }
     }

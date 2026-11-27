@@ -180,7 +180,7 @@ fn local(name: &[u8]) -> String {
     String::from_utf8_lossy(n).into_owned()
 }
 
-fn start_el(e: &BytesStart<'_>) -> El {
+pub(crate) fn start_el(e: &BytesStart<'_>) -> El {
     let mut el = El { name: local(e.name().as_ref()), ..Default::default() };
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
@@ -197,7 +197,7 @@ fn start_el(e: &BytesStart<'_>) -> El {
     el
 }
 
-fn named_entity(name: &str) -> Option<char> {
+pub(crate) fn named_entity(name: &str) -> Option<char> {
     Some(match name {
         "amp" => '&',
         "lt" => '<',
@@ -360,10 +360,9 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
 // ---------------------------------------------------------------- writing helpers
 
 // XML escaping and SpreadsheetML strings are shared; phonetic/model mapping stays here.
-pub use craft_xml::{esc, esc_attr};
 #[cfg(test)]
-use craft_xml::{is_xml_char, push_esc};
-
+use craft_xml::is_xml_char;
+pub use craft_xml::{esc, esc_attr, push_esc};
 /// Appends `n` in decimal.
 pub fn push_u64(o: &mut String, mut n: u64) {
     let mut buf = [0u8; 20];
@@ -384,8 +383,7 @@ pub fn push_u64(o: &mut String, mut n: u64) {
 }
 
 /// Appends the `A1`-style text of `c` ([`gridcraft_core::CellRef::a1`]).
-#[cfg(test)]
-fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
+pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
     let mut letters = [0u8; 8];
     let mut i = letters.len();
     let mut n = u64::from(c.col) + 1;
