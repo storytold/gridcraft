@@ -1382,6 +1382,20 @@ fn strip_book(link: &str) -> &str {
     link.strip_prefix('[').and_then(|r| r.split_once(']')).map_or(link, |(_, rest)| rest)
 }
 
+/// Office limits the plot area to four axis definitions (MS-OE376 §2.1.1549).
+/// A horizontal bar/XY chart needs a separate pair for each populated family on each side.
+pub(crate) fn needs_extra_axis_pair(chart: &Chart) -> bool {
+    if !chart.horizontal_xy_combo() {
+        return false;
+    }
+    let mut used = [false; 4];
+    for series in &chart.series {
+        let xy = matches!(series.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines));
+        used[usize::from(xy) * 2 + usize::from(series.secondary)] = true;
+    }
+    used.into_iter().filter(|used| *used).count() > 2
+}
+
 /// Chart part XML for a model chart on sheet `si`.
 pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> String {
     let mut s = String::from(

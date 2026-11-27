@@ -494,12 +494,13 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values, limit);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let mut color = s
+        let series_color = s
             .color
             .as_ref()
             .and_then(|c| c.resolve(&wb.theme))
             .map(|[r, g, b]| [r, g, b, 0xFF])
             .unwrap_or_else(|| chart_style_series_color(&wb.theme, chart.style, i, chart.series.len().min(MAX_SERIES)));
+        let mut color = series_color;
         if s.no_fill {
             color[3] = 0;
         }
@@ -529,7 +530,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             .take(trend_left)
             .map(|t| TrendlineData {
                 spec: t.clone(),
-                color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(color),
+                color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(series_color),
             })
             .collect::<Vec<_>>();
         trend_left = trend_left.saturating_sub(trendlines.len());

@@ -6,6 +6,7 @@ use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
     SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
 };
+use gridcraft_model::SeriesAxes;
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
@@ -98,16 +99,12 @@ impl BarRun {
     }
     /// `band` is the part of the pixel column reserved for this series (`start`, `len`): in a
     /// clustered chart a merged run stays inside it, so the other series keep a visible strip.
-    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba, band: Option<(f32, f32)>) {
+    fn draw(&self, ctx: &mut Ctx, sink: &BarSink, band: Option<(f32, f32)>) {
         let (a0, along) = match band {
             Some((start, len)) if self.merged => (self.bucket + start, len),
-            _ => (self.a0, self.a1 - self.a0 + bw),
+            _ => (self.a0, self.a1 - self.a0 + sink.bw),
         };
-        if horizontal {
-            ctx.rect(self.lo, a0, self.hi - self.lo, along, color, None);
-        } else {
-            ctx.rect(a0, self.lo, along, self.hi - self.lo, color, None);
-        }
+        sink.draw_rect(ctx, a0, along, self.lo, self.hi, None);
     }
 }
 
@@ -120,6 +117,7 @@ fn merge_hairlines(bw: f32, labels_on: bool) -> bool {
 /// per pixel column.
 struct BarSink {
     run: Option<BarRun>,
+    plot: Bx,
     bw: f32,
     horizontal: bool,
     color: Rgba,
@@ -130,8 +128,20 @@ struct BarSink {
 
 impl BarSink {
     /// Creates a bar emitter for series slot `k` of `nslots`.
-    fn new(bw: f32, horizontal: bool, color: Rgba, stroke: Option<(Rgba, f32)>, nslots: f32, k: f32) -> Self {
-        BarSink { run: None, bw, horizontal, color, stroke, nslots, k }
+    fn new(plot: Bx, bw: f32, horizontal: bool, color: Rgba, stroke: Option<(Rgba, f32)>, nslots: f32, k: f32) -> Self {
+        BarSink { run: None, plot, bw, horizontal, color, stroke, nslots, k }
+    }
+    fn draw_rect(&self, ctx: &mut Ctx, pos: f32, along: f32, lo: f32, hi: f32, stroke: Option<(Rgba, f32)>) {
+        let (x0, y0, x1, y1) = if self.horizontal { (lo, pos, hi, pos + along) } else { (pos, lo, pos + along, hi) };
+        let x = x0.max(self.plot.x);
+        let y = y0.max(self.plot.y);
+        let w = x1.min(self.plot.right()) - x;
+        let h = y1.min(self.plot.bottom()) - y;
+        if w > 0.0 && h > 0.0 {
+            // Omit a narrow filled bar's outline so its fill survives; unfilled bars need their outlines.
+            let stroke = stroke.filter(|(_, sw)| self.color[3] == 0 || (w > *sw && h > *sw));
+            ctx.rect(x, y, w, h, self.color, stroke);
+        }
     }
     /// Start of this series' slot along the category axis, for the category centered at `c`.
     fn pos(&self, c: f32) -> f32 {
@@ -151,17 +161,14 @@ impl BarSink {
         let pos = self.pos(c);
         let band = self.band();
         if !merge {
-            let (x, y, w, h) = if self.horizontal { (lo, pos, len, self.bw) } else { (pos, lo, self.bw, len) };
-            // Omit a narrow filled bar's outline so its fill survives; an unfilled bar needs the outline to remain visible.
-            let stroke = self.stroke.filter(|(_, sw)| self.color[3] == 0 || (w > *sw && h > *sw));
-            ctx.rect(x, y, w, h, self.color, stroke);
+            self.draw_rect(ctx, pos, self.bw, lo, lo + len, self.stroke);
             return;
         }
         match &mut self.run {
             Some(m) if m.bucket == pos.floor() && m.touches(lo, lo + len) => m.add(pos, lo, lo + len),
             run => {
                 if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
-                    m.draw(ctx, self.bw, self.horizontal, self.color, band);
+                    m.draw(ctx, self, band);
                 }
             }
         }
@@ -169,8 +176,8 @@ impl BarSink {
     /// Flushes any pending hairline bar run at the end of the series.
     fn finish(self, ctx: &mut Ctx) {
         let band = self.band();
-        if let Some(m) = self.run {
-            m.draw(ctx, self.bw, self.horizontal, self.color, band);
+        if let Some(m) = &self.run {
+            m.draw(ctx, &self, band);
         }
     }
 }
@@ -253,16 +260,37 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     spans
 }
 
-fn axis_scales(
-    chart: &Chart,
+struct AxisScale<'a> {
+    secondary: bool,
+    scale: Scale,
+    fmt: Fmt,
+    spec: Option<&'a SeriesAxes>,
+}
+
+impl AxisScale<'_> {
+    fn value_reversed(&self, horizontal: bool) -> bool {
+        horizontal && self.spec.is_some_and(|a| a.x.reversed)
+    }
+
+    fn categories_reversed(&self, horizontal: bool) -> bool {
+        horizontal && self.spec.is_some_and(|a| a.y.reversed)
+    }
+
+    fn frame_axis(&self, horizontal: bool) -> ValAxis<'_> {
+        ValAxis { scale: self.scale, reversed: self.value_reversed(horizontal), fmt: &self.fmt }
+    }
+}
+
+fn axis_scales<'a>(
+    chart: &'a Chart,
     data: &ChartData,
     fams: &[Fam],
     sec: &[bool],
     spans: &[Vec<Option<(f64, f64)>>],
     horizontal: bool,
-) -> Vec<(Scale, Fmt)> {
+) -> Vec<AxisScale<'a>> {
     // Axis scales.
-    let mut axes: Vec<(Scale, Fmt)> = Vec::new();
+    let mut axes = Vec::new();
     for axis in [false, true] {
         let members: Vec<usize> = (0..data.series.len())
             .filter(|i| {
@@ -281,15 +309,15 @@ fn axis_scales(
             spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| [*b, *t].into_iter().skip(usize::from(line)))
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
+        let spec = members.iter().find_map(|i| chart.series.get(*i).and_then(|s| s.axes.as_ref()));
         let (scale, fmt) = if all100 {
             (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            let axes = members.iter().find_map(|i| chart.series.get(*i).and_then(|s| s.axes.as_ref()));
-            let spec = axes.map(|a| if horizontal { &a.x } else { &a.y });
-            (crate::axis::chart_scale(lo, hi, force_zero, spec), Fmt::new(code))
+            let value_axis = spec.map(|a| if horizontal { &a.x } else { &a.y });
+            (crate::axis::chart_scale(lo, hi, force_zero, value_axis), Fmt::new(code))
         };
-        axes.push((scale, fmt));
+        axes.push(AxisScale { secondary: axis, scale, fmt, spec });
         if !axis && sec.iter().all(|s| !s) {
             break;
         }
@@ -321,29 +349,37 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
-fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: Option<&gridcraft_model::SeriesAxes>, default_x: Scale, ys: Scale, plot: Bx, style: u32) {
-    let xs = default_x.with_bounds(axes.map(|a| &a.x));
+struct OverlayAxes<'a> {
+    spec: Option<&'a SeriesAxes>,
+    x: Scale,
+    y: Scale,
+}
+
+fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: &OverlayAxes<'_>, plot: Bx, chart: &Chart) {
     let pts: Vec<_> = s
         .values
         .iter()
         .enumerate()
         .map(|(j, y)| {
             let x = s.x.as_ref().map_or(Some((j + 1) as f64), |x| x.get(j).copied().flatten())?;
-            let mut fx = xs.frac(x);
-            let mut fy = ys.frac((*y)?);
-            if axes.is_some_and(|a| a.x.reversed) {
+            let mut fx = axes.x.frac(x);
+            let mut fy = axes.y.frac((*y)?);
+            if axes.spec.is_some_and(|a| a.x.reversed) {
                 fx = 1.0 - fx;
             }
-            if axes.is_some_and(|a| a.y.reversed) {
+            if axes.spec.is_some_and(|a| a.y.reversed) {
                 fy = 1.0 - fy;
             }
             Some([plot.x + fx * plot.w, plot.bottom() - fy * plot.h])
         })
         .collect();
     if s.kind == ChartKind::ScatterLines {
-        draw_runs(ctx, &pts, s.color, line_style_width(style), s.smooth.then_some(plot));
+        draw_runs(ctx, &pts, s.color, line_style_width(chart.style), s.smooth.then_some(plot));
     } else {
         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+    }
+    if chart.data_labels && pts.len() <= MAX_LABELS {
+        draw_point_labels(ctx, s, &pts);
     }
 }
 
@@ -353,11 +389,15 @@ fn draw_line_series(ctx: &mut Ctx, s: &SeriesData, pts: &[Option<[f32; 2]>], plo
         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
     }
     if labels {
-        let fmt = Fmt::new(&s.number_format);
-        for (j, p) in pts.iter().enumerate() {
-            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
-            }
+        draw_point_labels(ctx, s, pts);
+    }
+}
+
+fn draw_point_labels(ctx: &mut Ctx, s: &SeriesData, pts: &[Option<[f32; 2]>]) {
+    let fmt = Fmt::new(&s.number_format);
+    for (p, v) in pts.iter().zip(&s.values) {
+        if let (Some(p), Some(v)) = (p, v) {
+            ctx.text(p[0], p[1] - 5.0, &fmt.format(*v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -406,17 +446,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let spans = series_spans(data, &fams, &sec, ncat);
 
     let axes = axis_scales(chart, data, &fams, &sec, &spans, horizontal);
-    let Some((s1, f1)) = axes.first() else { return };
-    let bar_axes = |secondary| {
-        chart
-            .series
-            .iter()
-            .filter(|s| s.secondary == secondary && !matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
-            .find_map(|s| s.axes.as_ref())
-    };
-    let reversed_value = |secondary| horizontal && bar_axes(secondary).is_some_and(|a| a.x.reversed);
-    let y1 = ValAxis { scale: *s1, reversed: reversed_value(false), fmt: f1 };
-    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, reversed: reversed_value(true), fmt: f });
+    let Some(first_axis) = axes.first() else { return };
+    let axis_for = |secondary| axes.iter().find(|a| a.secondary == secondary).unwrap_or(first_axis);
+    let y1 = first_axis.frame_axis(horizontal);
+    let y2 = axes.get(1).map(|a| a.frame_axis(horizontal));
     // A forward forecast on a category axis adds empty category slots after the data.
     let fwd = data
         .series
@@ -426,12 +459,11 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
     let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
-    let reversed = horizontal && bar_axes(false).is_some_and(|a| a.y.reversed);
     let mut labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let mut outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    if reversed {
+    if first_axis.categories_reversed(horizontal) {
         reverse_categories(&mut labels, &mut outer);
     }
     let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots);
@@ -440,31 +472,32 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if !plot.ok() {
         return;
     }
-    let scale_of = |i: usize| -> Scale { if sec.get(i).copied().unwrap_or(false) { y2.as_ref().map(|a| a.scale).unwrap_or(*s1) } else { *s1 } };
+    let axis_of = |i| axis_for(sec.get(i).copied().unwrap_or(false));
     let cat_len = if horizontal { plot.h } else { plot.w };
     let cw = cat_len / ncat_slots as f32;
-    let center = |j: usize| {
+    let center = |j: usize, reversed| {
         let j = if reversed { ncat_slots - 1 - j } else { j };
         if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw }
     };
-    let overlay_scales: Vec<_> = [false, true]
-        .into_iter()
-        .map(|secondary| {
-            let (lo, hi) = value_range(
-                data.series
-                    .iter()
-                    .filter(|s| s.secondary == secondary && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
-                    .flat_map(|s| s.values.iter().flatten().copied()),
-            )
-            .unwrap_or((0.0, 1.0));
-            let spec = chart
-                .series
+    let overlay_axes = [false, true].map(|secondary| {
+        let (lo, hi) = value_range(
+            data.series
                 .iter()
-                .find(|s| s.secondary == secondary && matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
-                .and_then(|s| s.axes.as_ref());
-            nice_scale(lo, hi, false).with_bounds(spec.map(|a| &a.y))
-        })
-        .collect();
+                .filter(|s| s.secondary == secondary && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
+                .flat_map(|s| s.values.iter().flatten().copied()),
+        )
+        .unwrap_or((0.0, 1.0));
+        let spec = chart
+            .series
+            .iter()
+            .filter(|s| s.secondary == secondary && matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
+            .find_map(|s| s.axes.as_ref());
+        OverlayAxes {
+            spec,
+            x: axis_for(secondary).scale.with_bounds(spec.map(|a| &a.x)),
+            y: nice_scale(lo, hi, false).with_bounds(spec.map(|a| &a.y)),
+        }
+    });
 
     let (slot_of, nslots) = column_slots(&fams, &sec);
     let bw = cw / (nslots + 1.5);
@@ -489,19 +522,13 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 continue;
             }
             if xy_combo && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines) {
-                xy_overlay(
-                    ctx,
-                    s,
-                    chart.series.get(i).and_then(|s| s.axes.as_ref()),
-                    *s1,
-                    overlay_scales[usize::from(s.secondary)],
-                    plot,
-                    chart.style,
-                );
+                xy_overlay(ctx, s, &overlay_axes[usize::from(s.secondary)], plot, chart);
                 continue;
             }
-            let sc = scale_of(i);
-            let value_reversed = reversed_value(sec.get(i).copied().unwrap_or(false));
+            let axis = axis_of(i);
+            let sc = axis.scale;
+            let center = |j| center(j, axis.categories_reversed(horizontal));
+            let value_reversed = axis.value_reversed(horizontal);
             let vpos = |v: f64, sc: &Scale| {
                 let f = sc.frac(v);
                 let f = if value_reversed { 1.0 - f } else { f };
@@ -546,7 +573,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     // Hairline bars are merged per pixel column (their envelope is what shows).
                     let cull = merge_hairlines(bw, labels_on) && s.outline_color.is_none();
                     let stroke = s.outline_color.map(|c| (c, 1.0)).or_else(|| (chart.style == 9).then_some((WHITE, 1.0)));
-                    let mut sink = BarSink::new(bw, horizontal, s.color, stroke, nslots, k);
+                    let mut sink = BarSink::new(plot, bw, horizontal, s.color, stroke, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
@@ -598,9 +625,16 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         if s.trendlines.is_empty() || !kinds.get(i).is_some_and(|k| supports_trendline(*k)) {
             continue;
         }
-        let sc = scale_of(i);
+        let axis = axis_of(i);
+        let sc = axis.scale;
+        let reverse_cat = axis.categories_reversed(horizontal);
+        let reverse_value = axis.value_reversed(horizontal);
         let pts: Vec<(f64, f64)> = s.values.iter().take(ncat).enumerate().filter_map(|(j, v)| v.map(|v| ((j + 1) as f64, v))).collect();
-        let frac = |x: f64, y: f64| ((x - 0.5) / ncat_slots as f64, (y - sc.min) / (sc.max - sc.min));
+        let frac = |x: f64, y: f64| {
+            let fx = (x - 0.5) / ncat_slots as f64;
+            let fy = (y - sc.min) / (sc.max - sc.min);
+            (if reverse_cat { 1.0 - fx } else { fx }, if reverse_value { 1.0 - fy } else { fy })
+        };
         let px = |(fx, fy): (f64, f64)| {
             if horizontal {
                 [plot.x + fy as f32 * plot.w, plot.bottom() - fx as f32 * plot.h]

@@ -139,6 +139,41 @@ fn horizontal_xy_families_keep_distinct_axes_regardless_of_order_or_assignment()
     }
 }
 
+#[test]
+fn horizontal_xy_export_reports_when_it_cannot_keep_both_bar_partitions() {
+    use gridcraft_model::{ChartAxis, Series, SeriesAxes, Workbook};
+    let base_xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+        bar(&ser(0))
+    );
+    let mut original = read_chart(&parse(base_xml.as_bytes()).unwrap()).unwrap().0;
+    original.kind = ChartKind::Combo;
+    original.series.clear();
+    for (kind, secondary, min) in
+        [(ChartKind::BarStacked, false, 10.0), (ChartKind::BarClustered, true, 100.0), (ChartKind::ScatterLines, true, 50.0)]
+    {
+        original.series.push(Series {
+            kind: Some(kind),
+            secondary,
+            values: "{2,3}".into(),
+            categories: Some("{55,55}".into()),
+            axes: Some(SeriesAxes {
+                x: ChartAxis { min: Some(min), max: Some(min * 2.0), ..Default::default() },
+                y: ChartAxis { reversed: secondary, ..Default::default() },
+            }),
+            ..Default::default()
+        });
+    }
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().charts.push(original);
+    assert!(matches!(
+        crate::write_xlsx(&wb),
+        Err(crate::IoError::Format(message)) if message.contains("more than two axis pairs")
+    ));
+    wb.sheet_mut(0).unwrap().charts[0].series.remove(1);
+    assert!(crate::write_xlsx(&wb).is_ok(), "a chart with one bar pair and one XY pair still saves");
+}
+
 fn bar(sers: &str) -> String {
     format!("<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{sers}{AX}</c:barChart>")
 }

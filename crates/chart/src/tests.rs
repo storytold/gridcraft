@@ -215,6 +215,111 @@ fn unfilled_bar_keeps_its_explicit_outline() {
     assert_eq!(outlined, 2, "both unfilled bars retain their visible outlines");
 }
 
+#[test]
+fn xy_labels_follow_points_on_the_first_saved_axes() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    c.data_labels = true;
+    c.series[1].values = "{123,456}".into();
+    let mut second = c.series[1].clone();
+    second.color = Some(Color::Rgb(0x123456));
+    second.axes = Some(SeriesAxes {
+        x: ChartAxis { min: Some(0.0), max: Some(20.0), ..Default::default() },
+        y: ChartAxis { min: Some(0.0), max: Some(1000.0), reversed: true, ..Default::default() },
+    });
+    c.series.push(second);
+    let prims = draw_chart(&c);
+    let points = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { color: c, pts, .. } if *c == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let first = points([240, 112, 32, 255]);
+    assert_eq!(first, points([18, 52, 86, 255]), "both overlays use the saved axes");
+    assert!(first[0][1] < first[1][1], "saved Y reversal applies to the first series too");
+    assert!(first[0][0] < green_bars(&prims)[0][0] + green_bars(&prims)[0][2], "saved X bounds apply");
+    for (point, label) in first.iter().zip(["123", "456"]) {
+        assert!(prims.iter().any(|p| matches!(p, Prim::Text { x, y, text, .. }
+            if text == label && (*x - point[0]).abs() < 0.01 && (0.0..10.0).contains(&(point[1] - *y)))));
+    }
+    c.series.truncate(2);
+    c.series[1].values = format!("{{{}}}", vec!["123"; 201].join(","));
+    c.series[1].categories = None;
+    assert!(draw_chart(&c).iter().all(|p| !matches!(p, Prim::Text { text, .. } if text == "123")), "dense overlays omit data labels");
+}
+
+#[test]
+fn secondary_bar_ticks_and_trendline_follow_reversed_axes() {
+    use gridcraft_model::Trendline;
+    let mut c = bar_xy_chart();
+    c.series[0].secondary = true;
+    c.series[1].secondary = false;
+    c.series[0].categories = Some("{\"First\",\"Second\"}".into());
+    c.series[0].trendlines.push(Trendline::default());
+    c.series[0].outline_color = Some(Color::Rgb(0x123456));
+    c.series[0].no_fill = true;
+    let axes = c.series[0].axes.as_mut().unwrap();
+    axes.x.reversed = true;
+    axes.y.reversed = true;
+    let prims = draw_chart(&c);
+    let text_pos = |label| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, y, text, .. } if text == label => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(text_pos("First").1 < text_pos("Second").1);
+    assert!(text_pos("0").0 > text_pos("10").0);
+    let bars: Vec<_> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, h, stroke: Some(([18, 52, 86, 255], _)), .. } => Some([*x, *y + *h / 2.0]),
+            _ => None,
+        })
+        .collect();
+    let ends = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { color: [0, 128, 64, 255], pts, .. } => Some((pts.first().unwrap(), pts.last().unwrap())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(bars.len(), 2);
+    for (bar, end) in bars.iter().zip([ends.0, ends.1]) {
+        assert!((bar[0] - end[0]).abs() < 0.01 && (bar[1] - end[1]).abs() < 0.01, "the opaque trendline meets the reversed bar ends");
+    }
+}
+
+#[test]
+fn saved_axis_bounds_clip_bars_at_the_plot() {
+    let mut c = bar_xy_chart();
+    c.series[0].categories = Some("{\"First category\",\"Second category\"}".into());
+    c.series[0].values = "{4,1}".into();
+    c.series[0].axes.as_mut().unwrap().x.min = Some(2.0);
+    c.series[1].categories = Some("{4,4}".into());
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    assert_eq!(bars.len(), 1, "a bar entirely beyond the plot is omitted");
+    let tick_x = |label| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text, .. } if text == label => Some(*x),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!((bars[0][0] - tick_x("2")).abs() < 0.01, "the visible bar starts at the plot edge");
+    assert!((bars[0][0] + bars[0][2] - tick_x("4")).abs() < 0.01, "the in-bounds end retains its position");
+}
+
 const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
