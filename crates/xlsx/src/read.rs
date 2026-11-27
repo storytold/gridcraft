@@ -322,6 +322,23 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
+/// Settles the links of floating pictures to Python cells and warns about the pictures a Python
+/// cell didn't take, or whose link went.
+fn warn_about_python_pictures(cx: &mut Ctx<'_>, wb: &mut Workbook) {
+    if cx.python_pictures_without_cell > 0 {
+        cx.warn(format!(
+            "{} picture(s) saved for a Python cell don't go with what that cell holds in this file; they are shown as floating pictures",
+            cx.python_pictures_without_cell
+        ));
+    }
+    let unlinked = crate::python_pictures::settle_links(wb);
+    if unlinked > 0 {
+        cx.warn(format!(
+            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file, or whose code is too long to run; they kept their images and lost the link"
+        ));
+    }
+}
+
 pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
     let functions = opts.functions;
     let known_function = opts.known_function;
@@ -471,18 +488,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
-    if cx.python_pictures_without_cell > 0 {
-        cx.warn(format!(
-            "{} picture(s) saved for a Python cell don't go with what that cell holds in this file; they are shown as floating pictures",
-            cx.python_pictures_without_cell
-        ));
-    }
-    let unlinked = crate::python_pictures::settle_links(&mut wb);
-    if unlinked > 0 {
-        cx.warn(format!(
-            "{unlinked} picture(s) were linked to a cell that isn't a Python cell in this file, or whose code is too long to run; they kept their images and lost the link"
-        ));
-    }
+    warn_about_python_pictures(&mut cx, &mut wb);
     // PivotChart series whose references don't hold their cached points plot the cache.
     crate::chart::plot_pivot_caches(&mut wb, &cx.pivot_charts);
 

@@ -286,7 +286,7 @@ fn a_python_cell_keeps_its_picture_through_a_file_for_either_return_type() {
     // The cells: the text for a Python Object, the rich value of cell pictures for an Excel Value.
     let cells = text(&bytes, "xl/worksheets/sheet1.xml");
     assert!(cells.contains(r#"<c r="G5" t="str"><f>_xlfn._xlws.PY(0,1)</f><v>Image</v></c>"#), "{cells}");
-    assert!(cells.contains(r#"<c r="H7" vm="1" t="e"><f>_xlfn._xlws.PY(1,0)</f><v>#VALUE!</v></c>"#), "{cells}");
+    assert!(cells.contains(r#"<c r="H7" t="e" vm="1"><f>_xlfn._xlws.PY(1,0)</f><v>#VALUE!</v></c>"#), "{cells}");
     // The companions: hidden, on their cells, named for them, saying what the file holds nowhere else.
     let drawing = text(&bytes, "xl/drawings/drawing1.xml");
     assert_eq!(drawing.matches("<xdr:oneCellAnchor>").count(), 2, "{drawing}");
@@ -350,7 +350,7 @@ fn an_excel_value_whose_result_is_the_word_keeps_it_and_the_old_companion_floats
     let mut sheet = Sheet::new("Data");
     image_cell(&mut sheet, "H7", false, image_of(&png(80, 60), 2));
     let bytes = write_xlsx(&book(vec![sheet])).unwrap();
-    let was = r#"<c r="H7" vm="1" t="e"><f>_xlfn._xlws.PY(0,0)</f><v>#VALUE!</v></c>"#;
+    let was = r#"<c r="H7" t="e" vm="1"><f>_xlfn._xlws.PY(0,0)</f><v>#VALUE!</v></c>"#;
     let bytes = with_text_changed(&bytes, "xl/worksheets/sheet1.xml", was, r#"<c r="H7" t="str"><f>_xlfn._xlws.PY(0,0)</f><v>Image</v></c>"#);
     let (back, report) = read_xlsx(&bytes).unwrap();
     let sheet = &back.sheets[0];
