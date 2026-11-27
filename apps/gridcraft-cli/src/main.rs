@@ -187,7 +187,7 @@ impl Args {
 
 fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     let r = s.execute_headless(id, params).map_err(|e| e.to_string());
-    if matches!(id, "file.open" | "file.save" | "file.saveAs")
+    if matches!(id, "file.open" | "file.save" | "file.saveAs" | "file.saveBytes")
         && let Ok(value) = &r
         && let Some(warnings) = value.get("warnings").and_then(Value::as_array)
     {
