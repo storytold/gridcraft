@@ -1377,7 +1377,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "100% Stacked Line with Markers" => "100% დასტად ხაზოვანი მარკერებით",
         "2-Color Scale" => "2-ფერიანი შკალა",
         "3-Color Scale" => "3-ფერიანი შკალა",
-        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => "თავიდან დაწერილი, ღია კოდის ელცხრილი Rust-ზე. ArtCraft-ის ნაწილი.",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "თავიდან დაწერილი, ღია კოდის ელცხრილი Rust-ზე. ArtCraft-ის ნაწილი."
+        }
         "Add or Remove Selection" => "მონიშვნის დამატება ან მოხსნა",
         "Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed." => {
             "ამ სამუშაო წიგნის ავტომატიზაცია. GridCraft საკუთარ სკრიპტებს უშვებს; ფაილის VBA პროექტი ინახება, მაგრამ არ სრულდება."
