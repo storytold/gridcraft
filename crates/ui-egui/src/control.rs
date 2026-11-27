@@ -263,6 +263,8 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 #[cfg(not(target_arch = "wasm32"))]
                 ("view.wingman", "Wingman", "{on?: bool} (toggles the workbook assistant)"),
+                #[cfg(not(target_arch = "wasm32"))]
+                ("options.showWingmanPane", "Show Wingman pane", "{on?: bool} (feature preference for all windows) → {on}"),
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 (
@@ -302,6 +304,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
             ] {
+                #[cfg(not(target_arch = "wasm32"))]
+                if id == "view.wingman" && !app.ui.show_wingman_pane {
+                    continue;
+                }
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }
             ok(Json::Array(filter_commands(v, s("search"))))

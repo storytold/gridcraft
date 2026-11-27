@@ -25,6 +25,8 @@ pub(super) fn prepare(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) -> Res
     let range = |p: &Json| limited_range(p["range"].as_str().ok_or("Missing A1 range")?);
     let active = d.wb.active().is_some_and(|a| a.uid.get() == sh.uid.get());
     match name {
+        "fill_down" if range(p)?.height() < 2 => return Err("Include the source row and at least one destination row.".into()),
+        "fill_right" if range(p)?.width() < 2 => return Err("Include the source column and at least one destination column.".into()),
         "size_rows" => {
             let r = range(p)?;
             *p = json!({"sheet":sh.name,"rows":format!("{}:{}",r.start.row+1,r.end.row+1),"points":p["points"]});

@@ -7,6 +7,10 @@ use std::sync::OnceLock;
 use reqwest::Url;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+
+use super::thinking::{Levels, Thinking};
+use crate::wingman::mcp::ServerConfig;
 
 static SETTINGS_ROOT: OnceLock<PathBuf> = OnceLock::new();
 const SETTINGS_LIMIT: u64 = 1024 * 1024;
@@ -102,6 +106,8 @@ struct Alias {
 struct ModelRef {
     provider: String,
     model: String,
+    enable_thinking: Option<bool>,
+    effort: Option<String>,
 }
 #[derive(Default, Deserialize)]
 #[serde(default)]
@@ -122,7 +128,9 @@ struct Model {
     max_tokens: Option<u32>,
     max_output_tokens: Option<u32>,
     supports_tools: Option<bool>,
-    reasoning_effort: Option<String>,
+    supports_thinking: Option<bool>,
+    reasoning_effort: Option<Levels>,
+    reasoning_effort_levels: Option<Levels>,
     capabilities: Caps,
 }
 #[derive(Default, Clone, Deserialize)]
@@ -147,7 +155,7 @@ pub(in super::super) struct Agent {
     pub instructions: String,
     pub(super) protocol: Protocol,
     pub(super) max_output_tokens: Option<u32>,
-    pub(super) reasoning_effort: Option<String>,
+    pub thinking: Thinking,
     pub(super) parallel: bool,
     pub(super) legacy_limit: bool,
     pub(super) reasoning_history: bool,
@@ -164,6 +172,10 @@ pub(super) enum Protocol {
 }
 
 impl Agent {
+    pub(super) fn retain_reasoning(&self) -> bool {
+        self.thinking.supports_reasoning_history() && (self.reasoning_history || self.protocol == Protocol::Ollama)
+    }
+
     /// Only a history-sizing hint: the model server owns tokenization. Never truncate the
     /// current user message or silently change the model's configured generation limits.
     pub(in super::super) fn history_budget(&self) -> Option<usize> {
@@ -185,10 +197,10 @@ pub(super) struct Catalog {
     preferred: Option<ModelRef>,
 }
 
-fn config() -> Result<Config, String> {
+fn config<T: DeserializeOwned + Default>() -> Result<T, String> {
     let path = path()?;
     let file = match File::open(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
         other => other.map_err(|e| format!("Cannot read wingman.json: {e}"))?,
     };
     let mut data = Vec::new();
@@ -198,6 +210,17 @@ fn config() -> Result<Config, String> {
     }
     serde_json::from_slice(data.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&data))
         .map_err(|e| format!("Invalid wingman.json at line {}, column {}.", e.line(), e.column()))
+}
+
+/// Parse MCP settings only when explicitly requested: a broken server definition cannot
+/// stop ordinary workbook chat or start a subprocess while opening the panel.
+pub(in super::super) fn mcp_servers() -> Result<BTreeMap<String, ServerConfig>, String> {
+    #[derive(Default, Deserialize)]
+    struct Servers {
+        #[serde(default)]
+        context_servers: BTreeMap<String, ServerConfig>,
+    }
+    Ok(config::<Servers>()?.context_servers)
 }
 
 fn headers(values: &BTreeMap<String, String>) -> Result<HeaderMap, String> {
@@ -294,7 +317,7 @@ impl Host {
             instructions: String::new(),
             protocol,
             max_output_tokens: None,
-            reasoning_effort: None,
+            thinking: Thinking::default(),
             parallel: false,
             legacy_limit: false,
             reasoning_history: false,
@@ -319,7 +342,8 @@ impl Host {
         a.max_tokens = m.max_tokens.or(a.max_tokens);
         a.supports_tools = m.supports_tools.or(m.capabilities.tools).unwrap_or(true);
         a.max_output_tokens = m.max_output_tokens;
-        a.reasoning_effort.clone_from(&m.reasoning_effort);
+        a.thinking = Thinking::configured(a.protocol, m.supports_thinking, m.reasoning_effort.as_ref(), m.reasoning_effort_levels.as_ref())
+            .map_err(|e| format!("{} / {}: {e}", a.provider, a.model))?;
         a.parallel = m.capabilities.parallel_tool_calls;
         a.legacy_limit = m.capabilities.max_tokens_parameter;
         a.reasoning_history = m.capabilities.interleaved_reasoning;
@@ -329,7 +353,10 @@ impl Host {
 }
 
 pub(super) fn catalog() -> Result<Catalog, String> {
-    let config = config()?;
+    build_catalog(config()?)
+}
+
+fn build_catalog(config: Config) -> Result<Catalog, String> {
     let global_profile = profile(config.agent.default_profile)?;
     let mut catalog = Catalog { hosts: Vec::new(), declared: Vec::new(), preferred: config.agent.default_model };
     let models = config.language_models;
@@ -356,9 +383,6 @@ pub(super) fn catalog() -> Result<Catalog, String> {
         }
         catalog.hosts.push(h);
     }
-    for (name, alias) in config.wingman.agents {
-        catalog.add_alias(name, alias, &global_profile)?;
-    }
     // A default_model is itself an explicit model id; it does not require a
     // running discovery endpoint or a second entry in available_models.
     if let Some(r) = &catalog.preferred
@@ -367,12 +391,21 @@ pub(super) fn catalog() -> Result<Catalog, String> {
     {
         catalog.declared.push(h.model(&Model { name: r.model.clone(), ..Model::default() })?);
     }
+    if let Some(r) = &catalog.preferred {
+        for a in catalog.declared.iter_mut().filter(|a| a.provider == r.provider && a.model == r.model) {
+            a.thinking.preference(a.protocol, r.enable_thinking, r.effort.as_deref()).map_err(|e| format!("agent.default_model: {e}"))?;
+        }
+    }
+    let base_models = catalog.declared.len();
+    for (name, alias) in config.wingman.agents {
+        catalog.add_alias(name, alias, &global_profile, base_models)?;
+    }
     catalog.sort();
     Ok(catalog)
 }
 
 impl Catalog {
-    fn add_alias(&mut self, name: String, alias: Alias, global_profile: &Option<String>) -> Result<(), String> {
+    fn add_alias(&mut self, name: String, alias: Alias, global_profile: &Option<String>, base_models: usize) -> Result<(), String> {
         if name.trim().is_empty() {
             return Err("An agent name is empty.".into());
         }
@@ -380,7 +413,8 @@ impl Catalog {
             return Err(format!("Instructions for {name} exceed 8 KiB."));
         }
         let r = alias.target;
-        let mut a = if let Some(a) = self.declared.iter().find(|a| r.provider == a.provider && r.model == a.model) {
+        // An alias inherits model settings, never a preceding alias's instructions or thinking preference.
+        let mut a = if let Some(a) = self.declared[..base_models].iter().find(|a| r.provider == a.provider && r.model == a.model) {
             a.clone()
         } else {
             self.hosts
@@ -390,6 +424,7 @@ impl Catalog {
                 .model(&Model { name: r.model, ..Model::default() })?
         };
         a.name = name;
+        a.thinking.preference(a.protocol, r.enable_thinking, r.effort.as_deref()).map_err(|e| format!("wingman.agents / {}: {e}", a.name))?;
         a.instructions = alias.instructions;
         a.default_profile = profile(alias.default_profile)?.or_else(|| global_profile.clone());
         self.declared.push(a);
@@ -400,12 +435,44 @@ impl Catalog {
     }
 }
 fn profile(name: Option<String>) -> Result<Option<String>, String> {
-    if name.as_deref().is_some_and(|s| !matches!(s, "ask" | "write" | "minimal")) {
-        return Err("Wingman default_profile must be ask, write or minimal.".into());
+    if name.as_deref().is_some_and(|s| !matches!(s, "ask" | "write" | "write_mcp" | "minimal")) {
+        return Err("Wingman default_profile must be ask, write, write_mcp or minimal.".into());
     }
     Ok(name)
 }
 
 pub(in super::super) fn load() -> Result<Vec<Agent>, String> {
     Ok(catalog()?.declared)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_catalog;
+    use serde_json::json;
+
+    #[test]
+    fn model_ref_and_alias_preferences_reach_separate_requests_for_the_same_model() {
+        let catalog = build_catalog(
+            serde_json::from_value(json!({
+                "language_models": {"openai_compatible": {"desk": {
+                    "api_url":"http://localhost:8000/v1",
+                    "available_models":[{"name":"demo","reasoning_effort_levels":"none,low,high"}]
+                }}},
+                "agent":{"default_model":{"provider":"desk","model":"demo","effort":"low","enable_thinking":true}},
+                "wingman":{"agents":{
+                    "Deliberate":{"provider":"desk","model":"demo","effort":"high"},
+                    "Fast":{"provider":"desk","model":"demo","enable_thinking":false}
+                }}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let effort = |name: &str| {
+            let a = catalog.declared.iter().find(|a| a.name == name).unwrap();
+            super::super::transport::payload(a, Vec::new(), Vec::new()).unwrap()["reasoning_effort"].clone()
+        };
+        assert_eq!(effort("demo"), "low");
+        assert_eq!(effort("Deliberate"), "high");
+        assert_eq!(effort("Fast"), "none");
+    }
 }

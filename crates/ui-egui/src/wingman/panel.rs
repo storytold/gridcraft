@@ -1,4 +1,4 @@
-use super::{AgentKey, Mode, PanelState, provider, workbook};
+use super::{AgentKey, Mode, PanelState, provider};
 use crate::{SheetApp, i18n::Language, theme::Tokens};
 use egui::{Align, Align2, Button, Context, Layout, Rect, RichText, ScrollArea, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -20,7 +20,7 @@ fn icon(ctx: &Context) -> Option<egui::TextureHandle> {
 /// The assistant is a peer of the command card rather than its last scrollable group.
 /// Return the remaining rectangle so the ribbon's overflow arrows never cover the launcher.
 pub(crate) fn ribbon_tile(app: &mut SheetApp, ui: &mut Ui, band: Rect, compact: bool) -> Rect {
-    if band.width() < 128.0 {
+    if !app.ui.show_wingman_pane || band.width() < 128.0 {
         return band;
     }
     let l = app.ui.language;
@@ -70,7 +70,7 @@ pub(crate) fn ribbon_tile(app: &mut SheetApp, ui: &mut Ui, band: Rect, compact: 
 }
 
 pub(crate) fn show(app: &mut SheetApp, ui: &mut Ui) {
-    if !app.wingman.open {
+    if !app.ui.show_wingman_pane || !app.wingman.open {
         return;
     }
     // Workbook actions need the ordinary &mut SheetApp dispatch path. This panel is restored
@@ -80,13 +80,17 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut Ui) {
     state.tick(app, &ctx);
     let t = Tokens::get(&ctx);
     let max = (ui.available_width() * 0.65).max(160.0);
-    egui::Panel::right("wingman")
+    let panel = egui::Panel::right("wingman")
         .min_size(195.0f32.min(max))
         .default_size(330.0f32.min(max))
         .max_size(max)
         .resizable(true)
         .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(8))
-        .show(ui, |ui| state.draw(app, ui));
+        .show(ui, |ui| {
+            super::history::shortcuts(app, ui, &state.composer);
+            state.draw(app, ui);
+        });
+    state.dock_rect = Some(panel.response.rect);
     app.wingman = state;
 }
 
@@ -122,7 +126,7 @@ impl PanelState {
             return;
         }
         ui.separator();
-        self.settings(ui, l);
+        self.settings(ui, l, !app.synthetic_pending);
         if !self.note.is_empty() {
             status(ui, &self.note);
         }
@@ -144,7 +148,7 @@ impl PanelState {
             }
             for (i, line) in self.thread.log.iter().enumerate() {
                 ui.push_id(i, |ui| {
-                    if matches!(line.speaker, "Workbook read" | "Applied edit" | "Tool refused") {
+                    if matches!(line.speaker, "Workbook read" | "Applied edit" | "Tool refused" | "External tool") {
                         let tool = line.text.lines().next().unwrap_or_default();
                         ui.collapsing(format!("{} · {}", l.tr(line.speaker), tool), |ui| {
                             ui.monospace(&line.text);
@@ -164,7 +168,7 @@ impl PanelState {
                                 self.composer.request_focus();
                             }
                         });
-                        message(ui, &line.text);
+                        message(ui, l, &line.text, true);
                     }
                     ui.separator();
                 });
@@ -172,7 +176,7 @@ impl PanelState {
             if let Some(t) = &self.turn
                 && !t.partial.is_empty()
             {
-                message(ui, &t.partial);
+                message(ui, l, &t.partial, false);
             }
         });
     }
@@ -199,7 +203,7 @@ impl PanelState {
         }
     }
 
-    fn settings(&mut self, ui: &mut Ui, l: Language) {
+    fn settings(&mut self, ui: &mut Ui, l: Language, physical: bool) {
         let busy = self.turn.is_some() || self.discovery.is_some();
         ui.add_enabled_ui(!busy, |ui| {
             if !self.agents.is_empty() {
@@ -214,14 +218,20 @@ impl PanelState {
                     self.selected = index;
                     self.mode = Mode::initial(self.agents.get(index));
                 }
-                if let Some(a) = self.agents.get(self.selected) {
+                if let Some(a) = self.agents.get_mut(self.selected) {
                     ui.weak(format!("{} · {}", a.model, a.endpoint));
+                    a.thinking.picker(ui, l);
                     if a.supports_tools {
+                        let mut mode = self.mode;
                         egui::ComboBox::from_label(l.tr("Access")).selected_text(l.tr(self.mode.label())).show_ui(ui, |ui| {
-                            for m in [Mode::Chat, Mode::Read, Mode::Edit] {
-                                ui.selectable_value(&mut self.mode, m, l.tr(m.label()));
+                            for m in [Mode::Chat, Mode::Read, Mode::Edit, Mode::Mcp] {
+                                ui.selectable_value(&mut mode, m, l.tr(m.label()));
                             }
                         });
+                        self.change_mode(mode);
+                        if self.mode == Mode::Mcp {
+                            self.mcp.ui(ui, l, physical);
+                        }
                     } else {
                         ui.weak(l.tr("Text only · explicitly attached context is available"));
                     }
@@ -263,10 +273,17 @@ impl PanelState {
         let ctx = ui.ctx().clone();
         ui.separator();
         if self.turn.is_some() {
-            let waiting =
-                self.turn.as_ref().and_then(|t| t.queue.front()).filter(|c| self.mode == Mode::Edit && workbook::is_write(&c.name) == Ok(true));
-            if let Some(call) = waiting {
-                status(ui, l.tr("Review workbook edit"));
+            let waiting = self
+                .turn
+                .as_ref()
+                .filter(|t| t.external.is_none())
+                .and_then(|t| t.queue.front().filter(|c| self.needs_approval(t, c)).map(|c| (c, t.offered.get(&c.name))));
+            if let Some((call, external)) = waiting {
+                status(ui, l.tr(if external.is_some() { "Review external tool call" } else { "Review workbook edit" }));
+                if let Some(e) = external {
+                    ui.strong(e.label());
+                    ui.weak(l.tr("These arguments go to this server. External actions cannot be undone by GridCraft."));
+                }
                 if let Some(d) = app.session.active()
                     && let Some(s) = d.wb.active()
                 {
@@ -276,8 +293,9 @@ impl PanelState {
                 ScrollArea::vertical().id_salt("wingman_args").max_height((ctx.content_rect().height() * 0.22).max(48.0)).show(ui, |ui| {
                     ui.monospace(call.preview());
                 });
+                let label = if external.is_some() { "Allow call" } else { "Apply edit" };
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!app.synthetic_pending, Button::new(l.tr("Apply edit"))).clicked() {
+                    if ui.add_enabled(!app.synthetic_pending, Button::new(l.tr(label))).clicked() {
                         self.decision(app, true, &ctx);
                     }
                     if ui.button(l.tr("Deny")).clicked() {
@@ -317,18 +335,60 @@ impl PanelState {
 }
 
 // Render code as copyable, selectable text; response text never activates links or commands.
-fn message(ui: &mut Ui, text: &str) {
-    let mut code = false;
-    let mut lines = Vec::new();
-    for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            block(ui, &mut lines, code);
-            code = !code;
-        } else {
-            lines.push(line);
+fn message(ui: &mut Ui, l: Language, text: &str, finished: bool) {
+    message_parts(text, |language, value, closed| {
+        let visible = value.strip_suffix("\r\n").or_else(|| value.strip_suffix('\n')).unwrap_or(value);
+        let mut label = RichText::new(visible);
+        if let Some(language) = language {
+            ui.horizontal_wrapped(|ui| {
+                if !language.is_empty() {
+                    ui.weak(language);
+                }
+                if (closed || finished) && ui.small_button(l.tr("Copy code")).clicked() {
+                    ui.ctx().copy_text(value.to_owned());
+                }
+            });
+            label = label.monospace();
         }
+        ui.add(egui::Label::new(label).wrap().selectable(true));
+    });
+}
+
+/// Borrow the original code, including indentation and line endings, for the clipboard.
+/// Only a matching fence with no trailing text can close a block.
+fn message_parts<'a>(text: &'a str, mut emit: impl FnMut(Option<&'a str>, &'a str, bool)) {
+    let mut fence: Option<(u8, usize, &str)> = None;
+    let (mut start, mut offset) = (0, 0);
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\r', '\n']);
+        let rest = bare.trim_start_matches(' ');
+        let next = offset + line.len();
+        if bare.len() - rest.len() < 4
+            && let Some(&mark @ (b'`' | b'~')) = rest.as_bytes().first()
+        {
+            let count = rest.bytes().take_while(|&b| b == mark).count();
+            let info = rest[count..].trim();
+            match fence {
+                Some((open, n, lang)) if open == mark && count >= n && info.is_empty() => {
+                    emit(Some(lang), &text[start..offset], true);
+                    fence = None;
+                    start = next;
+                }
+                None if count >= 3 && (mark != b'`' || !info.contains('`')) => {
+                    if offset > start {
+                        emit(None, &text[start..offset], true);
+                    }
+                    fence = Some((mark, count, info.split_whitespace().next().unwrap_or("")));
+                    start = next;
+                }
+                _ => {}
+            }
+        }
+        offset = next;
     }
-    block(ui, &mut lines, code);
+    if start < text.len() {
+        emit(fence.map(|(_, _, lang)| lang), &text[start..], fence.is_none());
+    }
 }
 
 fn status(ui: &mut Ui, text: &str) {
@@ -339,11 +399,26 @@ fn status(ui: &mut Ui, text: &str) {
     });
 }
 
-fn block(ui: &mut Ui, lines: &mut Vec<&str>, code: bool) {
-    if lines.is_empty() {
-        return;
+#[cfg(test)]
+mod message_tests {
+    #[test]
+    fn copyable_blocks_keep_source_and_exclude_surrounding_prose() {
+        let mut parts = Vec::new();
+        super::message_parts("First\n````vba\r\nSub Update()\r\n  ' ```\r\nEnd Sub\r\n````\r\nNext\n~~~\n  x\n~~~\nLast", |lang, s, closed| {
+            parts.push((lang, s, closed));
+        });
+        assert_eq!(
+            parts,
+            vec![
+                (None, "First\n", true),
+                (Some("vba"), "Sub Update()\r\n  ' ```\r\nEnd Sub\r\n", true),
+                (None, "Next\n", true),
+                (Some(""), "  x\n", true),
+                (None, "Last", true)
+            ]
+        );
+        parts.clear();
+        super::message_parts("```vb\nSub Pending()", |lang, s, closed| parts.push((lang, s, closed)));
+        assert_eq!(parts, vec![(Some("vb"), "Sub Pending()", false)]);
     }
-    let value = RichText::new(lines.join("\n"));
-    ui.add(egui::Label::new(if code { value.monospace() } else { value }).wrap().selectable(true));
-    lines.clear();
 }

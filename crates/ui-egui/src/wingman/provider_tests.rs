@@ -1,4 +1,9 @@
 use super::stream::{Assembly, Lines, Reply};
+use super::{
+    settings::Protocol,
+    thinking::{Levels, Thinking},
+    transport::prepare_reasoning,
+};
 use serde_json::{Value, json};
 
 fn receive(bytes: &[u8], native: bool) -> Result<Reply, String> {
@@ -48,4 +53,38 @@ fn native_ollama_requires_done_before_releasing_a_complete_argument_object() {
     let [call] = reply.tool_calls.as_slice() else { panic!("missing native call") };
     assert_eq!(serde_json::from_str::<Value>(&call.arguments).unwrap(), args);
     assert_eq!(reply.message["tool_calls"][0]["id"], call.id);
+}
+
+#[test]
+fn model_efforts_respect_the_declared_set_and_native_boolean_type() {
+    let levels = serde_json::from_value::<Levels>(json!(["none", "low", "high"])).unwrap();
+    let mut chat = Thinking::configured(Protocol::Completions, None, None, Some(&levels)).unwrap();
+    assert_eq!(chat.wire(Protocol::Completions), "high");
+    assert!(chat.preference(Protocol::Completions, Some(true), Some("medium")).is_err());
+    chat.preference(Protocol::Completions, Some(false), None).unwrap();
+    assert_eq!(chat.wire(Protocol::Completions), "none");
+    let fixed = serde_json::from_value::<Levels>(json!("low,high")).unwrap();
+    let mut fixed = Thinking::configured(Protocol::Completions, None, None, Some(&fixed)).unwrap();
+    fixed.preference(Protocol::Completions, Some(false), None).unwrap();
+    assert!(fixed.wire(Protocol::Completions).is_null(), "Never send an unsupported off value to an always-thinking model.");
+    let mut native = Thinking::configured(Protocol::Ollama, Some(true), None, None).unwrap();
+    assert!(native.wire(Protocol::Ollama).is_null());
+    native.preference(Protocol::Ollama, Some(true), None).unwrap();
+    assert_eq!(native.wire(Protocol::Ollama), true);
+    native.preference(Protocol::Ollama, Some(false), None).unwrap();
+    assert_eq!(native.wire(Protocol::Ollama), false);
+}
+
+#[test]
+fn a_new_effort_drops_old_private_reasoning_but_keeps_matching_tool_continuations() {
+    let mut messages = [
+        json!({"role":"assistant","reasoning_content":"previous","_wingman_thinking":"high"}),
+        json!({"role":"user","content":"follow up"}),
+        json!({"role":"assistant","reasoning_content":"ongoing","_wingman_thinking":"low"}),
+        json!({"role":"tool","content":"result"}),
+    ];
+    prepare_reasoning(&mut messages, &json!("low"), true);
+    assert!(messages[0].get("reasoning_content").is_none());
+    assert_eq!(messages[2]["reasoning_content"], "ongoing");
+    assert!(messages.iter().all(|m| m.get("_wingman_thinking").is_none()));
 }

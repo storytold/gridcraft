@@ -109,12 +109,14 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Save As…", "file.saveAs"),
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
-                    #[cfg(not(target_arch = "wasm32"))]
-                    ("Wingman", "view.wingman"),
                 ] {
                     if ui.button(label).clicked() {
                         app.run_or_alert(id, json!({}));
                     }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if app.ui.show_wingman_pane && ui.button(app.ui.language.tr("Wingman")).clicked() {
+                    app.run_or_alert("view.wingman", json!({}));
                 }
                 if ui.button("Print…").clicked() {
                     app.print_now(json!({}));

@@ -17,7 +17,7 @@ mod references;
 pub(super) use references::{mentions, read_target};
 
 const COMMANDS: &[&str] = &["/help", "/new", "/clear", "/mode", "/settings"];
-const MODE_COMMANDS: &[&str] = &["/mode chat", "/mode read", "/mode write"];
+const MODE_COMMANDS: &[&str] = &["/mode chat", "/mode read", "/mode write", "/mode mcp"];
 
 fn hint(name: &str) -> &'static str {
     match name {
@@ -29,6 +29,7 @@ fn hint(name: &str) -> &'static str {
         "@charts" => "Charts on this sheet",
         "@comments" => "Cell comments",
         "@vba" => "VBA project information",
+        "@macro" => "Current native macro editor draft",
         "/new" => "Start a new conversation",
         "/clear" => "Clear this conversation",
         "/help" => "List commands and references",
@@ -36,6 +37,7 @@ fn hint(name: &str) -> &'static str {
         "/mode chat" => "Chat with no tools",
         "/mode read" => "Inspect the workbook",
         "/mode write" => "Propose workbook edits",
+        "/mode mcp" => "Propose workbook edits and approved external tool calls",
         "/settings" => "Open the configuration file",
         _ => "",
     }
@@ -44,6 +46,7 @@ fn hint(name: &str) -> &'static str {
 #[derive(Default)]
 pub(super) struct Composer {
     pub(super) text: String,
+    pristine_after_submit: bool,
     focus_requested: bool,
     picker: Option<Picker>,
     no_matches: Option<Query>,
@@ -171,6 +174,19 @@ impl Composer {
 
     pub(super) fn request_focus(&mut self) {
         self.focus_requested = true;
+    }
+
+    pub(super) fn submitted(&mut self, ctx: &egui::Context) {
+        // A sent message belongs to the transcript; it is not the predecessor of the next draft.
+        if let Some(mut state) = TextEdit::load_state(ctx, Self::id()) {
+            state.clear_undoer();
+            TextEdit::store_state(ctx, Self::id(), state);
+        }
+        self.pristine_after_submit = true;
+    }
+
+    pub(super) fn workbook_owns_undo(&self) -> bool {
+        self.pristine_after_submit && self.text.is_empty() && !self.ime_active
     }
 
     pub(super) fn take_draft(&mut self) -> Option<String> {
@@ -330,6 +346,9 @@ impl Composer {
             })
             .inner;
         let response = field.response.response.labelled_by(label.id);
+        if response.changed() || !self.text.is_empty() {
+            self.pristine_after_submit = false;
+        }
         let over_menu = self.menu_rect.is_some_and(|rect| ui.rect_contains_pointer(rect));
         let cursor = field.cursor_range.or_else(|| field.state.cursor.char_range());
         if enabled && (response.has_focus() || over_menu) {

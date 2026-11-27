@@ -116,6 +116,8 @@ pub struct UiState {
     pub system_theme: bool,
     pub ribbon_tab: String,
     pub ribbon_collapsed: bool,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub show_wingman_pane: bool,
     pub formula_bar_expanded: bool,
     /// Lines the expanded formula bar shows: the height its bottom edge was last dragged to.
     /// Expanding it again (the chevron, Ctrl+Shift+U) returns to that height.
@@ -175,6 +177,8 @@ impl Default for UiState {
             system_theme: false,
             ribbon_tab: "Home".into(),
             ribbon_collapsed: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            show_wingman_pane: true,
             formula_bar_expanded: false,
             formula_bar_lines: formula_bar::MAX_LINES,
             status_bar: true,

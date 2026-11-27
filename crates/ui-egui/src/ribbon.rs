@@ -66,7 +66,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let tabs_rect = if collapsed { crate::wingman::ribbon_tile(app, ui, tabs_rect, true) } else { tabs_rect };
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
                 #[cfg(not(target_arch = "wasm32"))]
-                if collapsed {
+                if collapsed && app.ui.show_wingman_pane {
                     ui.shrink_clip_rect(tabs_rect);
                 }
                 ui.horizontal(|ui| {

@@ -7,7 +7,7 @@ use gridcraft_engine::core::{CellRef, RangeRef, Value};
 use gridcraft_engine::model::{Comment, Sheet, Visibility};
 use serde_json::{Value as Json, json};
 
-pub(in crate::wingman) const MENTIONS: &[&str] = &["@selection", "@read", "@cell", "@sheet", "@workbook", "@charts", "@comments", "@vba"];
+pub(in crate::wingman) const MENTIONS: &[&str] = &["@selection", "@read", "@cell", "@sheet", "@workbook", "@charts", "@comments", "@vba", "@macro"];
 
 pub(super) fn sheet<'a>(d: &'a DocState, args: &Json) -> Result<&'a Sheet, String> {
     let i = match args["sheet"].as_str() {
@@ -154,6 +154,7 @@ pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, S
             )
         }
         "cell" => Ok(cell_data(d, sh, d.selection.active, true)),
+        "macro" => super::super::script_editor::inspect(app, &json!({})),
         "sheet" => {
             // Computing the used rectangle scans occupied rows. Limit this to one explicitly
             // requested worksheet, rather than scanning every tab for a workbook summary.

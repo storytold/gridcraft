@@ -32,7 +32,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         .take(40);
     #[cfg(not(target_arch = "wasm32"))]
     let cmds = cmds.chain(
-        (!q.is_empty() && "view.wingman".contains(&q))
+        (app.ui.show_wingman_pane && !q.is_empty() && "view.wingman".contains(&q))
             .then(|| ("view.wingman".to_owned(), app.ui.language.tr("Wingman").to_owned(), "View".to_owned(), None)),
     );
     let cmds: Vec<(String, String, String, Option<String>)> = cmds.collect();

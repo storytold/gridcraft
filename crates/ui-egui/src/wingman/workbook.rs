@@ -102,6 +102,27 @@ const TOOLS: &[Tool] = &[
     tool!("set_fill", "Set the range's fill to a #RRGGBB color or none.", Some("home.fillColor"), ["sheet", "range", "color"], []),
     tool!("set_ink", "Set the range's font color to #RRGGBB or auto.", Some("home.fontColor"), ["sheet", "range", "color"], []),
     tool!(
+        "clear_contents",
+        "Clear cell values and formulas within this rectangle without removing formatting. Matches the workbook's Clear Contents command.",
+        Some("edit.clearContents"),
+        ["sheet", "range"],
+        []
+    ),
+    tool!(
+        "fill_down",
+        "Copy the rectangle's first row into its following rows, adjusting relative formula references.",
+        Some("edit.fillDown"),
+        ["sheet", "range"],
+        []
+    ),
+    tool!(
+        "fill_right",
+        "Copy the rectangle's first column into its following columns, adjusting relative formula references.",
+        Some("edit.fillRight"),
+        ["sheet", "range"],
+        []
+    ),
+    tool!(
         "size_rows",
         "Set the height in points of each whole row touched by the given A1 rectangle.",
         Some("home.rowHeight"),
@@ -265,15 +286,23 @@ pub(super) fn schemas(allow_write: bool) -> Vec<Json> {
         .iter()
         .filter(|t| allow_write || t.command.is_none())
         .map(|t| json!({"type":"function","function":{"name":t.name,"description":t.help,"parameters":t.params()}}))
+        .chain(super::script_editor::schemas(allow_write))
         .collect()
 }
 
 pub(super) fn is_write(name: &str) -> Result<bool, String> {
+    if let Some(write) = super::script_editor::is_write(name) {
+        return Ok(write);
+    }
     Ok(lookup(name)?.command.is_some())
 }
 
 // Validate the same small subset of JSON Schema we advertise. Providers may ignore schemas
 // entirely. The engine accepts soft defaults for the ribbon; they are inappropriate for tools.
+pub(super) fn valid_field(key: &str, value: &Json) -> bool {
+    validate(&field(key), value, key).is_ok()
+}
+
 fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
     let fail = || format!("Invalid {path}; expected {}", spec["type"]);
     if let Some(types) = spec["type"].as_array() {
@@ -327,13 +356,16 @@ fn validate(spec: &Json, value: &Json, path: &str) -> Result<(), String> {
 }
 
 pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Json, allow_write: bool) -> Result<Json, String> {
-    let tool = lookup(name)?;
-    if tool.command.is_some() && !allow_write {
+    if is_write(name)? && !allow_write {
         return Err("This profile cannot change the workbook.".into());
     }
     if args.to_string().len() > MAX_ARGS {
         return Err("Arguments exceed 64 KiB; split the request.".into());
     }
+    if super::script_editor::is_write(name).is_some() {
+        return super::script_editor::execute(app, name, args, allow_write);
+    }
+    let tool = lookup(name)?;
     validate(&tool.params(), args, name)?;
     let result = if let Some(command) = tool.command {
         let p = write_args(app, tool, args)?;
@@ -343,11 +375,11 @@ pub(super) fn execute(app: &mut SheetApp, name: &str, args: &Json, allow_write: 
                 return Err("That script already exists; replace must be explicit.".into());
             }
         }
-        let value = app.run(command, p)?;
+        let (value, undo_label) = super::history::edit(app, command, p)?;
         // Some commands return null or a potentially large report of auto-converted entries.
         // Never tell the model an already applied edit failed merely because its receipt is large.
-        let receipt = json!({"applied":true,"result":value});
-        if receipt.to_string().len() > MAX_RESULT { json!({"applied":true,"detailsOmitted":true}) } else { receipt }
+        let receipt = json!({"applied":true,"undoLabel":undo_label,"result":value});
+        if receipt.to_string().len() > MAX_RESULT { json!({"applied":true,"undoLabel":undo_label,"detailsOmitted":true}) } else { receipt }
     } else {
         match name {
             "find_commands" => {
@@ -396,7 +428,7 @@ fn script_or_function_page(app: &mut SheetApp, name: &str, args: &Json) -> Resul
                 let mut p = serde_json::Map::new();
                 for &k in tool.required.iter().chain(tool.optional) {
                     if let Some(v) = step["params"].get(k)
-                        && validate(&field(k), v, k).is_ok()
+                        && valid_field(k, v)
                     {
                         p.insert(k.to_owned(), v.clone());
                     }
@@ -433,6 +465,9 @@ fn write_args(app: &SheetApp, t: &Tool, args: &Json) -> Result<Json, String> {
                 | "size_columns"
                 | "sort_rows"
                 | "filter_column"
+                | "clear_contents"
+                | "fill_right"
+                | "fill_down"
         )
     {
         return Err("The sheet is protected.".into());
@@ -516,7 +551,8 @@ fn prepare_comment(sh: &gridcraft_engine::model::Sheet, name: &str, p: &mut Json
     Ok(())
 }
 
-fn script_steps(app: &SheetApp, args: &Json) -> Result<Json, String> {
+pub(super) fn script_steps(app: &SheetApp, args: &Json) -> Result<Json, String> {
+    validate(&field("steps"), &args["steps"], "steps")?;
     let mut commands = Vec::new();
     for step in args["steps"].as_array().ok_or("Expected script steps")? {
         let tool = lookup(step["tool"].as_str().ok_or("Expected tool name")?)?;

@@ -52,6 +52,8 @@ pub struct Picker {
 /// The editor's state while it is open.
 #[derive(Clone, Debug)]
 pub struct Editor {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wingman_history: crate::wingman::script_editor::DraftHistory,
     /// The workbook (`DocState::uid`) the macro is in: the editor saves, checks and runs there only.
     pub doc: u64,
     pub draft: Macro,
@@ -539,6 +541,8 @@ pub fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
     let selected = (!draft.steps.is_empty()).then(|| "1".to_string());
     let doc = doc.uid;
     app.macros.editor = Some(Editor {
+        #[cfg(not(target_arch = "wasm32"))]
+        wingman_history: Default::default(),
         doc,
         opened_as: draft.name.clone(),
         draft,
@@ -618,6 +622,11 @@ pub fn save(app: &mut SheetApp, ed: &mut Editor) -> bool {
         Ok(_) => {
             ed.saved_as = Some(ed.draft.name.clone());
             ed.dirty = false;
+            // Save moves draft edits into the workbook's ordinary macro.save undo transaction.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ed.wingman_history = Default::default();
+            }
             true
         }
         Err(e) => {
@@ -916,10 +925,13 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
     let home_title = home_title(app, &ed);
     let dirty_mark = if ed.dirty { " •" } else { "" };
     let screen = ctx.content_rect();
+    #[cfg(not(target_arch = "wasm32"))]
+    let screen =
+        crate::wingman::dock_left(app).map_or(screen, |right| Rect::from_min_max(screen.min, pos2(right.max(screen.left() + 1.0), screen.bottom())));
     let fit = (screen.size() - vec2(16.0, 16.0)).max(vec2(240.0, 200.0));
     let mut win_open = true;
     ed.refs.drawn = false;
-    egui::Window::new(format!("Macro: {}{dirty_mark}", ed.draft.name))
+    let window = egui::Window::new(format!("Macro: {}{dirty_mark}", ed.draft.name))
         .id(Id::unique("gridcraft.macro_editor"))
         .collapsible(false)
         .resizable(true)
@@ -927,25 +939,25 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
         .default_size(vec2(840.0, 560.0).min(fit))
         .min_size(vec2(660.0, 380.0).min(fit))
         // To the right, so the data the overlays mark (usually top left) stays in view.
-        .default_pos(pos2((screen.right() - 860.0).max(screen.left() + 20.0), screen.top() + 190.0))
-        .open(&mut win_open)
-        .show(ctx, |ui| {
-            if !home {
-                let t = Tokens::get(ui.ctx());
-                ui.label(
-                    egui::RichText::new(format!("This macro is in “{home_title}”. Switch back to it to edit, check or run the macro."))
-                        .color(t.danger),
-                );
+        .default_pos(pos2((screen.right() - 860.0).max(screen.left() + 20.0), screen.top() + 190.0));
+    #[cfg(not(target_arch = "wasm32"))]
+    let window = if crate::wingman::dock_left(app).is_some() { window.constrain_to(screen).max_size(fit) } else { window };
+    window.open(&mut win_open).show(ctx, |ui| {
+        if !home {
+            let t = Tokens::get(ui.ctx());
+            ui.label(
+                egui::RichText::new(format!("This macro is in “{home_title}”. Switch back to it to edit, check or run the macro.")).color(t.danger),
+            );
+        }
+        ui.add_enabled_ui(home, |ui| {
+            if let Some(key) = ed.refs.collapsed.clone() {
+                ref_edit(app, ui, d, &mut ed.refs, &key, 340.0);
+                apply_ref_value(&mut ed, d, &key);
+                return;
             }
-            ui.add_enabled_ui(home, |ui| {
-                if let Some(key) = ed.refs.collapsed.clone() {
-                    ref_edit(app, ui, d, &mut ed.refs, &key, 340.0);
-                    apply_ref_value(&mut ed, d, &key);
-                    return;
-                }
-                body(app, ui, d, &mut ed);
-            });
+            body(app, ui, d, &mut ed);
         });
+    });
     if ed.refs.pick.is_some() && !ed.refs.drawn {
         ed.refs.pick = None;
     }
@@ -1205,6 +1217,8 @@ fn body(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
         if ui.add_enabled(ed.dirty && !debugging, egui::Button::new("Save")).clicked() {
             save(app, ed);
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::wingman::script_editor::controls(app, ui, ed);
     });
     ui.add_space(2.0);
     toolbar(app, ui, ed, debugging);

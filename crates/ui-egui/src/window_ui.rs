@@ -55,6 +55,17 @@ impl WindowUi {
 }
 
 impl SheetApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_wingman_visible(&mut self, visible: bool) {
+        self.ui.show_wingman_pane = visible;
+        if !visible {
+            self.wingman.close();
+            for window in self.parked.values_mut() {
+                window.wingman.close();
+            }
+        }
+    }
+
     /// Exchanges the per-window fields with `w`. Destructured in full, so a field added to
     /// [`WindowUi`] can't be left out of the swap.
     fn swap_window_ui(&mut self, w: &mut WindowUi) {

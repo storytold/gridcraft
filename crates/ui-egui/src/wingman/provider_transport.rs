@@ -164,7 +164,23 @@ fn native_history(messages: &mut [Value]) -> Result<(), String> {
     }
     Ok(())
 }
-fn payload(a: &Agent, mut messages: Vec<Value>, tools: Vec<Value>) -> Result<Value, String> {
+// This private marker is held only in the in-memory transcript. Preserve reasoning for
+// tool continuations that require it, never forward provider state from a different mode.
+const THINKING_TAG: &str = "_wingman_thinking";
+pub(super) fn prepare_reasoning(messages: &mut [Value], choice: &Value, retain: bool) {
+    let current = messages.iter().rposition(|m| m["role"] == "user").unwrap_or(messages.len());
+    for (i, m) in messages.iter_mut().enumerate() {
+        if let Some(obj) = m.as_object_mut() {
+            let previous = obj.remove(THINKING_TAG);
+            if !retain || previous.as_ref() != Some(choice) || (i < current && (choice.as_bool() == Some(false) || choice.as_str() == Some("none"))) {
+                obj.remove("reasoning_content");
+            }
+        }
+    }
+}
+pub(super) fn payload(a: &Agent, mut messages: Vec<Value>, tools: Vec<Value>) -> Result<Value, String> {
+    let thinking = a.thinking.wire(a.protocol);
+    prepare_reasoning(&mut messages, &thinking, a.retain_reasoning());
     if a.protocol == Protocol::Ollama {
         native_history(&mut messages)?;
     }
@@ -183,16 +199,13 @@ fn payload(a: &Agent, mut messages: Vec<Value>, tools: Vec<Value>) -> Result<Val
             options["num_predict"] = n.into();
         }
         body["options"] = options;
-        if let Some(r) = &a.reasoning_effort {
-            body["think"] = if r == "none" { false.into() } else { json!(r) };
-        }
     } else {
         if let Some(n) = a.max_output_tokens {
             body[if a.legacy_limit { "max_tokens" } else { "max_completion_tokens" }] = n.into();
         }
-        if let Some(r) = &a.reasoning_effort {
-            body["reasoning_effort"] = json!(r);
-        }
+    }
+    if !thinking.is_null() {
+        body[if a.protocol == Protocol::Ollama { "think" } else { "reasoning_effort" }] = thinking;
     }
     Ok(body)
 }
@@ -205,7 +218,11 @@ async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn
     }
     let req = client(&a)?.post(url).header("content-type", "application/json").body(payload);
     let response = send(authorize(req, &a)?).await?;
-    receive(response, native, a.reasoning_history || native, notify).await
+    let mut reply = receive(response, native, a.retain_reasoning(), notify).await?;
+    if reply.message.get("reasoning_content").is_some() {
+        reply.message[THINKING_TAG] = a.thinking.wire(a.protocol);
+    }
+    Ok(reply)
 }
 
 async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(&str)) -> Result<Reply, String> {

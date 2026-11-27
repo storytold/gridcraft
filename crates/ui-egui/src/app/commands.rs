@@ -17,6 +17,23 @@ impl SheetApp {
     }
 
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if matches!(id, "edit.undo" | "edit.redo")
+            && let Some(result) = crate::wingman::script_editor::history(self, id, false)
+        {
+            return result;
+        }
+        self.run_command_using(id, params, gridcraft_engine::Session::run)
+    }
+
+    /// Keep the UI's normal command effects (e.g. selection of an inserted chart) when an
+    /// in-workbook command is dispatched inside an explicitly named native undo transaction.
+    pub(crate) fn run_command_using(
+        &mut self,
+        id: &str,
+        params: Json,
+        dispatch: impl FnOnce(&mut gridcraft_engine::Session, &str, Json) -> Result<Json, String>,
+    ) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -59,7 +76,7 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let r = dispatch(&mut self.session, id, params);
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }
@@ -194,7 +211,16 @@ impl SheetApp {
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
             #[cfg(not(target_arch = "wasm32"))]
-            "view.wingman" => self.wingman.toggle(p),
+            "view.wingman" if self.ui.show_wingman_pane || p.get("on") == Some(&Json::Bool(false)) => self.wingman.toggle(p),
+            #[cfg(not(target_arch = "wasm32"))]
+            "view.wingman" => Err("Wingman is disabled in File > Options > Features.".into()),
+            #[cfg(not(target_arch = "wasm32"))]
+            "options.showWingmanPane" => {
+                p.get("on").map_or(Ok(!self.ui.show_wingman_pane), |v| v.as_bool().ok_or("on must be true or false".into())).map(|on| {
+                    self.set_wingman_visible(on);
+                    json!({"on":on})
+                })
+            }
             "ui.window.minimize" => {
                 self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
                 Ok(Json::Null)
