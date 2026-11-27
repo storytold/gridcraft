@@ -48,7 +48,9 @@ pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let header = guess_header(&d.wb, sh, r);
+    // The A-to-Z buttons guess a header from the values; an explicit `header` wins, as in
+    // `data.sort`, so a caller that knows its range has no header sorts its first row too.
+    let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
     do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
 }
 
