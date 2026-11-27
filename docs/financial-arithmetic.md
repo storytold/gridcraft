@@ -5,6 +5,11 @@ PRICE, YIELD, DURATION and MDURATION share cash-flow evaluation in
 `financial::scaled::Scaled`, which has binary64 precision and a separate binary exponent.
 Only the final price, yield or duration is converted to a worksheet number.
 
+Cash flows are accumulated from maturity toward the first coupon, with one scaled division
+per full coupon period. PRICE and YIELD apply the first coupon's fractional-period discount
+to that total. For duration, the common first discount cancels and only that calculation
+accumulates time weights.
+
 This addresses a common numerical failure behind #4146–#4153. Evaluating an algebraic formula
 entirely with ordinary `f64` intermediates can create infinity or zero before a later division
 or ratio produces a representable result. The worksheet's finite-number guard correctly
@@ -19,10 +24,9 @@ The shared calculation preserves:
 - Single-coupon yield arithmetic until its final day-count division.
 
 Multi-coupon YIELD compares positive gross present values against price plus accrued interest.
-It bisects `log(1 + yield/frequency)` up to the largest finite positive yield, avoiding the
-previous 60-doubling ceiling. Iterations and coupon loops remain bounded. The established
-negative-yield lower bound is retained; its compatibility policy is independent of extending
-the positive search range.
+It checks the range endpoints in yield units and bisects the ordered binary64 bit patterns
+of nonnegative yield magnitudes. This takes at most 63 steps and leaves the largest finite
+positive endpoint exact. Negative yields retain the established lower bound.
 
 This extends numerical range, not precision. Severe cancellation between nearby cash amounts
 can still lose significant digits. Final results outside binary64 still return `#NUM!`;

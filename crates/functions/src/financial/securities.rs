@@ -200,6 +200,35 @@ struct Bond {
     freq: f64,
 }
 
+impl Bond {
+    fn coupon(&self, rate: f64) -> Scaled {
+        Scaled::from(rate) * Scaled::from(100.0 / self.freq)
+    }
+
+    fn accrued(&self, coupon: Scaled) -> Scaled {
+        coupon * Scaled::from(self.a / self.e)
+    }
+
+    fn present_value(&self, coupon: Scaled, redemption: Scaled, yield_: f64) -> Scaled {
+        let periodic_yield = yield_ / self.freq;
+        let base = 1.0 + periodic_yield;
+        let discount = Scaled::from(base);
+        let frac = self.dsc / self.e;
+        let (present, _) = bond_cashflows::<false>(self, coupon, redemption, discount);
+        if frac == 1.0 {
+            return present / discount;
+        }
+        let first_discount = base.powf(frac);
+        let first_discount = if first_discount.is_normal() {
+            Scaled::from(first_discount)
+        } else {
+            // Actual-day bases can have an initial fraction above one, even at the largest yield.
+            Scaled::exp(frac * periodic_yield.ln_1p())
+        };
+        present / first_discount
+    }
+}
+
 fn bond(sys: DateSystem, settle: f64, mat: f64, freq: f64, basis: u32) -> R<Bond> {
     let c = coupons(sys, settle, mat, freq)?;
     let e = coup_days(&c, freq, basis);
@@ -211,32 +240,34 @@ fn bond(sys: DateSystem, settle: f64, mat: f64, freq: f64, basis: u32) -> R<Bond
     Ok(Bond { n: c.num, e, a, dsc, freq })
 }
 
-/// Shared positive cash flows for price, yield comparisons and duration. Neither a cash
-/// payment nor a discount factor is rounded to a worksheet number before forming the result.
-fn bond_cashflows(b: &Bond, coupon: Scaled, red: Scaled, log_discount: f64) -> (Scaled, Scaled) {
-    let (mut present, mut weighted) = (Scaled::from(0.0), Scaled::from(0.0));
-    let frac = b.dsc / b.e;
-    let mut k = 1.0;
-    while k <= b.n {
-        let t = k - 1.0 + frac;
-        let payment = if k == b.n { coupon + red } else { coupon };
-        let pv = payment * Scaled::exp(-t * log_discount);
-        present = present + pv;
-        weighted = weighted + pv * Scaled::from(t);
-        k += 1.0;
+/// Values at the first coupon date. Discount the accumulated tail by one full period
+/// at a time, and keep the separate fraction from settlement to the first coupon outside
+/// this loop. That initial discount cancels in the duration ratio.
+fn bond_cashflows<const WEIGHTED: bool>(b: &Bond, coupon: Scaled, redemption: Scaled, discount: Scaled) -> (Scaled, Scaled) {
+    let mut periods = b.n - 1.0;
+    let mut present = coupon + redemption;
+    let mut weighted = Scaled::from(0.0);
+    if WEIGHTED {
+        weighted = present * Scaled::from(periods);
+    }
+    while periods > 0.0 {
+        periods -= 1.0;
+        present = present / discount + coupon;
+        if WEIGHTED {
+            weighted = weighted / discount + coupon * Scaled::from(periods);
+        }
     }
     (present, weighted)
 }
 
 fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
-    let coupon = Scaled::from(rate) * Scaled::from(100.0 / b.freq);
-    let accrued = coupon * Scaled::from(b.a / b.e);
+    let coupon = b.coupon(rate);
+    let accrued = b.accrued(coupon);
     if b.n == 1.0 {
         let discount = Scaled::from(1.0) + Scaled::from(yld) * Scaled::from(b.dsc / b.e / b.freq);
         return ((Scaled::from(red) + coupon) / discount - accrued).value();
     }
-    let (present, _) = bond_cashflows(b, coupon, Scaled::from(red), (yld / b.freq).ln_1p());
-    (present - accrued).value()
+    (b.present_value(coupon, Scaled::from(red), yld) - accrued).value()
 }
 
 pub(super) fn price(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -256,60 +287,65 @@ pub(super) fn yield_(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let b = bond(c.date_system(), s, m, f, basis)?;
-    let coupon = Scaled::from(rate) * Scaled::from(100.0 / f);
-    let dirty = Scaled::from(pr) + coupon * Scaled::from(b.a / b.e);
+    let coupon = b.coupon(rate);
+    let dirty = Scaled::from(pr) + b.accrued(coupon);
     if b.n == 1.0 {
         if b.dsc == 0.0 {
             return Err(CellError::Num);
         }
         return num_val(((Scaled::from(red) + coupon - dirty) / dirty * Scaled::from(f * b.e / b.dsc)).value());
     }
-    // Compare positive gross cash flows, avoiding subtraction of accrued interest and price.
-    // log(1 + yield/frequency) covers every representable positive yield in a bounded search.
-    // Keep the established negative-yield lower bound; changing its policy is separate.
-    let compare = |z: f64| bond_cashflows(&b, coupon, Scaled::from(red), z).0.compare(dirty);
+    let redemption = Scaled::from(red);
+    let compare = |y| b.present_value(coupon, redemption, y).compare(dirty);
     let at_zero = compare(0.0);
-    if at_zero == Ordering::Equal {
-        return num_val(0.0);
-    }
-    let (mut lo, mut hi) = if at_zero == Ordering::Greater { (0.0, (f64::MAX / f).ln_1p()) } else { ((-0.999_999_f64).ln_1p(), 0.0) };
-    if compare(lo) == Ordering::Less || compare(hi) == Ordering::Greater {
+    let (sign, limit) = match at_zero {
+        Ordering::Equal => return num_val(0.0),
+        Ordering::Greater => (1.0, f64::MAX),
+        // Retain the existing negative-yield lower bound.
+        Ordering::Less => (-1.0, 0.999_999 * f),
+    };
+    let compare_magnitude = |magnitude| {
+        let order = compare(sign * magnitude);
+        if sign > 0.0 { order } else { order.reverse() }
+    };
+    if compare_magnitude(limit) == Ordering::Greater {
         return Err(CellError::Num);
     }
-    for _ in 0..200 {
-        let mid = 0.5 * (lo + hi);
-        if mid == lo || mid == hi {
-            break;
-        }
-        if compare(mid) == Ordering::Greater {
-            lo = mid;
-        } else {
-            hi = mid;
+    // Nonnegative finite floats sort by their bit patterns. Bisect those patterns to
+    // cover the full range in at most 63 steps without rounding either endpoint.
+    let (mut lo, mut hi) = (0_u64, limit.to_bits());
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let magnitude = f64::from_bits(mid);
+        match compare_magnitude(magnitude) {
+            Ordering::Greater => lo = mid,
+            Ordering::Equal => return num_val(sign * magnitude),
+            Ordering::Less => hi = mid,
         }
     }
-    let log_yield = 0.5 * (lo + hi);
-    num_val(log_yield.exp_m1() * f)
+    num_val(sign * f64::from_bits(hi))
 }
 
-fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
+fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(Scaled, Scaled)> {
     let (s, m, coupon, yld) = (date(a, 0)?, date(a, 1)?, num(a, 2)?, num(a, 3)?);
     let (f, basis) = (freq_arg(a, 4)?, basis_arg(a, 5)?);
     if coupon < 0.0 || yld < 0.0 {
         return Err(CellError::Num);
     }
     let b = bond(sys, s, m, f, basis)?;
-    let c = Scaled::from(coupon) * Scaled::from(100.0 / f);
-    let (present, weighted) = bond_cashflows(&b, c, Scaled::from(100.0), (yld / f).ln_1p());
-    Ok(((weighted / present / Scaled::from(f)).value(), yld, f))
+    let discount = Scaled::from(1.0 + yld / f);
+    let (present, weighted) = bond_cashflows::<true>(&b, b.coupon(coupon), Scaled::from(100.0), discount);
+    let periods = weighted / present + Scaled::from(b.dsc / b.e);
+    Ok((periods / Scaled::from(f), discount))
 }
 
 pub(super) fn duration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(duration_calc(a, c.date_system())?.0)
+    num_val(duration_calc(a, c.date_system())?.0.value())
 }
 
 pub(super) fn mduration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (d, y, f) = duration_calc(a, c.date_system())?;
-    num_val(d / (1.0 + y / f))
+    let (duration, discount) = duration_calc(a, c.date_system())?;
+    num_val((duration / discount).value())
 }
 
 // ---------------------------------------------------------------------------------------------

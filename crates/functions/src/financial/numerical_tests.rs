@@ -1,16 +1,20 @@
 use crate::util::testutil::{TestCtx, n};
-use gridcraft_core::{DateSystem, Value, date::serial_from_ymd};
+use gridcraft_core::{CellError, DateSystem, Value, date::serial_from_ymd};
 
 fn check(name: &str, sys: DateSystem, settlement: (i64, i64, i64), maturity: (i64, i64, i64), tail: &[f64], expected: f64) {
-    let date = |(y, m, d)| n(serial_from_ymd(sys, y, m, d).unwrap());
-    let args: Vec<_> = [date(settlement), date(maturity)].into_iter().chain(tail.iter().copied().map(n)).collect();
-    let result = crate::call(crate::lookup(name).unwrap(), &args, &mut TestCtx { sys, ..TestCtx::default() });
+    let result = calculate(name, sys, settlement, maturity, tail);
     let Value::Number(actual) = result else { panic!("{name} {tail:?}: expected {expected}, got {result:?}") };
     if expected == 0.0 {
         assert!(actual.abs() < 1e-12, "{name}: {actual} != 0");
     } else {
         assert!((actual / expected - 1.0).abs() < 1e-10, "{name}: {actual} != {expected}");
     }
+}
+
+fn calculate(name: &str, sys: DateSystem, settlement: (i64, i64, i64), maturity: (i64, i64, i64), tail: &[f64]) -> Value {
+    let date = |(y, m, d)| n(serial_from_ymd(sys, y, m, d).unwrap());
+    let args: Vec<_> = [date(settlement), date(maturity)].into_iter().chain(tail.iter().copied().map(n)).collect();
+    crate::call(crate::lookup(name).unwrap(), &args, &mut TestCtx { sys, ..TestCtx::default() })
 }
 
 #[test]
@@ -40,7 +44,6 @@ fn bond_duration_cancels_large_cash_flow_scale() {
 #[test]
 fn final_range_and_negative_domain_guards_are_retained() {
     use crate::util::testutil::{ev, is_err};
-    use gridcraft_core::CellError;
     let s = n(serial_from_ymd(DateSystem::D1900, 2025, 1, 1).unwrap());
     let m = n(serial_from_ymd(DateSystem::D1900, 2027, 1, 1).unwrap());
     is_err(ev("PRICE", vec![s.clone(), m.clone(), n(9e307), n(0.0), n(100.0), n(1.0), n(4.0)]), CellError::Num);
@@ -66,10 +69,41 @@ fn bond_yield_search_covers_representable_positive_roots() {
 }
 
 #[test]
+fn bond_yield_accepts_a_root_just_inside_the_finite_range() {
+    for sys in [DateSystem::D1900, DateSystem::D1904] {
+        // The two payments are 25 and 125. Solve price = 25/x + 125/x², where x = 1 + yield/4.
+        let args = [1.0, 5.5626846462681e-307, 100.0, 4.0, 4.0];
+        let result = calculate("YIELD", sys, (2025, 1, 1), (2025, 7, 1), &args);
+        let Value::Number(actual) = result else { panic!("expected a finite yield, got {result:?}") };
+        let expected = 1.7976931348622847e308_f64;
+        assert!(actual.to_bits().abs_diff(expected.to_bits()) <= 8, "{actual:e} != {expected:e}");
+    }
+}
+
+#[test]
+fn bond_yield_rejects_a_root_just_outside_the_finite_range() {
+    for sys in [DateSystem::D1900, DateSystem::D1904] {
+        // At x = 2^1023 the first payment alone equals the price, so the second payment puts the root beyond f64::MAX.
+        let args = [1.0, 25.0 * f64::MIN_POSITIVE, 100.0, 2.0, 4.0];
+        assert_eq!(calculate("YIELD", sys, (2025, 1, 1), (2026, 1, 1), &args), Value::Error(CellError::Num));
+    }
+}
+
+#[test]
 fn bond_price_keeps_representable_redemption_when_power_overflows() {
     for sys in [DateSystem::D1900, DateSystem::D1904] {
         check("PRICE", sys, (2025, 1, 1), (2027, 1, 1), &[0.0, 2e154, 1e307, 1.0, 4.0], 0.025);
         check("PRICE", sys, (2025, 1, 1), (2027, 1, 1), &[0.0, 1e160, 1e300, 1.0, 4.0], 1e-20);
+    }
+}
+
+#[test]
+fn bond_price_rounds_a_discounted_redemption_to_the_minimum_subnormal() {
+    for sys in [DateSystem::D1900, DateSystem::D1904] {
+        // The redemption is just above 2^-875, so dividing by (1 + 2^100)^2 puts it just above the rounding midpoint.
+        let redemption = 2.0_f64.powi(-875).next_up();
+        let args = [0.0, 2.0_f64.powi(100), redemption, 1.0, 4.0];
+        assert_eq!(calculate("PRICE", sys, (2025, 1, 1), (2027, 1, 1), &args), Value::Number(f64::from_bits(1)));
     }
 }
 
