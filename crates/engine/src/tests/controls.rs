@@ -117,6 +117,22 @@ fn editing_the_linked_cell_moves_the_control() {
     assert_eq!(other.cell(gridcraft_core::CellRef::new(0, 0)).unwrap().value, Value::Number(30.0));
 }
 
+/// Opening a book recalculates it, and a control then shows its linked cell's new value: here a
+/// formula manual calculation had left behind when the book was saved.
+#[test]
+fn opening_a_book_moves_the_control_to_its_recalculated_cell() {
+    let mut s = s();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*10"})).unwrap();
+    s.execute("insert.spinButton", json!({"at": "D2", "link": "B1", "max": 100})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
+    let shown = |s: &Session| s.doc().unwrap().wb.active().unwrap().controls[0].value;
+    assert_eq!((v(&s, "B1"), shown(&s)), (Value::Number(10.0), 10), "manual calculation left B1");
+    reopen(&mut s);
+    assert_eq!((v(&s, "B1"), shown(&s)), (Value::Number(20.0), 20));
+}
+
 #[test]
 fn format_replies_with_the_value_a_new_link_gives() {
     let mut s = s();

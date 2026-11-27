@@ -2737,17 +2737,22 @@ fn a_linked_control_follows_the_recalculation_after_an_older_pivottable_is_renam
     assert_eq!((k2(&s), shown(&s)), (Value::Number(415.0), 415));
 }
 
-/// Under manual calculation, the Calculate Now that lets it be renamed does the same.
+/// Under manual calculation, the Calculate Now that lets it be renamed does the same, and the
+/// control linked to a cell that reads the report shows the cell's final value.
 #[test]
 fn getpivotdata_is_recalculated_when_calculate_now_renames_an_older_pivottable() {
     let mut s = older_with_getpivotdata("Region", "Sheet1!D1");
     s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
     s.execute("cell.set", json!({"cell": "Sheet1!D1", "input": "=Sheet1!K5&\"\""})).unwrap();
     s.execute("cell.set", json!({"cell": "Sheet1!K5", "input": "Units"})).unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!L2", "input": "=IFERROR(K2,1)"})).unwrap();
+    s.execute("insert.spinButton", json!({"at": "N2", "link": "Sheet1!L2", "max": 1000})).unwrap();
+    let shown = |s: &Session| s.doc().unwrap().wb.active().unwrap().controls[0].value;
     assert!(!pt(&s).names_from_values);
+    assert_eq!(shown(&s), 1);
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert!(pt(&s).names_from_values);
-    assert_eq!(k2(&s), Value::Number(415.0));
+    assert_eq!((k2(&s), shown(&s)), (Value::Number(415.0), 415));
 }
 
 /// GETPIVOTDATA knows a field by its current name only: a formula that spells the name an older

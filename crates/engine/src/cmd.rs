@@ -398,6 +398,18 @@ fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
 
+/// What every recalculation ends with before its workbook is published (an edit, Calculate Now,
+/// opening a book). PivotTables an older GridCraft saved take today's field names once their
+/// source can be read, and `again` recalculates what reads a report renamed (given a cell of
+/// each). Last, each linked control takes its cell's final value.
+pub(crate) fn finish_recalc(wb: &mut Workbook, again: impl FnOnce(&mut Workbook, &[Key])) {
+    let renamed = crate::pivot::migrate_older_names(wb);
+    if !renamed.is_empty() {
+        again(wb, &renamed);
+    }
+    controls::sync_linked_values(wb);
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
     // reads the wall clock without the (disallowed) `now`.
@@ -449,12 +461,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
-    let renamed = crate::pivot::migrate_older_names(&mut wb);
-    if !renamed.is_empty() {
-        d.calc.cells_changed(&mut wb, &renamed);
-    }
-    // Last: a control shows its linked cell's final value.
-    controls::sync_linked_values(&mut wb);
+    finish_recalc(&mut wb, |wb, renamed| d.calc.cells_changed(wb, renamed));
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }

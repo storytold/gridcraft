@@ -333,9 +333,7 @@ impl DocState {
         let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
-        if !pivot::migrate_older_names(&mut wb).is_empty() {
-            calc.recalc_all(&mut wb);
-        }
+        cmd::finish_recalc(&mut wb, |wb, _| calc.recalc_all(wb));
         Self::with_calc(wb, calc, path, title, trust)
     }
     /// A workbook as its file saved it: the dependency graph is built but nothing is
