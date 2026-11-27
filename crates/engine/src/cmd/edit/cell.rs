@@ -30,9 +30,6 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(Cell { value: gridcraft_core::cap_value(Value::text(input)), formula: None, style, py: None }));
     }
     let is_formula = is_formula_input(input);
-    if is_formula && gridcraft_model::python::is_py_formula(input) {
-        return Err(EngineError::Other(PY_FORMULA.into()));
-    }
     // As in Excel, a `+` or `-` entry is a formula when it reads as one (`+5+4` enters `=+5+4`)
     // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
     if is_formula
@@ -42,9 +39,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(cell);
     }
     if input.starts_with('=') {
-        let body = input.strip_prefix('=').unwrap_or(input);
-        let expr = wb.name_call_case(parse_typed_formula(body)?);
-        check_arg_counts(&expr)?;
+        let expr = wb.name_call_case(validate_formula_entry(input)?);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
@@ -103,6 +98,18 @@ pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr>
     // Excel closes missing parentheses for you.
     let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse);
     parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))
+}
+
+/// Preflight canonical API formula entry, without evaluating it, touching the workbook, or
+/// executing active content. A destination with a Text format stores the original input literally.
+pub fn validate_formula_entry(input: &str) -> Result<gridcraft_formula::Expr> {
+    let body = input.strip_prefix('=').ok_or_else(|| EngineError::Other("A formula entry starts with =.".into()))?;
+    if gridcraft_model::python::is_py_formula(input) {
+        return Err(EngineError::Other(PY_FORMULA.into()));
+    }
+    let expr = parse_typed_formula(body)?;
+    check_arg_counts(&expr)?;
+    Ok(expr)
 }
 
 /// Like Excel, a formula that calls a built-in function with too few or too many arguments is

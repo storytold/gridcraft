@@ -503,67 +503,106 @@ pub fn resolve_params(params: &Json, env: &Env) -> R<Json> {
     walk(params, None, env, 0)
 }
 
+enum Param<'a> {
+    Ref(&'a str),
+    Literal(&'a str),
+    Text(&'a str),
+    Object(&'a Map<String, Json>),
+    Array(&'a [Json]),
+    Scalar(&'a Json),
+}
+
+/// One classification for native execution and the editor's dependency check.
+fn param<'a>(v: &'a Json, key: Option<&str>, token: impl FnOnce(&str) -> bool) -> Param<'a> {
+    match v {
+        Json::Object(o) if o.len() == 1 && o.get("$ref").is_some_and(Json::is_string) => Param::Ref(o["$ref"].as_str().unwrap_or_default()),
+        Json::Object(o) if o.len() == 1 && o.get("$text").is_some_and(Json::is_string) => Param::Literal(o["$text"].as_str().unwrap_or_default()),
+        Json::String(s) if key.is_some_and(|k| is_ref_key(k) && !(is_general_key(k) && is_bare_item_word(s))) && token(s) => Param::Ref(s),
+        Json::String(s) => Param::Text(s),
+        Json::Object(o) => Param::Object(o),
+        Json::Array(a) => Param::Array(a),
+        other => Param::Scalar(other),
+    }
+}
+
 fn walk(v: &Json, key: Option<&str>, env: &Env, depth: usize) -> R<Json> {
     if depth > MAX_JSON_DEPTH {
         return bad("The step's parameters nest too deeply.");
     }
-    Ok(match v {
-        Json::Object(o) => {
-            if o.len() == 1
-                && let Some(Json::String(t)) = o.get("$ref")
-            {
-                return Ok(Json::String(a1(resolve_ref(t, env)?, env)));
-            }
-            // Text passed as it is: never a token, and no `{{…}}` in it is read.
-            if o.len() == 1
-                && let Some(Json::String(t)) = o.get("$text")
-            {
-                return Ok(Json::String(t.clone()));
-            }
+    Ok(match param(v, key, |s| is_token(s, env)) {
+        Param::Ref(t) => Json::String(a1(resolve_ref(t, env)?, env)),
+        Param::Literal(t) => Json::String(t.to_owned()),
+        Param::Text(t) => Json::String(interpolate(t, env)?),
+        Param::Object(o) => {
             let mut out = Map::new();
             for (k, x) in o {
                 out.insert(k.clone(), walk(x, Some(k), env, depth + 1)?);
             }
             Json::Object(out)
         }
-        // Items of a list keep their key's kind (`ranges: ["Input", …]`).
-        Json::Array(a) => Json::Array(a.iter().map(|x| walk(x, key, env, depth + 1)).collect::<R<Vec<_>>>()?),
-        Json::String(s) => {
-            if key.is_some_and(|k| is_ref_key(k) && !(is_general_key(k) && is_bare_item_word(s))) && is_token(s, env) {
-                Json::String(a1(resolve_token(s, env)?, env))
-            } else {
-                Json::String(interpolate(s, env)?)
-            }
-        }
-        other => other.clone(),
+        Param::Array(a) => Json::Array(a.iter().map(|x| walk(x, key, env, depth + 1)).collect::<R<Vec<_>>>()?),
+        Param::Scalar(v) => v.clone(),
     })
+}
+
+/// True if a native reference uses the current Repeat item (not a sheet named Row or Column).
+pub fn iteration_ref(s: &str) -> bool {
+    starts_like_token(s, |_| false) && is_bare_item_word(s.trim_start().split(|c: char| !c.is_alphanumeric() && c != '_').next().unwrap_or(""))
+}
+
+/// Inspect exactly the references that resolve_params substitutes, without constructing a
+/// workbook environment or resolving a cell. Opaque or invalidly deep input fails closed.
+pub fn params_use_iteration(params: &Json, inputs: &[&str]) -> bool {
+    fn visit(v: &Json, key: Option<&str>, inputs: &[&str], depth: usize) -> bool {
+        if depth > MAX_JSON_DEPTH {
+            return true;
+        }
+        match param(v, key, |s| reads_as_token(s, inputs)) {
+            Param::Ref(t) => iteration_ref(t),
+            Param::Text(s) => fragments(s, |part, token| if token && iteration_ref(part) { Err(()) } else { Ok(()) }).is_err(),
+            Param::Array(a) => a.iter().any(|v| visit(v, key, inputs, depth + 1)),
+            Param::Object(o) => o.iter().any(|(k, v)| visit(v, Some(k), inputs, depth + 1)),
+            Param::Literal(_) | Param::Scalar(_) => false,
+        }
+    }
+    visit(params, None, inputs, 0)
+}
+
+/// Emit borrowed literal text and tokens. Four opening braces encode two literal braces.
+/// Sharing this scanner keeps the editor from treating a pasted escaped token as a live reference.
+fn fragments<E>(mut rest: &str, mut emit: impl FnMut(&str, bool) -> Result<(), E>) -> Result<(), E> {
+    while let Some((left, after)) = rest.split_once("{{") {
+        emit(left, false)?;
+        if let Some(tail) = after.strip_prefix("{{") {
+            emit("{{", false)?;
+            rest = tail;
+        } else if let Some((token, tail)) = after.split_once("}}") {
+            emit(token, true)?;
+            rest = tail;
+        } else {
+            emit("{{", false)?;
+            rest = after;
+            break;
+        }
+    }
+    emit(rest, false)
 }
 
 /// Replaces each `{{token}}` in `s`. `{{{{` is a literal `{{`, for text that needs the braces
 /// themselves (`"Dear {{{{name}}"` writes `Dear {{name}}`).
 pub fn interpolate(s: &str, env: &Env) -> R<String> {
     if !s.contains("{{") {
-        return Ok(s.to_string());
+        return Ok(s.to_owned());
     }
     let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find("{{") {
-        out.push_str(rest.get(..i).unwrap_or(""));
-        if rest.get(i..i + 4) == Some("{{{{") {
-            out.push_str("{{");
-            rest = rest.get(i + 4..).unwrap_or("");
-            continue;
+    fragments(s, |part, token| {
+        if token {
+            out.push_str(&a1(resolve_ref(part, env)?, env));
+        } else {
+            out.push_str(part);
         }
-        let after = rest.get(i + 2..).unwrap_or("");
-        let Some(j) = after.find("}}") else {
-            out.push_str(rest.get(i..).unwrap_or(""));
-            return Ok(out);
-        };
-        let token = after.get(..j).unwrap_or("");
-        out.push_str(&a1(resolve_ref(token, env)?, env));
-        rest = after.get(j + 2..).unwrap_or("");
-    }
-    out.push_str(rest);
+        Ok::<(), ResolveError>(())
+    })?;
     Ok(out)
 }
 

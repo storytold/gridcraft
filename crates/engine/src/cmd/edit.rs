@@ -17,7 +17,10 @@ mod fill;
 mod find;
 mod go_to;
 mod paste_special;
+mod range_transfer;
 mod selection;
+
+pub use cell::validate_formula_entry;
 
 use cell::{cell_set, range_fill, range_set_values};
 pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
@@ -40,6 +43,24 @@ use selection::{select_all, select_col, select_region, select_row, selection_mov
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        cmd!(
+            "range.transfer",
+            "Transfer Cell Block",
+            [],
+            None,
+            "{sheet, source, at, destinationSheet?, operation?: copy|move|transpose, overwrite?: false} → {source, destination}",
+            has_doc,
+            range_transfer::transfer
+        ),
+        cmd!(
+            "range.reshapeDelimited",
+            "Reshape Delimited Cells",
+            [],
+            None,
+            "{sheet, source, at, delimiter, destinationSheet?, layout?: rows|columns|row, overwrite?: false} → {source, destination, fields}",
+            has_doc,
+            range_transfer::reshape
+        ),
         cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
         cmd!(
             "range.setValues",

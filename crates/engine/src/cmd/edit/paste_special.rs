@@ -4,9 +4,19 @@ use super::{
     target_sheet,
 };
 
-#[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
+    let consume = clip.cut && s.doc()?.uid == clip.doc_uid;
+    let result = paste_snapshot(s, p, &clip, None)?;
+    if consume {
+        s.clipboard = None;
+    }
+    Ok(result)
+}
+
+/// Apply an explicit snapshot without consulting or changing a pending user copy/cut.
+#[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
+pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard, replace_sidecars: Option<RangeRef>) -> Result<Json> {
     let what = match str_param(p, "what").unwrap_or("all") {
         "all" => What::All,
         "formulas" => What::Formulas,
@@ -133,6 +143,25 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         // A cut moves the rules its cells hold now, not the clipboard's: rules cleared or added
         // since the cut would otherwise come back or be lost.
         let live_source = if cut_move { cx.wb.sheet(clip.sheet).cloned() } else { None };
+        if let Some(dest) = replace_sidecars {
+            // The agent explicitly approved replacing this whole block, including blank
+            // source positions. Reads below use clip.wb, independent of this COW mutation.
+            let sh = cx.sheet_mut(dest_sheet)?;
+            let cleared: std::collections::BTreeSet<_> = sh
+                .comments
+                .range(dest.start..=dest.end)
+                .map(|(c, _)| *c)
+                .chain(sh.hyperlinks.range(dest.start..=dest.end).map(|(c, _)| *c))
+                .filter(|c| dest.contains(*c))
+                .collect();
+            for at in &cleared {
+                sh.comments.remove(at);
+                sh.hyperlinks.remove(at);
+            }
+            for at in cleared {
+                cx.touch(dest_sheet, at);
+            }
+        }
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
@@ -455,9 +484,6 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     if !same_doc && !passive {
         let d = s.doc_mut()?;
         d.trust = d.trust.receive(clip.trust);
-    }
-    if cut_move {
-        s.clipboard = None;
     }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
 }

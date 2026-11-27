@@ -155,7 +155,10 @@ pub(super) fn transfer(s: &mut Session, p: &Json) -> Result<Json> {
         if !can_format {
             return Err(bad(ID, "Formatting the header is disabled on this protected sheet."));
         }
-        writes.push((header_at, None, text.to_owned()));
+        // The notes are already in row order. Insert the header in that same order so an
+        // AutoFilter can grow through contiguous new rows without jumping an empty one.
+        let i = writes.partition_point(|(dest, _, _)| dest.row < header_at.row);
+        writes.insert(i, (header_at, None, text.to_owned()));
     }
     if !writes.is_empty() {
         edit(s, |cx| {
@@ -212,6 +215,20 @@ mod tests {
         s.execute("review.newComment", json!({"cell":"AB8", "author":"Ada", "text":" first\nline "})).unwrap();
         s.execute("review.replyComment", json!({"cell":"AB8","author":"Mo","text":"=A1"})).unwrap();
         s
+    }
+
+    #[test]
+    fn contiguous_header_and_comments_extend_the_filter_but_never_jump_gaps() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("data.filter", json!({"range":"A1:B2"})).unwrap();
+        for cell in ["D1", "D2", "D4"] {
+            s.execute("review.newNote", json!({"cell":cell,"text":cell})).unwrap();
+        }
+        s.execute(ID, json!({"sourceColumn":"D","destinationColumn":"B","destinationStartRow":4,"headerText":"Notes","headerRow":3})).unwrap();
+        let sh = sheet(&s);
+        assert_eq!(sh.autofilter.as_ref().unwrap().range.end, at("B5"));
+        assert_eq!(sh.value(at("B7")), Value::text("D4"));
     }
 
     #[test]

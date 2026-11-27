@@ -31,8 +31,7 @@ use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 pub use sort::sort_context;
 use sort::{quick_sort, sort};
-#[cfg(test)]
-use tools::split_delimited;
+pub(super) use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
 pub use validation::{
     LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,

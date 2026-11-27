@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use gridcraft_core::{CellRef, RangeRef};
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,31 @@ fn has_value(cell: &Cell) -> bool {
     cell.has_content()
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Band {
     /// row → (col → cell)
     rows: BTreeMap<u32, BTreeMap<u32, Cell>>,
+    // Derived from the cells, never serialized or compared as workbook contents. Direct
+    // mutable cell access invalidates only this 64-row band, never the whole sheet.
+    #[serde(skip)]
+    legacy_arrays: OnceLock<BTreeMap<CellRef, RangeRef>>,
+}
+impl Default for Band {
+    fn default() -> Self {
+        Self { rows: BTreeMap::new(), legacy_arrays: OnceLock::from(BTreeMap::new()) }
+    }
+}
+impl PartialEq for Band {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows
+    }
+}
+impl Band {
+    fn forget_nonempty_arrays(&mut self) {
+        if self.legacy_arrays.get().is_some_and(|a| !a.is_empty()) {
+            self.legacy_arrays.take();
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -50,7 +71,9 @@ impl CellStore {
         if !band.rows.get(&c.row).is_some_and(|r| r.contains_key(&c.col)) {
             return None;
         }
-        Arc::make_mut(band).rows.get_mut(&c.row)?.get_mut(&c.col)
+        let band = Arc::make_mut(band);
+        band.legacy_arrays.take();
+        band.rows.get_mut(&c.row)?.get_mut(&c.col)
     }
     /// Stores a cell; a default (empty, unstyled) cell is removed instead.
     pub fn set(&mut self, c: CellRef, cell: Cell) {
@@ -59,6 +82,13 @@ impl CellStore {
             return;
         }
         let band = Arc::make_mut(self.bands.entry(c.row / BAND).or_default());
+        if let Some(index) = band.legacy_arrays.get_mut() {
+            if let Some(r) = cell.formula.as_ref().and_then(|f| f.array) {
+                index.insert(c, r);
+            } else if !index.is_empty() {
+                index.remove(&c);
+            }
+        }
         if band.rows.entry(c.row).or_default().insert(c.col, cell).is_none() {
             self.len += 1;
         }
@@ -92,6 +122,11 @@ impl CellStore {
             return None;
         }
         let b = Arc::make_mut(band);
+        if let Some(index) = b.legacy_arrays.get_mut()
+            && !index.is_empty()
+        {
+            index.remove(&c);
+        }
         let row = b.rows.get_mut(&c.row)?;
         let old = row.remove(&c.col);
         if row.is_empty() {
@@ -106,7 +141,7 @@ impl CellStore {
         old
     }
     /// Cells in `r`, row-major. Efficient for sparse data: skips empty bands and rows.
-    pub fn iter_range(&self, r: RangeRef) -> impl Iterator<Item = (CellRef, &Cell)> + '_ {
+    pub fn iter_range(&self, r: RangeRef) -> impl DoubleEndedIterator<Item = (CellRef, &Cell)> + '_ {
         let (b0, b1) = (r.start.row / BAND, r.end.row / BAND);
         self.bands.range(b0..=b1).flat_map(move |(_, band)| {
             band.rows
@@ -118,6 +153,28 @@ impl CellStore {
         self.bands
             .values()
             .flat_map(|band| band.rows.iter().flat_map(|(row, cols)| cols.iter().map(move |(col, cell)| (CellRef::new(*row, *col), cell))))
+    }
+
+    /// Includes legacy anchors outside the region whose declared array extends into it,
+    /// even when manual calculation has not populated the sheet's spill ranges yet.
+    pub fn legacy_array_intersects(&self, r: RangeRef) -> bool {
+        self.legacy_array_intersects_any(&[r])
+    }
+    /// Check multiple rectangles in a single pass over a sheet's sparse array metadata.
+    pub fn legacy_array_intersects_any(&self, ranges: &[RangeRef]) -> bool {
+        self.bands.values().any(|band| {
+            band.legacy_arrays
+                .get_or_init(|| {
+                    band.rows
+                        .iter()
+                        .flat_map(|(&row, cols)| {
+                            cols.iter().filter_map(move |(&col, c)| c.formula.as_ref().and_then(|f| f.array).map(|r| (CellRef::new(row, col), r)))
+                        })
+                        .collect()
+                })
+                .values()
+                .any(|a| ranges.iter().any(|r| a.intersects(r)))
+        })
     }
     /// Cells of one row in `c0..=c1`.
     pub fn row(&self, row: u32, c0: u32, c1: u32) -> impl Iterator<Item = (u32, &Cell)> + '_ {
@@ -375,6 +432,7 @@ impl CellStore {
                 continue;
             }
             let band = Arc::make_mut(band);
+            band.forget_nonempty_arrays();
             let mut block = band.rows.split_off(&r0);
             let mut tail = match r1.checked_add(1) {
                 Some(next) => block.split_off(&next),
@@ -431,6 +489,14 @@ impl CellStore {
                 continue;
             }
             let band = Arc::make_mut(self.bands.entry(key).or_default());
+            // Plain structural shifts keep the common empty index warm. Array-bearing
+            // batches are rare; rebuild just this band on first inspection after the shift.
+            band.forget_nonempty_arrays();
+            if band.legacy_arrays.get().is_some()
+                && group.iter().any(|(_, cols)| cols.values().any(|c| c.formula.as_ref().is_some_and(|f| f.array.is_some())))
+            {
+                band.legacy_arrays.take();
+            }
             for (row, mut cols) in group.drain(..) {
                 match band.rows.entry(row) {
                     Entry::Vacant(slot) => {
@@ -491,6 +557,27 @@ mod tests {
 
     fn c(r: u32, col: u32) -> CellRef {
         CellRef::new(r, col)
+    }
+
+    #[test]
+    fn legacy_array_index_follows_mutable_access_cow_and_structural_edits() {
+        let mut cells = CellStore::new();
+        let anchor = c(0, 0);
+        let child = c(68, 1);
+        let array = RangeRef::new(anchor, child);
+        let mut formula = crate::cell::Formula::new("1");
+        formula.array = Some(array);
+        cells.set(anchor, Cell { formula: Some(Arc::new(formula)), ..Default::default() });
+        let part = RangeRef::cell(child);
+        assert!(cells.legacy_array_intersects(part));
+        let copy = cells.clone();
+        let f = cells.get_mut(anchor).unwrap().formula.as_mut().unwrap();
+        Arc::make_mut(f).array = None;
+        assert!(!cells.legacy_array_intersects(part));
+        assert!(copy.legacy_array_intersects(part));
+        cells.set(anchor, copy.get(anchor).unwrap().clone());
+        cells.take_range(RangeRef::cell(anchor));
+        assert!(!cells.legacy_array_intersects(part));
     }
 
     #[test]
