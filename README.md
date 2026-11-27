@@ -171,6 +171,8 @@ so a Nightly run never touches the stable app's settings, prefs or logs.
 
 ## For agents: MCP, CLI and the control channel
 
+For an assistant inside the desktop spreadsheet, open [Wingman](docs/wingman.md). It connects to a model you configure, attaches workbook context and previews edits for approval.
+
 ```sh
 claude mcp add gridcraft -- gridcraft-cli mcp                 # headless MCP server
 gridcraft-cli mcp --connect 7979                               # MCP bridged to a running window

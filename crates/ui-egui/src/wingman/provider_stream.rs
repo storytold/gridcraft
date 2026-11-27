@@ -1,0 +1,254 @@
+//! Assemble one complete assistant message before releasing tool calls to the workbook.
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{Value, json};
+
+const MAX_CALLS: usize = 32;
+const ARG_LIMIT: usize = 256 * 1024;
+// A byte limit on raw SSE frames alone still permits a single enormous egui label.
+const TEXT_LIMIT: usize = 512 * 1024;
+
+pub(in super::super) struct Reply {
+    pub content: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub message: Value,
+}
+#[derive(Clone, Default)]
+pub(in super::super) struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+    pretty: std::sync::OnceLock<String>,
+}
+
+impl ToolCall {
+    pub(in super::super) fn preview(&self) -> &str {
+        self.pretty.get_or_init(|| {
+            serde_json::from_str::<Value>(&self.arguments)
+                .ok()
+                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                .unwrap_or_else(|| self.arguments.clone())
+        })
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Assembly {
+    content: String,
+    reasoning: String,
+    calls: BTreeMap<usize, ToolCall>,
+    finish: Option<String>,
+}
+impl Assembly {
+    pub(super) fn completion(&mut self, v: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
+        if v.get("error").is_some_and(|e| !e.is_null()) {
+            return Err("The provider reported a completion error.".into());
+        }
+        let choices = v["choices"].as_array().ok_or("Provider reply has no choices.")?;
+        // Some servers include a final, empty usage frame after the last choice.
+        let Some(choice) = choices.iter().find(|c| c["index"].as_u64().unwrap_or(0) == 0) else {
+            return Ok(());
+        };
+        let partial = choice.get("delta");
+        if let Some(message) = partial.or_else(|| choice.get("message")) {
+            self.text(message, notify)?;
+            if let Some(calls) = message["tool_calls"].as_array() {
+                for (i, c) in calls.iter().enumerate() {
+                    let index = match c["index"].as_u64() {
+                        Some(n) => usize::try_from(n).map_err(|_| "Invalid tool index.")?,
+                        None if partial.is_none() || calls.len() == 1 => i,
+                        None => return Err("Streamed parallel tool calls need distinct indices.".into()),
+                    };
+                    self.call(index, c)?;
+                }
+            }
+        }
+        if let Some(reason) = choice["finish_reason"].as_str() {
+            self.finish = Some(reason.into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn ollama(&mut self, v: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
+        if v.get("error").is_some_and(|e| !e.is_null()) {
+            return Err("Ollama reported a completion error.".into());
+        }
+        if let Some(m) = v.get("message") {
+            self.text(m, notify)?;
+            if let Some(calls) = m["tool_calls"].as_array() {
+                for c in calls {
+                    let i = self.calls.len();
+                    // Native Ollama emits whole argument objects, and identifies the
+                    // returning tool by name; supply a stable id for the conversation.
+                    let args = &c["function"]["arguments"];
+                    if !args.is_object() {
+                        return Err("Invalid Ollama function arguments.".into());
+                    }
+                    let native = json!({"id":format!("ollama_{i}"),"function":{"name":c["function"]["name"],"arguments":args.to_string()}});
+                    self.call(i, &native)?;
+                }
+            }
+        }
+        if v["done"] == true {
+            self.finish = Some(v["done_reason"].as_str().unwrap_or("stop").into());
+        }
+        Ok(())
+    }
+
+    fn text(&mut self, message: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
+        let mut append = |s: &str| -> Result<(), String> {
+            if self.content.len() + s.len() > TEXT_LIMIT {
+                return Err("Assistant reply exceeds 512 KiB. Ask for a smaller result.".into());
+            }
+            self.content.push_str(s);
+            notify(s);
+            Ok(())
+        };
+        match &message["content"] {
+            Value::Null => {}
+            Value::String(s) => append(s)?,
+            Value::Array(parts) => {
+                for part in parts {
+                    if let Some(s) = part["text"].as_str() {
+                        append(s)?;
+                    }
+                }
+            }
+            _ => return Err("Unsupported assistant content.".into()),
+        }
+        if let Some(s) = message["refusal"].as_str() {
+            append(s)?;
+        }
+        if let Some(s) = message["reasoning_content"].as_str().or_else(|| message["thinking"].as_str()) {
+            if self.reasoning.len() + s.len() > TEXT_LIMIT {
+                return Err("Assistant reasoning exceeds 512 KiB.".into());
+            }
+            self.reasoning.push_str(s);
+        }
+        Ok(())
+    }
+    fn call(&mut self, index: usize, c: &Value) -> Result<(), String> {
+        if index >= MAX_CALLS {
+            return Err("Too many tool calls in one reply.".into());
+        }
+        if c["type"].as_str().is_some_and(|kind| kind != "function") {
+            return Err("Unsupported tool-call type.".into());
+        }
+        let call = self.calls.entry(index).or_default();
+        if let Some(s) = c["id"].as_str() {
+            call.id.push_str(s);
+        }
+        if let Some(s) = c["function"]["name"].as_str() {
+            call.name.push_str(s);
+        }
+        if let Some(s) = c["function"]["arguments"].as_str() {
+            call.arguments.push_str(s);
+        }
+        if call.id.len() > 1024 || call.name.len() > 256 || call.arguments.len() > ARG_LIMIT {
+            return Err("Tool call exceeds the size limit.".into());
+        }
+        Ok(())
+    }
+    pub(super) fn finished(&self) -> bool {
+        self.finish.is_some()
+    }
+    pub(super) fn reply(self, terminated: bool, retain_reasoning: bool) -> Result<Reply, String> {
+        if !terminated && self.finish.is_none() {
+            return Err("Connection ended before a complete reply arrived.".into());
+        }
+        if self.finish.as_deref().is_some_and(|r| !matches!(r, "stop" | "tool_calls")) {
+            return Err("The provider stopped before completing the reply; no tool calls were applied.".into());
+        }
+        let calls: Vec<_> = self.calls.into_values().collect();
+        if calls.is_empty() && self.content.is_empty() {
+            return Err("The provider returned neither an answer nor a tool call.".into());
+        }
+        let mut seen = BTreeSet::new();
+        let mut wire = Vec::new();
+        for c in &calls {
+            if c.name.is_empty()
+                || c.id.is_empty()
+                || !seen.insert(&c.id)
+                || !serde_json::from_str::<Value>(&c.arguments).is_ok_and(|a| a.is_object())
+            {
+                return Err("The provider returned an incomplete or invalid tool call; no calls were applied.".into());
+            }
+            wire.push(json!({"id":c.id,"type":"function","function":{"name":c.name,"arguments":c.arguments}}));
+        }
+        let mut message = json!({"role":"assistant","content":self.content});
+        if !wire.is_empty() {
+            message["tool_calls"] = Value::Array(wire);
+        }
+        if retain_reasoning && !self.reasoning.is_empty() {
+            message["reasoning_content"] = self.reasoning.into();
+        }
+        Ok(Reply { content: self.content, tool_calls: calls, message })
+    }
+}
+
+/// Lines split across network packets are combined as bytes before UTF-8 and
+/// JSON decoding. An SSE event may comprise several data lines.
+#[derive(Default)]
+pub(super) struct Lines {
+    pending: Vec<u8>,
+    data: Vec<u8>,
+    done: bool,
+}
+impl Lines {
+    pub(super) fn push(&mut self, chunk: &[u8], native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+        for segment in chunk.split_inclusive(|&b| b == b'\n') {
+            if self.done {
+                break;
+            }
+            self.pending.extend_from_slice(segment);
+            if self.pending.ends_with(b"\n") {
+                self.line(native, a, notify)?;
+            }
+        }
+        Ok(())
+    }
+    fn line(&mut self, native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+        let line = std::mem::take(&mut self.pending);
+        let line = line.strip_suffix(b"\n").unwrap_or(&line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if native {
+            if !line.is_empty() {
+                a.ollama(&decode(line)?, notify)?;
+            }
+            self.done = a.finished();
+        } else if line.is_empty() {
+            self.dispatch(a, notify)?;
+        } else if let Some(s) = line.strip_prefix(b"data:") {
+            self.data.extend_from_slice(s.strip_prefix(b" ").unwrap_or(s));
+            self.data.push(b'\n');
+        }
+        Ok(())
+    }
+    fn dispatch(&mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+        if self.data.is_empty() {
+            return Ok(());
+        }
+        let bytes = std::mem::take(&mut self.data);
+        if bytes.trim_ascii() == b"[DONE]" {
+            self.done = true;
+        } else {
+            a.completion(&decode(&bytes)?, notify)?;
+        }
+        Ok(())
+    }
+    pub(super) fn end(mut self, native: bool, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<bool, String> {
+        if !self.pending.is_empty() {
+            self.line(native, a, notify)?;
+        }
+        if !native {
+            self.dispatch(a, notify)?;
+        }
+        Ok(self.done)
+    }
+    pub(super) fn done(&self) -> bool {
+        self.done
+    }
+}
+pub(super) fn decode(bytes: &[u8]) -> Result<Value, String> {
+    serde_json::from_slice(bytes).map_err(|_| "Provider returned malformed JSON.".into())
+}

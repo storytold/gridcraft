@@ -62,7 +62,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+            #[cfg(not(target_arch = "wasm32"))]
+            let tabs_rect = if collapsed { crate::wingman::ribbon_tile(app, ui, tabs_rect, true) } else { tabs_rect };
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                #[cfg(not(target_arch = "wasm32"))]
+                if collapsed {
+                    ui.shrink_clip_rect(tabs_rect);
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
@@ -123,6 +129,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
             let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            #[cfg(not(target_arch = "wasm32"))]
+            let card = crate::wingman::ribbon_tile(app, ui, card, false);
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));

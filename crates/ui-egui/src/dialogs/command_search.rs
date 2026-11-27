@@ -22,15 +22,20 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let q = d.search.to_ascii_lowercase();
-    let cmds: Vec<(String, String, String, Option<String>)> = app
+    let cmds = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
         .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
         .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
-        .take(40)
-        .collect();
+        .take(40);
+    #[cfg(not(target_arch = "wasm32"))]
+    let cmds = cmds.chain(
+        (!q.is_empty() && "view.wingman".contains(&q))
+            .then(|| ("view.wingman".to_owned(), app.ui.language.tr("Wingman").to_owned(), "View".to_owned(), None)),
+    );
+    let cmds: Vec<(String, String, String, Option<String>)> = cmds.collect();
 
     let last = cmds.len().saturating_sub(1);
 

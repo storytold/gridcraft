@@ -13,6 +13,8 @@ use crate::{Notice, SheetApp, backstage, dialogs, editor, grid, keytips, text_bo
 /// One window's parked interface state (see the module docs).
 #[derive(Default)]
 pub struct WindowUi {
+    #[cfg(not(target_arch = "wasm32"))]
+    wingman: crate::wingman::PanelState,
     editor: Option<editor::EditState>,
     text_box_editor: Option<text_box::EditState>,
     dialog: Option<dialogs::Dialog>,
@@ -57,6 +59,8 @@ impl SheetApp {
     /// [`WindowUi`] can't be left out of the swap.
     fn swap_window_ui(&mut self, w: &mut WindowUi) {
         let WindowUi {
+            #[cfg(not(target_arch = "wasm32"))]
+            wingman,
             editor,
             text_box_editor,
             dialog,
@@ -74,6 +78,8 @@ impl SheetApp {
             mode,
             keytip_invoke_next,
         } = w;
+        #[cfg(not(target_arch = "wasm32"))]
+        std::mem::swap(&mut self.wingman, wingman);
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
         std::mem::swap(&mut self.dialog, dialog);

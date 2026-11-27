@@ -68,6 +68,8 @@ mod updates_ui;
 mod viewports;
 pub mod widgets;
 mod window_ui;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wingman;
 pub mod wordart;
 
 pub use window_ui::WindowUi;
@@ -243,6 +245,8 @@ pub struct Perf {
 }
 
 pub struct SheetApp {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) wingman: wingman::PanelState,
     pub session: Session,
     pub ui: UiState,
     /// The window chrome to draw (see [`Chrome`]).

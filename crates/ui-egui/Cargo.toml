@@ -46,6 +46,10 @@ gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+open = "5"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tokio = { version = "1", features = ["rt", "time", "net"] }
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
 

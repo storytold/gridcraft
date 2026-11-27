@@ -109,6 +109,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ("Save As…", "file.saveAs"),
                     ("Sort A to Z", "data.sortAscending"),
                     ("Calculate Now", "formulas.calculateNow"),
+                    #[cfg(not(target_arch = "wasm32"))]
+                    ("Wingman", "view.wingman"),
                 ] {
                     if ui.button(label).clicked() {
                         app.run_or_alert(id, json!({}));

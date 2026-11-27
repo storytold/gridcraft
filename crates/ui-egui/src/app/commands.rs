@@ -193,6 +193,8 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            #[cfg(not(target_arch = "wasm32"))]
+            "view.wingman" => self.wingman.toggle(p),
             "ui.window.minimize" => {
                 self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
                 Ok(Json::Null)
