@@ -323,6 +323,9 @@ pub struct Workbook {
     /// alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
+    /// "Password to modify" (XLSX `fileSharing`): the file opens read-only unless it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_reservation: Option<WriteReservation>,
     /// Custom fill lists (Options › Custom Lists) beyond the built-in ones.
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
@@ -396,6 +399,15 @@ impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()
     }
+}
+
+/// The write-reservation of a file (XLSX `fileSharing`): who reserved it, whether it asks to open
+/// read-only, and the hash of its password to modify, never the password.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteReservation {
+    pub user_name: String,
+    pub read_only_recommended: bool,
+    pub password: Option<crate::PasswordHash>,
 }
 
 /// The active sheet index of a [`Workbook`].
@@ -668,6 +680,7 @@ impl Workbook {
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
+            write_reservation: None,
             custom_lists: vec![],
             cell_styles: vec![],
             phonetics: vec![],

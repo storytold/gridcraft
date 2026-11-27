@@ -46,6 +46,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
+        ("line", "stacked100") => ChartKind::LineStacked100,
+        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
@@ -106,6 +108,8 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             });
         }
     } else {
@@ -122,6 +126,8 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             });
         }
     }

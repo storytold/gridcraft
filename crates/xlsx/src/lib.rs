@@ -49,7 +49,8 @@ use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{
-    MAX_CSV_BYTES, decode_text, decode_text_as, encode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited, write_csv_text,
+    MAX_CSV_BYTES, decode_text, decode_text_as, encode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited, write_csv_text, write_tsv,
+    write_tsv_text,
 };
 pub use ods::read_ods;
 pub use package::MAX_PART;

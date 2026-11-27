@@ -458,6 +458,22 @@ impl Dialog {
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
+                // A workbook with a password to modify asks for that, or a read-only open.
+                if p("modify").as_bool().unwrap_or(false) {
+                    values["modifyPassword"] = json!("");
+                    values["readOnly"] = json!(false);
+                    return Some(Dialog::form(
+                        "openPassword",
+                        "Password",
+                        "file.open",
+                        vec![
+                            Note(format!("'{file}' is reserved by its author. Enter the password to modify it, or open it read-only.")),
+                            Password { key: "modifyPassword", label: "Password:" },
+                            Check { key: "readOnly", label: "Read Only" },
+                        ],
+                        values,
+                    ));
+                }
                 values["password"] = json!("");
                 Dialog::form(
                     "openPassword",
@@ -515,7 +531,13 @@ impl Dialog {
                     Choice {
                         key: "operation",
                         label: "Operation",
-                        options: vec![("none", "None"), ("add", "Add"), ("subtract", "Subtract"), ("multiply", "Multiply"), ("divide", "Divide")],
+                        options: vec![
+                            ("none", "None"),
+                            ("add", "Paste Special|Add"),
+                            ("subtract", "Subtract"),
+                            ("multiply", "Multiply"),
+                            ("divide", "Divide"),
+                        ],
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },
@@ -657,7 +679,7 @@ impl Dialog {
                 vec![
                     Check { key: "tab", label: "Tab" },
                     Check { key: "semicolon", label: "Semicolon" },
-                    Check { key: "comma", label: "Comma" },
+                    Check { key: "comma", label: "Text to Columns|Comma" },
                     Check { key: "space", label: "Space" },
                     Text { key: "other", label: "Other:" },
                     Check { key: "treatConsecutive", label: "Treat consecutive delimiters as one" },

@@ -53,6 +53,10 @@ impl FileKind {
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
+/// The error for a workbook with a password to modify, opened with neither that password
+/// (`modifyPassword`) nor `readOnly`, contains this. The interface asks for the password or a
+/// read-only open when it sees it.
+pub const MODIFY_PASSWORD_REQUIRED: &str = "is reserved by its author. Enter the password to modify it, or open it read-only.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
@@ -144,6 +148,7 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    crate::cmd::data::migrate_loaded_autofilters(&mut wb);
     Ok((wb, warnings))
 }
 
@@ -556,7 +561,7 @@ pub fn source_dir(path: &str) -> Option<std::path::PathBuf> {
 /// to encode it in: the separator, encoding and line ends of the text file the workbook was read
 /// from (a `;` UTF-16 file with LF line ends stays one), else `,`, UTF-8 and CRLF.
 pub fn text_file(wb: &Workbook, kind: FileKind) -> Result<(String, TextFormat)> {
-    let delimiter = if kind == FileKind::Tsv { b'\t' } else { wb.csv_delimiter.unwrap_or(b',') };
+    let delimiter = (kind != FileKind::Tsv).then(|| wb.csv_delimiter.unwrap_or(b','));
     let format = wb.csv_format.unwrap_or_default();
     let text = match wb.sheet(wb.active_sheet()) {
         Some(sh) => csv(wb, sh, delimiter, format.line_end)?,
@@ -600,9 +605,14 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8, line_end: LineEnd) -> Result<String> {
-    gridcraft_xlsx::write_csv_text(sh, delimiter, line_end, gridcraft_xlsx::MAX_CSV_BYTES, |c| crate::display::value_text(wb, sh, c))
-        .map_err(|e| EngineError::Other(e.to_string()))
+/// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>, line_end: LineEnd) -> Result<String> {
+    let text = |c| crate::display::value_text(wb, sh, c);
+    match delimiter {
+        Some(d) => gridcraft_xlsx::write_csv_text(sh, d, line_end, gridcraft_xlsx::MAX_CSV_BYTES, text),
+        None => gridcraft_xlsx::write_tsv_text(sh, line_end, text),
+    }
+    .map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
