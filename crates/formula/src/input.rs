@@ -9,7 +9,7 @@ pub enum FormulaLocale {
     #[default]
     En,
     Es,
-    Pt,
+    PtBr,
 }
 
 const SPANISH: &[(&str, &str)] = &[
@@ -31,7 +31,8 @@ const SPANISH: &[(&str, &str)] = &[
     ("FALSE", "FALSO"),
 ];
 
-const PORTUGUESE: &[(&str, &str)] = &[
+/// Brazilian Portuguese (pt-BR) worksheet function aliases.
+const PORTUGUESE_BR: &[(&str, &str)] = &[
     // Lookup & Reference
     ("VLOOKUP", "PROCV"),
     ("HLOOKUP", "PROCH"),
@@ -125,7 +126,7 @@ const PORTUGUESE: &[(&str, &str)] = &[
     ("TODAY", "HOJE"),
     ("NOW", "AGORA"),
     ("DATE", "DATA"),
-    ("TIME", "HORA"),
+    ("TIME", "TEMPO"),
     ("YEAR", "ANO"),
     ("MONTH", "MÊS"),
     ("MONTH", "MES"),
@@ -172,31 +173,27 @@ const PORTUGUESE: &[(&str, &str)] = &[
     ("WRAPCOLS", "MOLDARCOLS"),
 ];
 
-fn eq_ignore_case(a: &str, b: &str) -> bool {
-    a.chars().flat_map(char::to_lowercase).eq(b.chars().flat_map(char::to_lowercase))
-}
-
 impl FormulaLocale {
     pub fn list_separator(self) -> char {
-        if self == Self::Es || self == Self::Pt { ';' } else { ',' }
+        if self == Self::Es || self == Self::PtBr { ';' } else { ',' }
     }
     pub fn decimal_separator(self) -> char {
-        if self == Self::Es || self == Self::Pt { ',' } else { '.' }
+        if self == Self::Es || self == Self::PtBr { ',' } else { '.' }
     }
     pub fn array_column_separator(self) -> char {
-        if self == Self::Es || self == Self::Pt { '\\' } else { ',' }
+        if self == Self::Es || self == Self::PtBr { '\\' } else { ',' }
     }
     pub fn function_name(self, canonical: &str) -> &str {
         match self {
             Self::Es => SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, es)| *es).unwrap_or(canonical),
-            Self::Pt => PORTUGUESE.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, pt)| *pt).unwrap_or(canonical),
+            Self::PtBr => PORTUGUESE_BR.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, pt)| *pt).unwrap_or(canonical),
             Self::En => canonical,
         }
     }
     pub fn canonical_name(self, localized: &str) -> &str {
         match self {
-            Self::Es => SPANISH.iter().find(|(_, es)| eq_ignore_case(es, localized)).map(|(en, _)| *en).unwrap_or(localized),
-            Self::Pt => PORTUGUESE.iter().find(|(_, pt)| eq_ignore_case(pt, localized)).map(|(en, _)| *en).unwrap_or(localized),
+            Self::Es => SPANISH.iter().find(|(_, es)| crate::same_name(es, localized)).map(|(en, _)| *en).unwrap_or(localized),
+            Self::PtBr => PORTUGUESE_BR.iter().find(|(_, pt)| crate::same_name(pt, localized)).map(|(en, _)| *en).unwrap_or(localized),
             Self::En => localized,
         }
     }
@@ -207,9 +204,7 @@ impl FormulaLocale {
 pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<Expr, ParseError> {
     let mut expr = parser::parse_syntax(src, locale)?;
     if locale != FormulaLocale::En {
-        normalize(&mut expr, locale, &known_name, &mut Vec::new(), 0, false)?;
-    if locale == FormulaLocale::Es {
-        normalize(&mut expr, &known_name, &mut Bindings::default(), 0, false)?;
+        normalize(&mut expr, locale, &known_name, &mut Bindings::default(), 0, false)?;
     }
     Ok(expr)
 }
@@ -244,8 +239,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
         return Ok(crate::print(expr));
     }
     let mut expr = expr.clone();
-    normalize(&mut expr, locale, &known_name, &mut Vec::new(), 0, true)?;
-    normalize(&mut expr, &known_name, &mut Bindings::default(), 0, true)?;
+    normalize(&mut expr, locale, &known_name, &mut Bindings::default(), 0, true)?;
     let canonical = crate::print(&expr);
     let tokens = crate::lexer::tokenize(&canonical).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let mut out = String::new();
@@ -271,41 +265,20 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
 }
 
 pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
-    match locale {
-        FormulaLocale::Es => {
-            if eq_ignore_case(name, "VERDADERO") {
-                Some(true)
-            } else if eq_ignore_case(name, "FALSO") {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        FormulaLocale::Pt => {
-            if eq_ignore_case(name, "VERDADEIRO") {
-                Some(true)
-            } else if eq_ignore_case(name, "FALSO") {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        FormulaLocale::En => None,
+    let (t, f) = match locale {
+        FormulaLocale::En => return None,
+        FormulaLocale::Es => ("VERDADERO", "FALSO"),
+        FormulaLocale::PtBr => ("VERDADEIRO", "FALSO"),
+    };
+    if name.eq_ignore_ascii_case(t) {
+        Some(true)
+    } else if name.eq_ignore_ascii_case(f) {
+        Some(false)
+    } else {
+        None
     }
 }
 
-fn normalize(
-    expr: &mut Expr,
-    locale: FormulaLocale,
-    known_name: &impl Fn(&str) -> bool,
-    bindings: &mut Vec<String>,
-    depth: usize,
-    display: bool,
-) -> Result<(), ParseError> {
-    if depth > parser::MAX_DEPTH {
-        return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
-    }
-    let bound = |name: &str, bindings: &[String]| bindings.iter().rev().any(|n| eq_ignore_case(n, name)) || known_name(name);
 /// The LET/LAMBDA names in scope, with how many times each is bound, so a lookup is one probe
 /// instead of a scan of every binding for each call.
 #[derive(Default)]
@@ -342,35 +315,27 @@ impl Bindings {
     }
 }
 
-fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut Bindings, depth: usize, display: bool) -> Result<(), ParseError> {
+fn normalize(
+    expr: &mut Expr,
+    locale: FormulaLocale,
+    known_name: &impl Fn(&str) -> bool,
+    bindings: &mut Bindings,
+    depth: usize,
+    display: bool,
+) -> Result<(), ParseError> {
     if depth > parser::MAX_DEPTH {
         return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
     }
     let bound = |name: &str, bindings: &Bindings| bindings.contains(name) || known_name(name);
     match expr {
         Expr::Bool(value) if display => {
-            let alias = match locale {
-                FormulaLocale::Es => {
-                    if *value {
-                        "VERDADERO"
-                    } else {
-                        "FALSO"
-                    }
-                }
-                FormulaLocale::Pt => {
-                    if *value {
-                        "VERDADEIRO"
-                    } else {
-                        "FALSO"
-                    }
-                }
-                FormulaLocale::En => {
-                    if *value {
-                        "TRUE"
-                    } else {
-                        "FALSE"
-                    }
-                }
+            let alias = match (locale, *value) {
+                (FormulaLocale::En, true) => "TRUE",
+                (FormulaLocale::En, false) => "FALSE",
+                (FormulaLocale::Es, true) => "VERDADERO",
+                (FormulaLocale::Es, false) => "FALSO",
+                (FormulaLocale::PtBr, true) => "VERDADEIRO",
+                (FormulaLocale::PtBr, false) => "FALSO",
             };
             if !bound(alias, bindings) {
                 *expr = Expr::Name(alias.into());
@@ -425,19 +390,15 @@ fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut
             }
         }
         Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, locale, known_name, bindings, depth + 1, display)?,
-        Expr::Binary(_, left, right) => {
-            normalize(left, locale, known_name, bindings, depth + 1, display)?;
-            normalize(right, locale, known_name, bindings, depth + 1, display)?;
-        Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, known_name, bindings, depth + 1, display)?,
         Expr::Binary(..) => {
             // Follow the left spine of a flat chain (A1+A2+…) in a loop: it is not nesting.
             // Each call leaves `bindings` as it found them, so the order does not matter.
             let mut node = expr;
             while let Expr::Binary(_, left, right) = node {
-                normalize(right, known_name, bindings, depth + 1, display)?;
+                normalize(right, locale, known_name, bindings, depth + 1, display)?;
                 node = left;
             }
-            normalize(node, known_name, bindings, depth, display)?;
+            normalize(node, locale, known_name, bindings, depth, display)?;
         }
         Expr::Array(rows) if display => {
             for row in rows {

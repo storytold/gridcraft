@@ -118,3 +118,7 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.MauriciDmarc]
+real_name = "Maurici D'marco Fernandes"
+display_name = "Maurici D'marco Fernandes"

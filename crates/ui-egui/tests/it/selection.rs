@@ -234,7 +234,8 @@ fn formula_modifier_shift_click_keeps_its_anchor_in_both_directions() {
 fn formula_modifier_command_click_respects_locale_and_a_typed_separator() {
     use gridcraft_engine::formula::FormulaLocale;
     let command = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
-    for (locale, prefix, separator) in [(FormulaLocale::En, "=SUM(", ","), (FormulaLocale::Es, "=SUMA(", ";")] {
+    let cases = [(FormulaLocale::En, "=SUM(", ","), (FormulaLocale::Es, "=SUMA(", ";"), (FormulaLocale::PtBr, "=SOMA(", ";")];
+    for (locale, prefix, separator) in cases {
         let mut h = harness("J10");
         h.state_mut().begin_edit(Some(prefix.into()), false);
         h.state_mut().editor.as_mut().unwrap().locale = locale;
