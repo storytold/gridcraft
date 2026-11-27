@@ -188,15 +188,14 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         gridcraft_xlsx::IoError::TooLarge(_) => too_many_cells(),
         e => EngineError::Other(e.to_string()),
     })?;
-    let Some(u) = wb.sheet(0).and_then(|sh| sh.used_range()) else { return Err(EngineError::Other("The file is empty.".into())) };
-    // Pasted at a cell, the text covers every field it has, blank ones at either end included, so
-    // they clear what is under them; imported into a sheet of its own, it is its cells with data.
-    let src = match at {
-        Some(_) => {
-            let end = CellRef::new(report.records.saturating_sub(1).max(u.end.row), report.fields.saturating_sub(1).max(u.end.col));
-            RangeRef::new(CellRef::new(0, 0), end)
-        }
-        None => u,
+    // Pasted at a cell, the text covers every field it has, blank ones included (all of them, for
+    // text like `,`), so they clear what is under them; it must not lose records past a sheet's
+    // last row. Imported into a sheet of its own, it is its cells with data.
+    let src = match (at, wb.sheet(0).and_then(|sh| sh.used_range())) {
+        (Some(_), _) if report.truncated => return Err(EngineError::Other("The text has more rows than a sheet has.".into())),
+        (Some(_), _) if report.records > 0 => RangeRef::new(CellRef::new(0, 0), CellRef::new(report.records - 1, report.fields.saturating_sub(1))),
+        (None, Some(used)) => used,
+        _ => return Err(EngineError::Other("The file is empty.".into())),
     };
     if src.count() > MAX_IMPORT_CELLS {
         return Err(too_many_cells());
@@ -434,6 +433,27 @@ mod tests {
         };
         // The same day is 1,462 serials lower in the 1904 date system.
         assert_eq!(pasted(DateSystem::D1900) - pasted(DateSystem::D1904), 1462.0);
+
+        // Text of blank fields only clears the cells it covers.
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["x", "y", "z"]]})).unwrap();
+        s.execute("data.fromTextCsv", json!({"text": ",", "delimiter": ",", "at": "B1"})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!((sh.value(at("B1")), sh.value(at("C1"))), (Value::Empty, Value::Empty));
+        assert_eq!(sh.value(at("D1")), Value::text("z"), "past the text's two fields");
+    }
+
+    #[test]
+    fn a_paste_with_more_records_than_a_sheet_has_rows_is_refused() {
+        use gridcraft_core::{CellRef, MAX_ROWS, Value};
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "old"})).unwrap();
+        // One record per line break: a record past the last row.
+        let text = format!("new{}", "\n".repeat(MAX_ROWS as usize + 1));
+        let err = s.execute("data.fromTextCsv", json!({"text": text, "delimiter": ",", "at": "A1"})).expect_err("too many rows");
+        assert!(err.to_string().contains("more rows"), "{err}");
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("old"), "nothing is written");
     }
 
     #[test]

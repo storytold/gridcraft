@@ -354,6 +354,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     let mut widest = 0;
     parse_records(body, delim, quote, |rec| {
         if row >= MAX_ROWS {
+            report.truncated = true;
             return false;
         }
         widest = widest.max(rec.len().min(MAX_COLS as usize));
