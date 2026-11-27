@@ -1,17 +1,18 @@
-//! Minimal base64 for serde (image bytes in JSON).
+//! Standard base64 (RFC 4648 §4): for serde (image bytes in JSON), and for every crate that
+//! reads or writes it in a file (encryption descriptors, password hashes, `data:` URLs).
 
 use serde::{Deserialize, Deserializer, Serializer};
 
-const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        for i in 0..4 {
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        for (i, shift) in [18u32, 12, 6, 0].iter().enumerate() {
             if i <= chunk.len() {
-                out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
+                out.push(char::from(ALPHABET.get(((n >> shift) & 63) as usize).copied().unwrap_or(b'A')));
             } else {
                 out.push('=');
             }
@@ -20,21 +21,39 @@ pub fn encode(data: &[u8]) -> String {
     out
 }
 
+/// The 6-bit value of a base64 character (inverse of [`ALPHABET`]).
+fn value(c: u8) -> Option<u32> {
+    let v = match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => return None,
+    };
+    Some(u32::from(v))
+}
+
+/// Decodes base64, whitespace and padding ignored; `None` for any other character.
 pub fn decode(s: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for c in s.bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        let v = A.iter().position(|&x| x == c)? as u32;
+    decode_limited(s, usize::MAX)
+}
+
+/// [`decode`], also `None` when the output would pass `limit` bytes (for input from a file).
+pub fn decode_limited(s: &str, limit: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity((s.len() / 4 * 3).min(limit).min(1 << 20));
+    let (mut buf, mut bits) = (0u32, 0u32);
+    for c in s.bytes().filter(|c| !c.is_ascii_whitespace() && *c != b'=') {
+        let v = value(c)?;
         buf = (buf << 6) | v;
         bits += 6;
         if bits >= 8 {
             bits -= 8;
             out.push((buf >> bits) as u8);
             buf &= (1 << bits) - 1;
+            if out.len() > limit {
+                return None;
+            }
         }
     }
     Some(out)
@@ -89,6 +108,18 @@ pub mod opt {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decoding_is_bounded_and_strict() {
+        assert_eq!(super::decode_limited("AAAA", 3).as_deref(), Some(&[0u8, 0, 0][..]));
+        assert_eq!(super::decode_limited("AAAAAAAA", 3), None);
+        assert_eq!(super::decode("AA!A"), None);
+        assert_eq!(super::decode(" QU Jj\n").as_deref(), Some(&b"ABc"[..]));
+        // The lookup is the alphabet's inverse, and nothing else decodes.
+        for c in 0..=u8::MAX {
+            assert_eq!(super::value(c), super::ALPHABET.iter().position(|a| *a == c).map(|i| i as u32), "{c}");
+        }
+    }
+
     #[test]
     fn roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         for data in [&b""[..], b"a", b"ab", b"abc", b"hello world", &[0, 255, 128, 7]] {

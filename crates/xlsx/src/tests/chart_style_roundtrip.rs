@@ -24,7 +24,8 @@ fn explicit_styles_survive_xlsx_save_and_reload() {
         )
         .unwrap(),
     )
-    .unwrap();
+    .unwrap()
+    .0;
 
     for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered, ChartKind::Line] {
         for style in [1, 9, 48] {
@@ -40,13 +41,7 @@ fn explicit_styles_survive_xlsx_save_and_reload() {
                 name: Some("Series 1".into()),
                 categories: Some(r#"{"A","B","C"}"#.into()),
                 values: "{10,20,30}".into(),
-                bubble_sizes: None,
-                color: None,
-                secondary: false,
-                kind: None,
-                quartiles: Default::default(),
-                smooth: false,
-                trendlines: Vec::new(),
+                ..Series::default()
             }];
             chart.legend = LegendPos::Bottom;
             chart.data_labels = false;
@@ -120,14 +115,14 @@ fn excel_alternate_content_chart_styles_roundtrip() {
             );
 
             let root = parse(xml.as_bytes()).unwrap();
-            let chart = read_chart(&root).unwrap();
+            let chart = read_chart(&root).unwrap().0;
 
             assert_eq!(chart.kind, kind);
             assert_eq!(chart.style, legacy_style, "Excel AlternateContent style for {kind:?}");
 
             let saved = write_chart(&Workbook::default(), 0, &chart, "Book.xlsx");
 
-            let reopened = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap();
+            let reopened = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
 
             assert_eq!(reopened.style, legacy_style, "Style changed when re-exporting {kind:?}");
         }
@@ -157,7 +152,7 @@ fn alternate_content_fallback_style_trims_and_validates_range() {
                 </c:chart>
             </c:chartSpace>"#
         );
-        let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+        let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
         assert_eq!(chart.style, expected, "raw fallback style {raw_val:?}");
     }
 }
@@ -193,6 +188,6 @@ fn later_alternate_content_wrapper_provides_fallback_style() {
             </c:plotArea>
         </c:chart>
     </c:chartSpace>"#;
-    let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(chart.style, 9);
 }
