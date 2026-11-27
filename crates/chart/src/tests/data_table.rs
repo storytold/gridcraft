@@ -2,6 +2,35 @@ use super::*;
 use gridcraft_model::ChartDataTable;
 
 #[test]
+fn combo_table_keys_use_each_series_index() {
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.data_table = Some(ChartDataTable::default());
+    let mut d = sample(c.kind);
+    // The public renderer also accepts Combo series: the first defaults to columns, later ones to lines.
+    for s in &mut d.series {
+        s.kind = ChartKind::Combo;
+    }
+    let p = render(&c, &d, 900.0, 500.0, &ApproxMeasure);
+    assert_sane(&p, 900.0, 500.0);
+    let header_y = p
+        .iter()
+        .find_map(|p| match p {
+            Prim::Text { text, y, .. } if text == "Q1" => Some(*y),
+            _ => None,
+        })
+        .unwrap();
+    for (i, s) in d.series.iter().enumerate() {
+        let boxes = p.iter().filter(|p| matches!(p, Prim::Rect { y, fill: Some(f), .. } if *f == s.color && *y > header_y)).count();
+        let lines =
+            p.iter().filter(|p| matches!(p, Prim::Line { pts, color, .. } if *color == s.color && pts.iter().all(|p| p[1] > header_y))).count();
+        assert_eq!(boxes, usize::from(i == 0), "series {i}: column key");
+        assert_eq!(lines, usize::from(i > 0), "series {i}: line key");
+    }
+}
+
+#[test]
 fn tables_draw_source_values_for_every_supported_chart_kind() {
     for kind in ALL_KINDS {
         let mut c = chart(kind);
@@ -117,5 +146,34 @@ fn dense_and_tiny_tables_are_bounded_and_explicit() {
     d.categories.clear();
     for (w, h) in [(1.0, 1.0), (10.0, 10.0), (40.0, 35.0), (200.0, 100.0)] {
         assert_sane(&render(&c, &d, w, h, &ApproxMeasure), w, h);
+    }
+}
+
+#[test]
+fn table_keys_for_100_percent_stacked_lines_use_line_swatches() {
+    for (kind, marker) in [(ChartKind::LineStacked100, false), (ChartKind::LineStacked100Markers, true)] {
+        let mut c = chart(kind);
+        c.title = Some(String::new());
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+        c.data_table = Some(ChartDataTable::default());
+        let color = [1, 2, 3, 255];
+        let d = ChartData {
+            categories: ["Jan", "Feb"].map(String::from).to_vec(),
+            series: vec![series("Rate", &[1.0, 3.0], color, kind)],
+            ..Default::default()
+        };
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let header_y = p
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { text, y, .. } if text == "Jan" => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        let key_circles = p.iter().filter(|p| matches!(p, Prim::Circle { cy, fill: Some(f), .. } if *f == color && *cy > header_y)).count();
+        assert_eq!(key_circles, usize::from(marker), "{kind:?}");
+        let key_box = p.iter().any(|p| matches!(p, Prim::Rect { y, fill: Some(f), .. } if *f == color && *y > header_y));
+        assert!(!key_box, "{kind:?} key is a line swatch");
     }
 }

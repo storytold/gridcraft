@@ -20,6 +20,30 @@ fn blank() -> Session {
 }
 
 #[test]
+fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
+    // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
+    // three, so it hung below the ribbon and was cut off.
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            _ => {}
+        }
+    }
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(3);
+    // Ribbon button labels are painted text: find them among the frame's shapes.
+    let mut painted = Vec::new();
+    h.output().shapes.iter().for_each(|c| texts(&c.shape, &mut painted));
+    let bottom_of = |word: &str| painted.iter().filter(|(s, _)| s.contains(word)).map(|(_, r)| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+    // "Calculation Options" is a big button whose second line sits at the foot of the ribbon.
+    let (watch, foot) = (bottom_of("Window"), bottom_of("Options"));
+    assert!(watch.is_finite() && foot.is_finite(), "the Formulas ribbon paints Watch Window and Calculation Options");
+    assert!(watch <= foot + 0.5, "Watch Window's label ends at y={watch}, below the ribbon's last label row (y={foot})");
+}
+
+#[test]
 fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
     let mut h = harness(blank());
     let grid = h.state().grid.rect.unwrap();
@@ -313,6 +337,77 @@ fn arrows_escape_and_undo() {
 }
 
 #[test]
+fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
+    let mut h = harness(blank());
+    for t in ["x1", "x2"] {
+        text(&mut h, t);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+    }
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("what".into(), json!("x"));
+        d.values.insert("with".into(), json!("y"));
+    }
+    h.run_steps(2);
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // Keyboard focus on a button must not reserve Undo/Redo for text editing.
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    assert!(!h.ctx.text_edit_focused());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // The Mac Redo shortcut works too, as it does on the sheet.
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("x1"));
+    key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    assert!(h.state().dialog.is_some(), "the dialog is still open");
+    h.get_by_label("Find what:").focus();
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused());
+    let before = h.state().dialog.as_ref().unwrap().values.get("what").cloned();
+    h.input_mut().events.push(Event::Text("extra".into()));
+    h.run_steps(2);
+    assert_ne!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref(), "Undo restores the Find field");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")), "text-field Undo leaves the sheet alone");
+}
+
+#[test]
+fn find_message_blocks_workbook_undo_and_redo() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "first"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A1", "input": "second"})).unwrap();
+    session.execute("edit.undo", json!({})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    // An empty search raises the real modal error over Find and Replace.
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_some());
+    assert!(!h.ctx.text_edit_focused());
+    for (key_code, modifiers) in [(Key::Z, Modifiers::COMMAND), (Key::Y, Modifiers::COMMAND), (Key::Z, Modifiers::COMMAND | Modifiers::SHIFT)] {
+        key(&mut h, key_code, modifiers);
+        assert_eq!(value(&h, "A1"), Value::from("first"), "the message blocks workbook shortcuts");
+        assert!(h.state().message.is_some());
+    }
+    h.state_mut().message = None;
+    h.run_steps(2);
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("second"), "Redo works again after dismissing the message");
+}
+#[test]
 fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
     let mut s = blank();
     s.execute("selection.set", json!({"cell": "A11"})).unwrap();
@@ -442,6 +537,29 @@ fn insert_column_or_bar_menu_inserts_a_hundred_percent_stacked_bar() {
     h.run_steps(2);
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::BarStacked100]);
+}
+
+#[test]
+fn insert_line_or_area_menu_inserts_hundred_percent_stacked_lines() {
+    // Insert › Line or Area (keytip N, N1) lists both 100% stacked line types.
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    for label in ["100% Stacked Line", "100% Stacked Line with Markers"] {
+        key(&mut h, Key::F10, Modifiers::NONE);
+        for (k, t) in [(Key::N, "n"), (Key::N, "n"), (Key::Num1, "1")] {
+            h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+            h.input_mut().events.push(Event::Text(t.into()));
+            h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+        }
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, label).click();
+        h.run_steps(2);
+    }
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::LineStacked100, gridcraft_engine::model::ChartKind::LineStacked100Markers]);
 }
 
 #[test]
@@ -657,6 +775,24 @@ fn all_charts_inserts_a_hundred_percent_stacked_area() {
     assert!(h.state().dialog.is_none());
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::AreaStacked100]);
+}
+
+#[test]
+fn all_charts_inserts_a_hundred_percent_stacked_line_with_markers() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "North", "South"], ["Q1", 10, 30], ["Q2", 30, 10]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().open_dialog("recommendedCharts", json!({"tab": "All Charts"}));
+    h.run_steps(4);
+    assert!(h.query_by_label("100% Stacked Line").is_some(), "the list has 100% Stacked Line");
+    h.get_by_label("100% Stacked Line with Markers").click();
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none());
+    let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [gridcraft_engine::model::ChartKind::LineStacked100Markers]);
 }
 
 #[test]
@@ -1420,6 +1556,28 @@ fn macro_workbook_bytes() -> Vec<u8> {
 }
 
 #[test]
+fn circle_invalid_data_warns_when_its_scan_was_cut_short() {
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    h.state_mut().run("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    h.state_mut().run("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().expect("a notice was shown");
+    assert!(n.text.contains("100,000 cell visits"), "{}", n.text);
+    // An open-time warning keeps its action when the scan note joins it.
+    h.state_mut().notice = Some(gridcraft_ui_egui::Notice {
+        text: "Macros.".into(),
+        kind: gridcraft_ui_egui::NoticeKind::Info,
+        action: Some(("More".into(), "macros".into())),
+    });
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().unwrap();
+    assert!(n.text.starts_with("Macros. ") && n.text.contains("cell visits"), "{}", n.text);
+    assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"));
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
+}
+
+#[test]
 fn opening_a_macro_workbook_shows_a_notice() {
     // The reader's "macros kept but not executed" warning must reach a dismissible info bar,
     // not be silently dropped (issue #6 follow-up: Excel-style message bar).
@@ -1567,6 +1725,39 @@ fn general_numbers_fit_by_the_cells_own_font() {
     assert!(texts.iter().any(|t| t == "100"), "100 drawn in full: {texts:?}");
     // A number that really doesn't fit still shows #### (once: only B1).
     assert_eq!(texts.iter().filter(|t| t.starts_with('#')).count(), 1, "{texts:?}");
+}
+
+/// #1077: after Increase Decimal and the other ribbon number formats the column widens enough for
+/// the real font, so the number is drawn instead of ####, at the default size and a large bold one.
+#[test]
+fn ribbon_number_formats_widen_the_column_enough_to_draw_the_number() {
+    let mut s = blank();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1.23456789, 1234567.891, 98765.4321], [0.5, 1, 2]]})).unwrap();
+    s.execute("home.fontSize", json!({"range": "C1", "size": 20})).unwrap();
+    s.execute("home.bold", json!({"range": "C1", "on": true})).unwrap();
+    for _ in 0..4 {
+        s.execute("home.increaseDecimal", json!({"range": "A1"})).unwrap();
+    }
+    s.execute("home.comma", json!({"range": "B1"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C1", "format": "Currency"})).unwrap();
+    s.execute("selection.set", json!({"cell": "E5"})).unwrap();
+    let want: Vec<String> =
+        ["A1", "B1", "C1"].iter().map(|a| s.execute("cell.get", json!({"cell": a})).unwrap()["text"].as_str().unwrap().trim().to_string()).collect();
+    assert_eq!(want, ["1.234567890000", "1,234,567.89", "$98,765.43"]);
+    let h = harness(s);
+    let texts: Vec<String> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+            _ => None,
+        })
+        .collect();
+    for t in &want {
+        assert!(texts.iter().any(|x| x.trim() == t), "{t} drawn in full: {texts:?}");
+    }
+    assert!(!texts.iter().any(|t| t.starts_with('#')), "no ####: {texts:?}");
 }
 
 fn text_shapes(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(egui::epaint::TextShape, egui::Rect)>) {
