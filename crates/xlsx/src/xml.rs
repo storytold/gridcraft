@@ -335,8 +335,12 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                 kept.at_start.push(at_start);
             }
             Event::Empty(e) => {
+                // A self-closing element can itself be a `split` one (`<row .../>`): it is handed
+                // out without an `End` event, so snapshot the counts before its tag lets `finish`
+                // release its attributes and elements with it.
+                let at_start = (kept.nodes, kept.attrs);
                 let el = start_el(&e, &mut kept.attrs)?;
-                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept, Some(at_start))?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
@@ -582,6 +586,26 @@ mod tests {
         .unwrap();
         assert_eq!(rows, 10_001);
         assert!(root.children.is_empty());
+    }
+
+    #[test]
+    fn a_streamed_part_of_self_closing_elements_may_hold_more_attributes_than_the_cap() {
+        // A self-closing element gets no `End` event, so it has to release its attributes when it
+        // is handed out as well: 500,001 two-attribute elements carry more than the part's budget.
+        let n = MAX_XML_ATTRS / 2 + 1;
+        let xml = format!("<sst>{}</sst>", "<si a=\"\" b=\"\"/>".repeat(n));
+        let mut si = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["si"], &mut |_| {
+            si += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(si, n);
+        assert!(root.children.is_empty());
+        // Kept in a tree, the same attributes stay charged and the part is refused, so the
+        // self-closing path is only special for elements that are handed out.
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("attributes"), "{err}");
     }
 
     #[test]
