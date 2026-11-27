@@ -196,7 +196,7 @@ fn the_persons_properties_stay_when_the_notices_go() {
 fn an_element_beside_the_notices_keeps_the_part_when_they_go() {
     use crate::custom_props::{Stripped, without_notices};
     let notice = format!(r#"<property fmtid="{{1}}" pid="2" name="{NOTICE_NAME}"><vt:lpwstr>x</vt:lpwstr></property>"#);
-    match without_notices(format!("<Properties>{notice}<extra/></Properties>").as_bytes()) {
+    match without_notices(format!("<Properties xmlns=\"{NS}\">{notice}<extra/></Properties>").as_bytes()) {
         Stripped::Part(part) => {
             let part = String::from_utf8(part).unwrap();
             assert!(part.contains("<extra/>") && !part.contains(NOTICE_NAME), "{part}");
@@ -205,12 +205,54 @@ fn an_element_beside_the_notices_keeps_the_part_when_they_go() {
     }
     // A comment or a processing instruction is something the file holds too.
     for kept in ["<!-- a note -->", "<?app x?>"] {
-        match without_notices(format!("<Properties>{notice}{kept}</Properties>").as_bytes()) {
+        match without_notices(format!("<Properties xmlns=\"{NS}\">{notice}{kept}</Properties>").as_bytes()) {
             Stripped::Part(part) => assert!(String::from_utf8(part).unwrap().contains(kept), "{kept}"),
             _ => panic!("{kept} keeps the part"),
         }
     }
-    assert!(matches!(without_notices(format!("<Properties>\n{notice}\n</Properties>").as_bytes()), Stripped::Nothing));
+    assert!(matches!(without_notices(format!("<Properties xmlns=\"{NS}\">\n{notice}\n</Properties>").as_bytes()), Stripped::Nothing(_)));
+}
+
+#[test]
+fn only_the_custom_properties_namespace_names_a_notice() {
+    use crate::custom_props::{Stripped, without_notices};
+    let notice = format!(r#"<property fmtid="{{1}}" pid="2" name="{NOTICE_NAME}"><vt:lpwstr>x</vt:lpwstr></property>"#);
+    // Another vocabulary's `property` with a notice's name is something else, and stays.
+    let theirs = format!(r#"<v:property xmlns:v="urn:vendor" name="{NOTICE_NAME}">payload</v:property>"#);
+    match without_notices(format!(r#"<Properties xmlns="{NS}">{notice}{theirs}</Properties>"#).as_bytes()) {
+        Stripped::Part(part) => {
+            let part = String::from_utf8(part).unwrap();
+            assert!(part.contains(&theirs) && part.matches(NOTICE_NAME).count() == 1, "{part}");
+        }
+        _ => panic!("the other vocabulary's element keeps the part"),
+    }
+    // A prefixed `name` belongs to its prefix's vocabulary: this property has no name of its own.
+    let prefixed = format!(r#"<property xmlns:v="urn:vendor" fmtid="{{1}}" pid="3" v:name="{NOTICE_NAME}"><vt:lpwstr>y</vt:lpwstr></property>"#);
+    assert!(matches!(without_notices(format!(r#"<Properties xmlns="{NS}">{prefixed}</Properties>"#).as_bytes()), Stripped::Unchanged));
+    // The format's own elements are found under any prefix.
+    let p = format!(
+        r#"<cp:Properties xmlns:cp="{NS}"><cp:property fmtid="{{1}}" pid="2" name="{NOTICE_NAME}"><vt:lpwstr>x</vt:lpwstr></cp:property></cp:Properties>"#
+    );
+    assert!(matches!(without_notices(p.as_bytes()), Stripped::Nothing(_)));
+    // A root in no namespace, or another, isn't a custom properties part.
+    for root in ["<Properties>", r#"<Properties xmlns="urn:other">"#] {
+        assert!(matches!(without_notices(format!("{root}{notice}</Properties>").as_bytes()), Stripped::Unchanged), "{root}");
+    }
+}
+
+#[test]
+fn a_part_with_something_after_its_root_stays_as_it_came() {
+    use crate::custom_props::{Stripped, without_notices};
+    let notice = format!(r#"<property fmtid="{{1}}" pid="2" name="{NOTICE_NAME}"><vt:lpwstr>x</vt:lpwstr></property>"#);
+    for after in ["<second/>", "<!-- never closed", "text"] {
+        for root in [format!(r#"<Properties xmlns="{NS}">{notice}</Properties>"#), format!(r#"<Properties xmlns="{NS}"/>"#)] {
+            let part = format!("{root}{after}");
+            assert!(matches!(without_notices(part.as_bytes()), Stripped::Unchanged), "{part}");
+        }
+    }
+    // What a well-formed part may hold after its root keeps it readable.
+    let fine = format!("<Properties xmlns=\"{NS}\">{notice}</Properties>\n<!-- a note --><?app x?>\n");
+    assert!(matches!(without_notices(fine.as_bytes()), Stripped::Nothing(_)));
 }
 
 #[test]
@@ -316,4 +358,30 @@ fn two_relationships_to_the_part_are_written_as_one() {
     let bytes = saved_again(&repack(&bytes, &[("docProps/custom.xml", persons_part().as_bytes())]));
     assert_one_part(&bytes);
     assert_eq!(names(&bytes), ["Client & year", "Count", NOTICE_NAME, WARNING_NAME]);
+}
+
+#[test]
+fn a_part_the_notices_leave_empty_stays_for_the_parts_it_points_to() {
+    // The notices are all the part holds, and it has a relationship of its own to a vendor's part.
+    let bytes = saved_again(&python_workbook());
+    let bytes = repack(
+        &bytes,
+        &[
+            (
+                "docProps/_rels/custom.xml.rels",
+                br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rV1" Type="urn:vendor/data" Target="vendor.xml"/></Relationships>"#,
+            ),
+            ("docProps/vendor.xml", b"<data>kept</data>"),
+        ],
+    );
+    let gone = saved_without_python(&bytes);
+    // The vendor's part stays, under the name a save gives what it keeps, and the relationship finds it.
+    let rels = text(&gone, "docProps/_rels/custom.xml.rels");
+    let target = rels.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap();
+    assert_eq!(text(&gone, target.trim_start_matches('/')), "<data>kept</data>", "{rels}");
+    let custom = text(&gone, "docProps/custom.xml");
+    assert!(!custom.contains(NOTICE_NAME) && custom.contains("Properties"), "{custom}");
+    assert_one_part(&gone);
+    // Without a relationship of its own, a part the notices leave empty goes.
+    assert_no_part(&saved_without_python(&saved_again(&python_workbook())));
 }

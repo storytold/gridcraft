@@ -790,3 +790,56 @@ fn a_new_return_type_drops_the_kept_result() {
     assert!(code(&s, "A1").unwrap().output.is_some());
     assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "B1")), (Value::Number(5.0), Value::Number(6.0), Value::Number(6.0)));
 }
+
+/// A floating picture linked to the Python cell it shows.
+fn link_picture(s: &mut Session, sheet: usize, source: &str) {
+    let d = s.doc_mut().unwrap();
+    let sh = Arc::make_mut(&mut d.wb).sheet_mut(sheet).unwrap();
+    let anchor = gridcraft_model::Anchor {
+        cell: CellRef::parse("B2").unwrap(),
+        dx: 0.0,
+        dy: 0.0,
+        width: 40.0,
+        height: 30.0,
+        mode: gridcraft_model::AnchorMode::MoveOnly,
+    };
+    let png = b"\x89PNG\r\n\x1a\n".to_vec();
+    sh.images.push(gridcraft_model::Image {
+        id: 900,
+        anchor,
+        data: png.into(),
+        mime: "image/png".into(),
+        alt: "plot".into(),
+        python_source: Some(source.into()),
+        rendered: None,
+    });
+}
+
+fn source(s: &Session, sheet: usize) -> Option<String> {
+    s.doc().unwrap().wb.sheet(sheet).unwrap().images.iter().find(|i| i.id == 900 || i.alt == "plot").and_then(|i| i.python_source.clone())
+}
+
+#[test]
+fn a_linked_picture_follows_its_python_cell_through_renames_and_inserted_lines() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    py(&mut s, "G5", "1 + 1");
+    link_picture(&mut s, 1, "Sheet1!$G$5");
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Q4 2026"})).unwrap();
+    assert_eq!(source(&s, 1).as_deref(), Some("'Q4 2026'!$G$5"));
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(source(&s, 1).as_deref(), Some("'Q4 2026'!$G$6"), "the cell moved down a row");
+    // Saved and opened again, the link still names the Python cell, so nothing drops it.
+    let bytes = save(&mut s, "xlsx");
+    open(&mut s, "linked.xlsx", &bytes);
+    assert_eq!(source(&s, 1).as_deref(), Some("'Q4 2026'!$G$6"));
+    // Undo puts the whole workbook back, the link with it.
+    let mut s = super::s();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    py(&mut s, "G5", "1 + 1");
+    link_picture(&mut s, 1, "Sheet1!$G$5");
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Data"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(source(&s, 1).as_deref(), Some("Sheet1!$G$5"));
+}

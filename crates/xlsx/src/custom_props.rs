@@ -20,8 +20,9 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::NsReader;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
 
 use crate::write::{Out, XML_DECL};
 use crate::xml::{self, esc, esc_attr};
@@ -65,20 +66,27 @@ struct Property {
     pid: Option<i64>,
 }
 
-/// `None` for a part that isn't well formed, or isn't a list of properties.
+/// `None` for a part that isn't well formed, or isn't a list of properties. Only the
+/// custom-properties namespace's `Properties` and `property` count, whatever their prefix, and only
+/// unprefixed `name` and `pid` attributes: another vocabulary's `v:property` is something else to keep.
+/// What follows the root is read to the end too, and anything there but comments, processing
+/// instructions and white space makes the part one that isn't well formed.
 fn scan(bytes: &[u8]) -> Option<Scan> {
     let text = String::from_utf8(xml::to_utf8(bytes).into_owned()).ok()?;
-    let mut reader = Reader::from_str(&text);
+    let mut reader = NsReader::from_str(&text);
     let mut root: Option<(String, usize)> = None;
     let mut properties = vec![];
     loop {
         let start = usize::try_from(reader.buffer_position()).ok()?;
-        let (e, has_end) = match reader.read_event().ok()? {
+        let (namespace, event) = reader.read_resolved_event().ok()?;
+        let ours = matches!(namespace, ResolveResult::Bound(Namespace(n)) if n == NS.as_bytes());
+        let (e, has_end) = match event {
             Event::Eof => return None,
             Event::End(_) => {
                 let (open, content_start) = root?;
                 let end = usize::try_from(reader.buffer_position()).ok()?;
                 let close = text.get(start..end)?.to_string();
+                nothing_after_root(&mut reader)?;
                 return Some(Scan { open, close, content: content_start..start, properties, text });
             }
             Event::Start(e) => (e, true),
@@ -86,7 +94,7 @@ fn scan(bytes: &[u8]) -> Option<Scan> {
             _ => continue,
         };
         if root.is_none() {
-            if e.local_name().as_ref() != b"Properties" {
+            if !ours || e.local_name().as_ref() != b"Properties" {
                 return None;
             }
             let end = usize::try_from(reader.buffer_position()).ok()?;
@@ -96,17 +104,37 @@ fn scan(bytes: &[u8]) -> Option<Scan> {
             }
             let open = format!("{}>", text.get(start..end)?.strip_suffix("/>")?);
             let close = format!("</{}>", std::str::from_utf8(e.name().as_ref()).ok()?);
+            nothing_after_root(&mut reader)?;
             return Some(Scan { open, close, content: end..end, properties, text });
         }
-        let property = xml::start_el(&e);
+        let property = (ours && e.local_name().as_ref() == b"property").then(|| (own_attr(&e, b"name"), own_attr(&e, b"pid")));
         if has_end {
             reader.read_to_end(e.name()).ok()?;
         }
-        if property.name == "property" {
+        if let Some((name, pid)) = property {
             let end = usize::try_from(reader.buffer_position()).ok()?;
-            properties.push(Property { span: start..end, notice: property.attr("name").is_some_and(is_notice), pid: property.attr_i64("pid") });
+            let notice = name.as_deref().is_some_and(is_notice);
+            properties.push(Property { span: start..end, notice, pid: pid.and_then(|p| p.trim().parse().ok()) });
         }
     }
+}
+
+/// `Some` when only comments, processing instructions and white space follow the root, to the end.
+fn nothing_after_root(reader: &mut NsReader<&[u8]>) -> Option<()> {
+    loop {
+        match reader.read_event().ok()? {
+            Event::Eof => return Some(()),
+            Event::Comment(_) | Event::PI(_) => {}
+            Event::Text(t) if t.iter().all(u8::is_ascii_whitespace) => {}
+            _ => return None,
+        }
+    }
+}
+
+/// An unprefixed attribute's value: one with a prefix is another vocabulary's.
+fn own_attr(e: &BytesStart<'_>, key: &[u8]) -> Option<String> {
+    let a = e.attributes().with_checks(false).flatten().find(|a| a.key.as_ref() == key)?;
+    a.normalized_value(quick_xml::XmlVersion::Explicit1_0).ok().map(|v| v.into_owned())
 }
 
 impl Scan {
@@ -134,8 +162,8 @@ pub enum Stripped {
     Unchanged,
     /// It holds something else.
     Part(Vec<u8>),
-    /// They were all it had.
-    Nothing,
+    /// They were all it had: the part as it is without them, for when something else still needs it.
+    Nothing(Vec<u8>),
 }
 
 pub fn without_notices(bytes: &[u8]) -> Stripped {
@@ -145,7 +173,7 @@ pub fn without_notices(bytes: &[u8]) -> Stripped {
     }
     // Any other content keeps the part: an element beside the properties isn't one of them.
     if scan.properties.iter().all(|p| p.notice) && scan.content_without_notices().is_some_and(|rest| rest.trim().is_empty()) {
-        return Stripped::Nothing;
+        return scan.part("").map_or(Stripped::Unchanged, Stripped::Nothing);
     }
     scan.part("").map_or(Stripped::Unchanged, Stripped::Part)
 }

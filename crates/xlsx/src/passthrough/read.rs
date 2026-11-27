@@ -571,16 +571,22 @@ impl KeptReader {
 }
 
 /// A kept custom properties part without the notices GridCraft writes itself. With nothing else in
-/// it, it isn't kept at all, nor is the relationship to it.
+/// it, it isn't kept at all, nor is the relationship to it, unless it has relationships of its own:
+/// then it stays, empty, for the parts they keep.
 fn take_out_notices(kept: &mut Preserved, rel: &PreservedRel) {
     let target = normalize(&rel.target);
+    let others = kept.parts.len() > 1;
     let Some(part) = kept.parts.iter_mut().find(|q| normalize(&q.name) == target) else { return };
     match crate::custom_props::without_notices(&part.data) {
         crate::custom_props::Stripped::Unchanged => {}
         crate::custom_props::Stripped::Part(data) => part.data = Arc::from(data),
-        crate::custom_props::Stripped::Nothing => {
-            kept.parts.clear();
-            kept.rels.clear();
+        crate::custom_props::Stripped::Nothing(empty) => {
+            if others {
+                part.data = Arc::from(empty);
+            } else {
+                kept.parts.clear();
+                kept.rels.clear();
+            }
         }
     }
 }

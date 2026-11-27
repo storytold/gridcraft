@@ -406,8 +406,8 @@ impl Workbook {
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
     /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
-    /// (not one that is a table's name alone, which reads the table first) and form controls'
-    /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
+    /// (not one that is a table's name alone, which reads the table first), form controls'
+    /// linked cells and the Python cell a linked picture shows. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
     /// visited: table calculated-column and totals formulas, a PivotChart's link to its
     /// PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
@@ -533,6 +533,15 @@ impl Workbook {
                 });
                 v
             });
+            // The Python cell a linked picture shows: one a deleted sheet takes no longer names a
+            // cell, and a reader drops the link.
+            let images = sh.images.iter().any(|i| i.python_source.as_deref().is_some_and(changes)).then(|| {
+                let mut v = sh.images.clone();
+                v.iter_mut().flat_map(|i| i.python_source.as_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
             if cells.is_empty()
                 && cond_formats.is_none()
                 && validations.is_none()
@@ -540,6 +549,7 @@ impl Workbook {
                 && sparklines.is_none()
                 && pivots.is_none()
                 && controls.is_none()
+                && images.is_none()
             {
                 continue;
             }
@@ -566,6 +576,9 @@ impl Workbook {
             }
             if let Some(v) = controls {
                 sh.controls = v;
+            }
+            if let Some(v) = images {
+                sh.images = v;
             }
         }
     }
