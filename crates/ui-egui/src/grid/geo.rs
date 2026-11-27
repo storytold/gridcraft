@@ -1,5 +1,14 @@
 use super::{Arc, COL_HEADER_H, CellRef, DISPLAY_SCALE, LineIndex, MAX_COLS, MAX_ROWS, Pos2, RangeRef, Rect, Sheet, pos2};
 
+/// One visible pane of the cell viewport: frozen or scrolled along each axis, and its logical
+/// screen clip rectangle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pane {
+    pub frozen_x: bool,
+    pub frozen_y: bool,
+    pub clip: Rect,
+}
+
 /// Geometry of the grid for one frame (handles zoom and frozen panes).
 #[derive(Clone)]
 pub struct Geo {
@@ -264,11 +273,77 @@ impl Geo {
         let c1 = self.ci.at(left + ((self.cells.width() - self.frozen_w) / self.z) as f64).min(MAX_COLS - 1);
         (c0, c1)
     }
+    /// Logical screen point where the frozen panes meet the scrolling pane.
+    pub(crate) fn freeze_split(&self) -> Pos2 {
+        pos2(self.cells.left() + self.frozen_w, self.cells.top() + self.frozen_h)
+    }
+    /// Visible panes of the cell viewport in paint order (scrolling pane first, frozen corner last).
+    pub(crate) fn panes(&self) -> Vec<Pane> {
+        if self.fr == 0 && self.fc == 0 {
+            return if self.cells.is_positive() { vec![Pane { frozen_x: false, frozen_y: false, clip: self.cells }] } else { Vec::new() };
+        }
+        let split = self.freeze_split();
+        let mut out = Vec::with_capacity(4);
+        let mut push = |frozen_x: bool, frozen_y: bool, rect: Rect| {
+            let clip = rect.intersect(self.cells);
+            if clip.is_positive() {
+                out.push(Pane { frozen_x, frozen_y, clip });
+            }
+        };
+        push(false, false, Rect::from_min_max(split, self.cells.max));
+        if self.fr > 0 {
+            push(false, true, Rect::from_min_max(pos2(split.x, self.cells.top()), pos2(self.cells.right(), split.y)));
+        }
+        if self.fc > 0 {
+            push(true, false, Rect::from_min_max(pos2(self.cells.left(), split.y), pos2(split.x, self.cells.bottom())));
+        }
+        if self.fr > 0 && self.fc > 0 {
+            push(true, true, Rect::from_min_max(self.cells.min, split));
+        }
+        out
+    }
+    /// The visible pane containing logical point `p`, or `None` outside the cell viewport.
+    pub(crate) fn pane_at(&self, p: Pos2) -> Option<Pane> {
+        if !self.cells.contains(p) {
+            return None;
+        }
+        let split = self.freeze_split();
+        let frozen_x = self.fc > 0 && p.x < split.x;
+        let frozen_y = self.fr > 0 && p.y < split.y;
+        let clip = Rect::from_min_max(
+            pos2(if frozen_x { self.cells.left() } else { split.x }, if frozen_y { self.cells.top() } else { split.y }),
+            pos2(if frozen_x { split.x } else { self.cells.right() }, if frozen_y { split.y } else { self.cells.bottom() }),
+        )
+        .intersect(self.cells);
+        clip.is_positive().then_some(Pane { frozen_x, frozen_y, clip })
+    }
+    /// Logical screen x of `col`'s left edge as projected into a frozen or scrolled pane.
+    pub(crate) fn pane_x(&self, sh: &Sheet, col: u32, frozen: bool) -> f32 {
+        if self.paper.is_some() {
+            return self.x(sh, col);
+        }
+        if frozen {
+            self.cells.left() + self.ci.start(col) as f32 * self.z
+        } else {
+            self.cells.left() + self.frozen_w + ((self.ci.start(col) - self.ci.start(self.fc)) as f32 - self.scroll.x) * self.z
+        }
+    }
+    /// Logical screen y of `row`'s top edge as projected into a frozen or scrolled pane.
+    pub(crate) fn pane_y(&self, sh: &Sheet, row: u32, frozen: bool) -> f32 {
+        if self.paper.is_some() {
+            return self.y(sh, row);
+        }
+        if frozen {
+            self.cells.top() + self.ri.start(row) as f32 * self.z
+        } else {
+            self.cells.top() + self.frozen_h + ((self.ri.start(row) - self.ri.start(self.fr)) as f32 - self.scroll.y) * self.z
+        }
+    }
     /// Screen areas of the panes (frozen rows/columns or the scrolling part) that hold part of `r`.
     /// The panes share one coordinate system, so a range that is not clipped to these is also drawn
     /// over the frozen rows/columns when it is scrolled under them.
     pub fn range_panes(&self, r: RangeRef) -> Vec<Rect> {
-        let split = pos2(self.cells.left() + self.frozen_w, self.cells.top() + self.frozen_h);
+        let split = self.freeze_split();
         let mut xs = Vec::new();
         if r.start.col < self.fc {
             xs.push((self.cells.left(), split.x));

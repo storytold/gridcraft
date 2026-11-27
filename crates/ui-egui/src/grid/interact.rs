@@ -161,6 +161,9 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         {
             app.selected_object = Some(obj);
             if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
+                if let Some(ed) = app.text_box_editor.as_mut() {
+                    ed.set_pane(geo.pane_at(p).map(|pn| (pn.frozen_x, pn.frozen_y)));
+                }
                 return;
             }
             if primary_drag && let Some(a) = sh.object_anchor(obj) {

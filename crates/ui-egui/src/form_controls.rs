@@ -45,6 +45,8 @@ pub struct Gesture {
     pub undo_start: usize,
     /// When a held arrow or track repeats next (egui time, seconds).
     pub next_repeat: f64,
+    /// Which frozen/scrolled pane axes the gesture started in.
+    pub pane: (bool, bool),
 }
 
 /// What a control looks like this frame.
@@ -271,7 +273,13 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
             app.grid.control = None;
             return true;
         };
-        let r = crate::chartview::anchor_rect(geo, sh, &c.anchor);
+        let r = crate::chartview::anchor_rect_in_axes(geo, sh, &c.anchor, g.pane.0, g.pane.1);
+        let visible_at = |p: Pos2| {
+            geo.pane_at(p).and_then(|pn| {
+                let pr = crate::chartview::anchor_rect_in_pane(geo, sh, &c.anchor, pn);
+                (crate::chartview::rect_overlaps_pane(pr, pn.clip) && pr.contains(p)).then_some(pr)
+            })
+        };
         if pointer.primary_down() {
             match g.part {
                 Part::Thumb => {
@@ -284,8 +292,8 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
                 }
                 Part::Button => {}
                 part => {
-                    // Held arrows and track repeat while the pointer stays on them.
-                    let over = pos.and_then(|p| part_at(r, &c, geo.z, inner(geo, r, p))) == Some(part);
+                    // Held arrows and track repeat while the pointer stays on the visible control.
+                    let over = pos.and_then(|p| visible_at(p).and_then(|pr| part_at(pr, &c, geo.z, inner(geo, pr, p)))) == Some(part);
                     if over && time >= g.next_repeat {
                         step_part(app, &c, part);
                         if let Some(gg) = app.grid.control.as_mut() {
@@ -297,9 +305,9 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
             }
             return true;
         }
-        // Released: a button runs when the pointer is still on it.
+        // Released: a button runs when the pointer is still on its visible area.
         app.grid.control = None;
-        if g.part == Part::Button && pos.is_some_and(|p| r.contains(p)) {
+        if g.part == Part::Button && pos.is_some_and(|p| visible_at(p).is_some()) {
             app.press_button(c.id);
         }
         resp.request_focus();
@@ -315,9 +323,7 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
     }
     let Some(p) = pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) else { return false };
     // The selected object's handles reach past its frame and win over a control beneath them.
-    if let Some(r) = app.selected_object.and_then(|o| crate::chartview::object_rect(geo, sh, o))
-        && crate::objects::handle_at(r, p).is_some()
-    {
+    if crate::chartview::selected_handle(app, geo, sh, p).is_some() {
         return false;
     }
     let hit = crate::chartview::hit(app, geo, sh, p).filter(|(o, _)| o.kind == ObjKind::Control);
@@ -327,6 +333,7 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
         return false;
     };
     let Some(c) = find(sh, o.id).cloned() else { return false };
+    let pane = geo.pane_at(p).map_or((false, false), |pn| (pn.frozen_x, pn.frozen_y));
     let p = inner(geo, r, p);
     let Some(part) = part_at(r, &c, geo.z, p) else { return false };
     app.selected_object = None;
@@ -338,7 +345,7 @@ pub fn interact(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, 
     } else {
         0.0
     };
-    app.grid.control = Some(Gesture { id: c.id, part, grab, undo_start, next_repeat: time + REPEAT_DELAY });
+    app.grid.control = Some(Gesture { id: c.id, part, grab, undo_start, next_repeat: time + REPEAT_DELAY, pane });
     if !matches!(part, Part::Button | Part::Thumb) {
         step_part(app, &c, part);
     }

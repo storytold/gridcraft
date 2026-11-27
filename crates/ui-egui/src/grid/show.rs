@@ -206,6 +206,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.selected_object = None;
     }
     let objects = crate::chartview::paint_objects(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh);
+    paint_freeze_lines(&painter.with_clip_rect(geo.cells), &geo);
     paint_overlays(OverlayInput {
         app,
         ui,
@@ -469,14 +470,18 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
         });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
     }
-    // Freeze lines.
+    quads
+}
+
+/// Paints the frozen-pane divider lines over cells and pane-clipped objects.
+fn paint_freeze_lines(painter: &Painter, geo: &Geo) {
+    let split = geo.freeze_split();
     if geo.fr > 0 {
         painter.line_segment([pos2(geo.cells.left(), split.y), pos2(geo.cells.right(), split.y)], Stroke::new(1.0, Color32::from_gray(150)));
     }
     if geo.fc > 0 {
         painter.line_segment([pos2(split.x, geo.cells.top()), pos2(split.x, geo.cells.bottom())], Stroke::new(1.0, Color32::from_gray(150)));
     }
-    quads
 }
 
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a

@@ -14,7 +14,16 @@ pub struct EditState {
     sheet: usize,
     original: String,
     request_focus: bool,
+    restore_focus: bool,
     rect: Option<Rect>,
+    /// The frozen/scrolled pane axes the editor opened in, when started by clicking a fragment.
+    pane: Option<(bool, bool)>,
+}
+
+impl EditState {
+    pub(crate) fn set_pane(&mut self, pane: Option<(bool, bool)>) {
+        self.pane = pane;
+    }
 }
 
 /// Returns the stable id for the text-box editor.
@@ -48,7 +57,9 @@ impl SheetApp {
             sheet: d.wb.active_sheet(),
             original: shape.text.clone(),
             request_focus: true,
+            restore_focus: false,
             rect: None,
+            pane: None,
         });
         self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Shape, id));
         self.grid.drag = crate::grid::Drag::None;
@@ -131,21 +142,34 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
             None
         }
     });
-    let rect = geo.mirror_rect(crate::chartview::anchor_rect(geo, sh, &shape.anchor).shrink(4.0).intersect(geo.cells));
-    if !rect.is_positive() {
+    let id = editor_id();
+    let rect = editor_rect(geo, sh, &shape.anchor, ed.pane);
+    let Some(rect) = rect else {
+        if ui.ctx().memory(|m| m.has_focus(id)) {
+            ed.restore_focus = true;
+        } else if ui.ctx().memory(|m| m.focused().is_some()) {
+            ed.restore_focus = false;
+        }
         ed.rect = None;
         app.text_box_editor = Some(ed);
         if let Some(command) = save {
             app.run_or_alert(command, json!({}));
         }
         return;
-    }
+    };
     ed.rect = Some(rect);
-    let id = editor_id();
     if ed.request_focus {
         // A new editing session must not reuse the previous box's caret/undo history.
         egui::text_edit::TextEditState::default().store(ui.ctx(), id);
     }
+    let restore = ed.restore_focus && ui.ctx().memory(|m| m.focused().is_none());
+    if restore {
+        // Restore focus with TextEdit's lock_focus filter active from the very next pass.
+        ui.ctx().memory_mut(|m| {
+            m.request_focus_with_filter(id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false });
+        });
+    }
+    ed.restore_focus = false;
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     child.set_clip_rect(rect);
     egui::ScrollArea::vertical().id_salt(id).max_height(rect.height()).auto_shrink([false, false]).show(&mut child, |ui| {
@@ -182,4 +206,29 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
     if let Some(command) = save {
         app.run_or_alert(command, json!({}));
     }
+}
+
+/// Visible screen rectangle of a text-box editor within a single pane: the pane the user clicked
+/// when known, else the visible pane showing the largest fragment of the shape.
+fn editor_rect(geo: &Geo, sh: &gridcraft_engine::model::Sheet, anchor: &gridcraft_engine::model::Anchor, pane: Option<(bool, bool)>) -> Option<Rect> {
+    let panes = geo.panes();
+    let fragment = |pn: crate::grid::Pane| {
+        let r = crate::chartview::anchor_rect_in_pane(geo, sh, anchor, pn);
+        if !crate::chartview::rect_overlaps_pane(r, pn.clip) {
+            return None;
+        }
+        let clipped = r.shrink(4.0).intersect(pn.clip);
+        clipped.is_positive().then(|| geo.mirror_rect(clipped))
+    };
+    if let Some((fx, fy)) = pane
+        && let Some(r) = panes.iter().copied().find(|pn| pn.frozen_x == fx && pn.frozen_y == fy).and_then(&fragment)
+    {
+        return Some(r);
+    }
+    let anchor_axes = (anchor.cell.col < geo.fc, anchor.cell.row < geo.fr);
+    panes
+        .into_iter()
+        .filter_map(|pn| fragment(pn).map(|r| (r.width() * r.height(), (pn.frozen_x, pn.frozen_y) == anchor_axes, r)))
+        .max_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
+        .map(|(.., r)| r)
 }
