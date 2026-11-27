@@ -608,6 +608,18 @@ pub(super) fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     }
 }
 
+/// Turns Enter with any modifier into Shift+Enter, the new-line key of a comment or note box.
+/// Enter alone is left as it is, for OK.
+fn shift_modified_enters(events: &mut [egui::Event]) {
+    for e in events {
+        if let egui::Event::Key { key: Key::Enter, modifiers, .. } = e
+            && !modifiers.is_none()
+        {
+            *modifiers = egui::Modifiers::SHIFT;
+        }
+    }
+}
+
 /// Draws a dialog's `fields`, editing its values.
 pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Field labels, choices and notes are English source strings, translated as they are drawn.
@@ -623,9 +635,28 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                             .get(key)
                             .map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| if v.is_null() { String::new() } else { v.to_string() }))
                             .unwrap_or_default();
-                        let multiline = key == "text";
+                        // Only a comment or note takes several lines; a link's display text and a
+                        // rule's search text are one line, as in Excel.
+                        let multiline = key == "text" && matches!(d.name.as_str(), "comment" | "note");
                         let r = if multiline {
-                            ui.add(egui::TextEdit::multiline(&mut s).desired_rows(4).desired_width(320.0)).labelled_by(label.id)
+                            let id = ui.make_persistent_id(("form_text", key));
+                            let focused = ui.memory(|m| m.has_focus(id));
+                            if focused {
+                                // In a comment or note, Enter alone presses OK; with Shift, Alt or
+                                // Ctrl it starts a new line. The box only reads Shift+Enter as one.
+                                ui.input_mut(|i| shift_modified_enters(&mut i.events));
+                            }
+                            let newline = egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter);
+                            let r = ui
+                                .add(egui::TextEdit::multiline(&mut s).id(id).return_key(newline).desired_rows(4).desired_width(320.0))
+                                .labelled_by(label.id);
+                            if focused || r.has_focus() {
+                                // The new line is typed, so the same Enter doesn't also press OK.
+                                ui.input_mut(|i| {
+                                    i.events.retain(|e| !matches!(e, egui::Event::Key { key: Key::Enter, modifiers, .. } if !modifiers.is_none()))
+                                });
+                            }
+                            r
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0)).labelled_by(label.id)
                         };
