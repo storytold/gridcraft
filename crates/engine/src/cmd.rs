@@ -404,7 +404,8 @@ fn wall_clock() -> std::time::Duration {
 /// each). Last, each linked control takes its cell's final value.
 ///
 /// That recalculation can reach another older PivotTable's headers: one whose source it made
-/// readable, or one renamed from values it has since changed, which is put back. So renaming
+/// readable, or one renamed from values it has since changed, which is put back (and what
+/// read it is recalculated with the names it has again). So renaming
 /// repeats until a pass renames nothing, at most once more than there are PivotTables, which
 /// a chain of reports reading each other needs; a header that reads its own report could
 /// otherwise go on changing.
@@ -420,7 +421,10 @@ pub(crate) fn finish_recalc(wb: &mut Workbook, mut again: impl FnMut(&mut Workbo
         if passes == 0 {
             break;
         }
-        crate::pivot::undo_stale(wb, renamed);
+        let back = crate::pivot::undo_stale(wb, renamed);
+        if !back.is_empty() {
+            again(wb, &back);
+        }
     }
     controls::sync_linked_values(wb);
 }

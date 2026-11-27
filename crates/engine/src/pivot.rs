@@ -225,15 +225,19 @@ pub(crate) fn reports(renamed: &[Renamed]) -> Vec<(usize, CellRef)> {
 
 /// Puts back each renamed PivotTable whose headers read differently now: the recalculation that
 /// followed the renames changed them (a header reading another report), so its names came from
-/// stale values. It is renamed again by the next [`migrate_staged`].
-pub(crate) fn undo_stale(wb: &mut Workbook, renamed: Vec<Renamed>) {
+/// stale values. It is renamed again by the next [`migrate_staged`] that can read it. Returns a
+/// cell of each report put back, for the caller to recalculate what was read with its new names.
+pub(crate) fn undo_stale(wb: &mut Workbook, renamed: Vec<Renamed>) -> Vec<(usize, CellRef)> {
+    let mut back = Vec::new();
     for r in renamed {
         if readings(wb, &r.before, r.sheet).is_none_or(|now| now != r.read)
             && let Some(slot) = wb.sheet_mut(r.sheet).and_then(|sh| sh.pivots.get_mut(r.idx))
         {
+            back.extend(r.before.last_range.map(|a| (r.sheet, a.start)));
             *slot = r.before;
         }
     }
+    back
 }
 
 /// The header readings of a PivotTable's source; `None` when the source can't be read.

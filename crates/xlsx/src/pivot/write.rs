@@ -270,8 +270,23 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
 /// The cache's database field a pivot field names: by its name, else by its header's raw value,
 /// as an older GridCraft named a formatted header in the files it wrote.
 fn db_field(fields: &[CField], name: &str) -> Option<usize> {
-    let db = || fields.iter().enumerate().filter(|(_, f)| f.col.is_some());
-    db().find(|(_, f)| same(&f.name, name)).or_else(|| db().find(|(_, f)| !f.raw.is_empty() && same(&f.raw, name.trim()))).map(|(i, _)| i)
+    db_named(fields, name).or_else(|| db_raw(fields, name))
+}
+
+/// The database field named `name`.
+fn db_named(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && same(&f.name, name))
+}
+
+/// The database field whose header's raw value is `name`.
+fn db_raw(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && !f.raw.is_empty() && same(&f.raw, name.trim()))
+}
+
+/// Whether two pivot fields' names are one database field: the same text, or names that find
+/// the same field (`2026` and `2026.0`).
+fn same_db_field(fields: &[CField], a: &str, b: &str) -> bool {
+    same(a, b) || db_field(fields, a).is_some_and(|i| db_field(fields, b) == Some(i))
 }
 
 /// The cache's fields: the source's columns, named as the engine names them
@@ -430,7 +445,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     // Page fields (filters not on an axis) need items too.
     for f in &pt.filters {
-        let on_axis = axis.iter().any(|a| same(&a.source_col, &f.source_col));
+        let on_axis = axis.iter().any(|a| same_db_field(&fields, &a.source_col, &f.source_col));
         if !on_axis
             && let Some(i) = find(&fields, &f.source_col)
             && let Some(cf) = fields.get_mut(i)
@@ -669,7 +684,10 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     let mut hidden: HashMap<usize, &PivotFilter> = HashMap::new();
     let mut pages: Vec<(usize, &PivotFilter)> = Vec::new();
     for f in &pt.filters {
-        let axis_pos = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col));
+        let axes = || pt.rows.iter().chain(pt.columns.iter());
+        let axis_pos = axes()
+            .position(|a| same(&a.source_col, &f.source_col))
+            .or_else(|| axes().position(|a| same_db_field(&c.fields, &a.source_col, &f.source_col)));
         match axis_pos {
             Some(p) => {
                 if let Some(Some(i)) = c.axis_map.get(p) {
@@ -688,7 +706,15 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     let find_calc = |name: &str| c.fields.iter().position(|f| f.formula.is_some() && same(&f.name, name));
     let values: Vec<(usize, &PivotValue)> =
-        pt.values.iter().filter_map(|v| find_db(&v.source_col).or_else(|| find_calc(&v.source_col)).map(|i| (i, v))).collect();
+        // As the engine reads a value: a column by its name, then a calculated field, and only
+        // then a column by its header's raw value.
+        pt.values
+            .iter()
+            .filter_map(|v| {
+                let n = &v.source_col;
+                db_named(&c.fields, n).or_else(|| find_calc(n)).or_else(|| db_raw(&c.fields, n)).map(|i| (i, v))
+            })
+            .collect();
     let layout = PivotTableLayout { row_fields, column_fields, hidden_fields: hidden, page_fields: pages, values };
 
     let compact = pt.layout == PivotLayout::Compact;
