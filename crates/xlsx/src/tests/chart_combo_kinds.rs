@@ -55,6 +55,90 @@ fn horizontal_range_and_xy_overlay_survive_chart_roundtrip() {
     }
 }
 
+/// Authored fixtures cover an explicit outline independently of a disabled fill.
+#[test]
+fn unfilled_series_keep_visible_outlines_through_chart_xml() {
+    let stroke = "<a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill>";
+    for line in [stroke, "<a:noFill/>"] {
+        let series = ser(0).replace("<c:val>", &format!("<c:spPr><a:noFill/><a:ln>{line}</a:ln></c:spPr><c:val>"));
+        let xml = format!(
+            "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+            bar(&series)
+        );
+        let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+        assert!(original.series[0].no_fill);
+        assert_eq!(original.series[0].outline_color.is_some(), line == stroke);
+        let saved = crate::chart::write_chart(&gridcraft_model::Workbook::default(), 0, &original, "Book.xlsx");
+        let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+        assert!(restored.series[0].no_fill);
+        assert_eq!(restored.series[0].outline_color, original.series[0].outline_color);
+    }
+}
+
+#[test]
+fn bar_to_column_normalization_rotates_axis_metadata() {
+    let xml = format!(
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>
+        {}{}
+        <c:catAx><c:axId val="1"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:axPos val="l"/></c:catAx>
+        <c:valAx><c:axId val="2"/><c:scaling><c:min val="200"/><c:max val="900"/></c:scaling><c:axPos val="b"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#,
+        bar(&ser(0)).replace("val=\"col\"", "val=\"bar\""),
+        line(&ser(1))
+    );
+    let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(original.series_kinds()[0], ChartKind::ColumnClustered);
+    let axes = original.series[0].axes.as_ref().unwrap();
+    assert!(axes.x.reversed && axes.x.min.is_none(), "category settings move to horizontal axis");
+    assert!(axes.y.min.is_some() && axes.y.max.is_some(), "value bounds move to vertical axis");
+    let saved = crate::chart::write_chart(&gridcraft_model::Workbook::default(), 0, &original, "Book.xlsx");
+    let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(original.series[0].axes, restored.series[0].axes);
+}
+
+#[test]
+fn horizontal_xy_families_keep_distinct_axes_regardless_of_order_or_assignment() {
+    use gridcraft_model::{Chart, Series, Workbook};
+    for reverse in [false, true] {
+        for (bar_secondary, scatter_secondary) in [(false, false), (true, true), (false, true), (true, false)] {
+            let mut series = vec![
+                Series { kind: Some(ChartKind::BarStacked), values: "{2,3}".into(), secondary: bar_secondary, ..Default::default() },
+                Series {
+                    kind: Some(ChartKind::ScatterLines),
+                    categories: Some("{17,17}".into()),
+                    values: "{0,1}".into(),
+                    secondary: scatter_secondary,
+                    ..Default::default()
+                },
+            ];
+            if reverse {
+                series.reverse();
+            }
+            let base_xml = format!(
+                "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+                bar(&ser(0))
+            );
+            let base = read_chart(&parse(base_xml.as_bytes()).unwrap()).unwrap().0;
+            let original = Chart { kind: ChartKind::Combo, series, ..base };
+            let saved = crate::chart::write_chart(&Workbook::default(), 0, &original, "Book.xlsx");
+            let root = parse(saved.as_bytes()).unwrap();
+            let plot = root.path(&["chart", "plotArea"]).unwrap();
+            let ids = |name| plot.child(name).unwrap().kids("axId").map(|e| e.attr("val").unwrap()).collect::<Vec<_>>();
+            assert_ne!(ids("barChart"), ids("scatterChart"), "incompatible families need distinct axis pairs");
+            let restored = read_chart(&root).unwrap().0;
+            assert_eq!(restored.series_kinds(), original.series_kinds());
+            for (a, b) in original.series.iter().zip(&restored.series) {
+                assert_eq!(a.values, b.values);
+                assert_eq!(a.categories, b.categories);
+            }
+            assert_ne!(restored.series[0].secondary, restored.series[1].secondary);
+            if bar_secondary != scatter_secondary {
+                assert_eq!(restored.series[0].secondary, original.series[0].secondary);
+            }
+        }
+    }
+}
+
 fn bar(sers: &str) -> String {
     format!("<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{sers}{AX}</c:barChart>")
 }

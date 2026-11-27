@@ -20,7 +20,10 @@ impl Scale {
         let Some(axis) = axis else { return self };
         let min = axis.min.filter(|v| v.is_finite() && v.abs() <= MAX_ABS).unwrap_or(self.min);
         let max = axis.max.filter(|v| v.is_finite() && v.abs() <= MAX_ABS).unwrap_or(self.max);
-        if max > min && (max - min).is_finite() { Self { min, max, ..self } } else { self }
+        if min == self.min && max == self.max {
+            return self;
+        }
+        if max > min && (max - min).is_finite() { Self { min, max, step: nice_scale(min, max, false).step } } else { self }
     }
 
     /// Tick values from `min` to `max` (at most 51).
@@ -39,6 +42,7 @@ impl Scale {
                 let v = if (snapped - v).abs() < self.step * 1e-9 { snapped } else { v };
                 if v.abs() < self.step * 1e-9 { 0.0 } else { v }
             })
+            .filter(|v| *v >= self.min && *v <= self.max)
             .collect()
     }
     /// Position of `v` along the axis, 0 at `min`, 1 at `max` (clamped to a sane band).

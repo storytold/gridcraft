@@ -75,6 +75,146 @@ fn floating_bar_ranges_keep_offsets_and_numeric_price_overlay() {
     assert!((price_fraction - (494.0 - 300.0) / 300.0).abs() < 0.001, "primary automatic bounds align with the saved overlay scale");
 }
 
+#[test]
+fn saved_axis_bounds_keep_ticks_inside_and_rescale_spacing() {
+    use gridcraft_model::ChartAxis;
+    let base = nice_scale(0.0, 1000.0, true);
+    for (min, max) in [(200.0, 900.0), (200.0, 201.0), (-0.73, 0.88)] {
+        let bounded = base.with_bounds(Some(&ChartAxis { min: Some(min), max: Some(max), ..Default::default() }));
+        let ticks = bounded.ticks();
+        assert!(ticks.len() > 1, "saved bounds need useful tick spacing");
+        assert!(ticks.iter().all(|v| *v >= min && *v <= max), "ticks must stay inside saved bounds: {ticks:?}");
+    }
+}
+
+fn bar_xy_chart() -> Chart {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.series = vec![
+        Series {
+            values: "{4,8}".into(),
+            kind: Some(ChartKind::BarClustered),
+            color: Some(Color::Rgb(0x008040)),
+            axes: Some(SeriesAxes { x: ChartAxis { min: Some(0.0), max: Some(10.0), ..Default::default() }, ..Default::default() }),
+            ..Default::default()
+        },
+        Series {
+            categories: Some("{4,4}".into()),
+            values: "{0,1}".into(),
+            kind: Some(ChartKind::ScatterLines),
+            secondary: true,
+            color: Some(Color::Rgb(0xf07020)),
+            ..Default::default()
+        },
+    ];
+    c
+}
+
+fn draw_chart(c: &Chart) -> Vec<Prim> {
+    render(c, &resolve(&Workbook::default(), 0, c), 900.0, 500.0, &ApproxMeasure)
+}
+
+fn green_bars(prims: &[Prim]) -> Vec<[f32; 4]> {
+    prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, w, h, fill: Some([0, 128, 64, 255]), .. } => Some([*x, *y, *w, *h]),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn xy_points_do_not_add_bar_categories() {
+    let mut c = bar_xy_chart();
+    // Put XY first to exercise category resolution as well as renderer slot allocation.
+    c.series.swap(0, 1);
+    let before = draw_chart(&c);
+    c.series[0].values = "{0,1,2,5,10}".into();
+    c.series[0].categories = Some("{4,4,4,4,4}".into());
+    let after = draw_chart(&c);
+    assert_eq!(green_bars(&before), green_bars(&after), "XY point counts cannot change category spacing");
+    let points = after
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(points.len(), 5, "all XY points are drawn");
+}
+
+#[test]
+fn xy_overlays_share_automatic_y_bounds() {
+    let mut c = bar_xy_chart();
+    c.series[1].values = "{0,10}".into();
+    let mut short = c.series[1].clone();
+    short.values = "{0,1}".into();
+    short.categories = Some("{6,6}".into());
+    short.color = Some(Color::Rgb(0x123456));
+    c.series.push(short);
+    let prims = draw_chart(&c);
+    let line = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: col, .. } if *col == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let long = line([240, 112, 32, 255]);
+    let short = line([18, 52, 86, 255]);
+    assert!((long[0][1] - short[0][1]).abs() < 0.01, "equal values share a position");
+    assert!(
+        (short[0][1] - short[1][1]).abs() < (long[0][1] - long.last().unwrap()[1]).abs() / 2.0,
+        "a short overlay must not independently span the plot"
+    );
+}
+
+#[test]
+fn reversed_value_axis_keeps_bars_ticks_and_xy_aligned() {
+    let mut c = bar_xy_chart();
+    let original = green_bars(&draw_chart(&c));
+    let axes = c.series[0].axes.as_mut().unwrap();
+    axes.x.reversed = true;
+    c.series[1].axes = Some(gridcraft_model::SeriesAxes { x: axes.x.clone(), ..Default::default() });
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    assert!(bars[0][0] > bars[1][0], "larger bars extend further left");
+    assert!((bars[0][2] - original[0][2]).abs() < 0.01, "reversal preserves magnitude");
+    let price = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert!((price[0][0] - bars[0][0]).abs() < 0.01, "bar endpoint and equal numeric X align");
+    let label_x = |text| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text: t, .. } if t == text => Some(*x),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(label_x("0") > label_x("10"), "numeric tick labels follow axis reversal");
+}
+
+#[test]
+fn unfilled_bar_keeps_its_explicit_outline() {
+    let mut c = bar_xy_chart();
+    c.series[0].no_fill = true;
+    c.series[0].outline_color = Some(Color::Rgb(0x123456));
+    let prims = draw_chart(&c);
+    let outlined = prims.iter().filter(|p| matches!(p, Prim::Rect { stroke: Some(([18, 52, 86, 255], _)), .. })).count();
+    assert_eq!(outlined, 2, "both unfilled bars retain their visible outlines");
+}
+
 const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
@@ -135,6 +275,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         x: Some(values.iter().enumerate().map(|(i, _)| Some(i as f64 * 1.5 + 2.0)).collect()),
         sizes: Some(values.iter().map(|v| Some(v.abs() + 1.0)).collect()),
         color,
+        outline_color: None,
         kind,
         secondary: false,
         smooth: false,
@@ -1039,6 +1180,7 @@ fn fuzz_random_data_and_sizes() {
                 x: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
                 sizes: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
                 color: [(r.next() % 256) as u8, 100, 50, 255],
+                outline_color: None,
                 kind: ALL_KINDS[(r.next() % ALL_KINDS.len() as u64) as usize],
                 secondary: r.next().is_multiple_of(3),
                 smooth: r.next().is_multiple_of(4),

@@ -152,8 +152,8 @@ impl BarSink {
         let band = self.band();
         if !merge {
             let (x, y, w, h) = if self.horizontal { (lo, pos, len, self.bw) } else { (pos, lo, self.bw, len) };
-            // Omit the outline when a bar is no wider/taller than the stroke, so the inner fill never disappears.
-            let stroke = self.stroke.filter(|(_, sw)| w > *sw && h > *sw);
+            // Omit a narrow filled bar's outline so its fill survives; an unfilled bar needs the outline to remain visible.
+            let stroke = self.stroke.filter(|(_, sw)| self.color[3] == 0 || (w > *sw && h > *sw));
             ctx.rect(x, y, w, h, self.color, stroke);
             return;
         }
@@ -264,7 +264,12 @@ fn axis_scales(
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
-        let members: Vec<usize> = (0..data.series.len()).filter(|i| sec.get(*i).copied().unwrap_or(false) == axis).collect();
+        let members: Vec<usize> = (0..data.series.len())
+            .filter(|i| {
+                sec.get(*i).copied().unwrap_or(false) == axis
+                    && !(horizontal && data.series.get(*i).is_some_and(|s| matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines)))
+            })
+            .collect();
         if members.is_empty() {
             continue;
         }
@@ -316,10 +321,8 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
-fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: Option<&gridcraft_model::SeriesAxes>, default_x: Scale, plot: Bx, style: u32) {
+fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: Option<&gridcraft_model::SeriesAxes>, default_x: Scale, ys: Scale, plot: Bx, style: u32) {
     let xs = default_x.with_bounds(axes.map(|a| &a.x));
-    let (lo, hi) = value_range(s.values.iter().flatten().copied()).unwrap_or((0.0, 1.0));
-    let ys = nice_scale(lo, hi, false).with_bounds(axes.map(|a| &a.y));
     let pts: Vec<_> = s
         .values
         .iter()
@@ -379,11 +382,22 @@ fn reverse_categories(labels: &mut [String], outer: &mut [Vec<String>]) {
 /// Explicit chart style 9 adds white outlines to column and bar
 /// rectangles, including stacked and 100%-stacked variants.
 pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizontal: bool) {
-    let ncat = data.categories.len().max(data.series.iter().map(|s| s.values.len()).max().unwrap_or(0)).min(MAX_CATS);
+    let xy_combo = chart.horizontal_xy_combo();
+    let ncat = data
+        .categories
+        .len()
+        .max(
+            data.series
+                .iter()
+                .filter(|s| !xy_combo || !matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
+                .map(|s| s.values.len())
+                .max()
+                .unwrap_or(0),
+        )
+        .min(MAX_CATS);
     if ncat == 0 {
         return;
     }
-    let xy_combo = chart.horizontal_xy_combo();
     let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal && !xy_combo { chart.kind } else { s.kind }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
@@ -393,8 +407,16 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
 
     let axes = axis_scales(chart, data, &fams, &sec, &spans, horizontal);
     let Some((s1, f1)) = axes.first() else { return };
-    let y1 = ValAxis { scale: *s1, fmt: f1 };
-    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
+    let bar_axes = |secondary| {
+        chart
+            .series
+            .iter()
+            .filter(|s| s.secondary == secondary && !matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
+            .find_map(|s| s.axes.as_ref())
+    };
+    let reversed_value = |secondary| horizontal && bar_axes(secondary).is_some_and(|a| a.x.reversed);
+    let y1 = ValAxis { scale: *s1, reversed: reversed_value(false), fmt: f1 };
+    let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, reversed: reversed_value(true), fmt: f });
     // A forward forecast on a category axis adds empty category slots after the data.
     let fwd = data
         .series
@@ -404,7 +426,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
     let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
-    let reversed = horizontal && chart.series.iter().find(|s| !s.secondary).and_then(|s| s.axes.as_ref()).is_some_and(|a| a.y.reversed);
+    let reversed = horizontal && bar_axes(false).is_some_and(|a| a.y.reversed);
     let mut labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let mut outer: Vec<Vec<String>> =
@@ -425,7 +447,24 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         let j = if reversed { ncat_slots - 1 - j } else { j };
         if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw }
     };
-    let vpos = |v: f64, sc: &Scale| if horizontal { plot.x + sc.frac(v) * plot.w } else { plot.bottom() - sc.frac(v) * plot.h };
+    let overlay_scales: Vec<_> = [false, true]
+        .into_iter()
+        .map(|secondary| {
+            let (lo, hi) = value_range(
+                data.series
+                    .iter()
+                    .filter(|s| s.secondary == secondary && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
+                    .flat_map(|s| s.values.iter().flatten().copied()),
+            )
+            .unwrap_or((0.0, 1.0));
+            let spec = chart
+                .series
+                .iter()
+                .find(|s| s.secondary == secondary && matches!(s.kind, Some(ChartKind::Scatter | ChartKind::ScatterLines)))
+                .and_then(|s| s.axes.as_ref());
+            nice_scale(lo, hi, false).with_bounds(spec.map(|a| &a.y))
+        })
+        .collect();
 
     let (slot_of, nslots) = column_slots(&fams, &sec);
     let bw = cw / (nslots + 1.5);
@@ -446,14 +485,28 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 continue;
             }
             // Invisible offsets still take part in stacking and scale calculation.
-            if s.color[3] == 0 {
+            if s.color[3] == 0 && s.outline_color.is_none() {
                 continue;
             }
             if xy_combo && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines) {
-                xy_overlay(ctx, s, chart.series.get(i).and_then(|s| s.axes.as_ref()), *s1, plot, chart.style);
+                xy_overlay(
+                    ctx,
+                    s,
+                    chart.series.get(i).and_then(|s| s.axes.as_ref()),
+                    *s1,
+                    overlay_scales[usize::from(s.secondary)],
+                    plot,
+                    chart.style,
+                );
                 continue;
             }
             let sc = scale_of(i);
+            let value_reversed = reversed_value(sec.get(i).copied().unwrap_or(false));
+            let vpos = |v: f64, sc: &Scale| {
+                let f = sc.frac(v);
+                let f = if value_reversed { 1.0 - f } else { f };
+                if horizontal { plot.x + f * plot.w } else { plot.bottom() - f * plot.h }
+            };
             let fmt = Fmt::new(&s.number_format);
             let row = match spans.get(i) {
                 Some(r) => r,
@@ -491,8 +544,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
                     // Hairline bars are merged per pixel column (their envelope is what shows).
-                    let cull = merge_hairlines(bw, labels_on);
-                    let stroke = (chart.style == 9).then_some((WHITE, 1.0));
+                    let cull = merge_hairlines(bw, labels_on) && s.outline_color.is_none();
+                    let stroke = s.outline_color.map(|c| (c, 1.0)).or_else(|| (chart.style == 9).then_some((WHITE, 1.0)));
                     let mut sink = BarSink::new(bw, horizontal, s.color, stroke, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
@@ -594,7 +647,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
     let fy = Fmt::new(data.series.first().map(|s| s.number_format.as_str()).unwrap_or("General"));
-    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, fmt: &fy }, None, false, chart.gridlines);
+    let plot = frame(ctx, area, CatAxis::Numeric(xs, &fx), &ValAxis { scale: ys, reversed: false, fmt: &fy }, None, false, chart.gridlines);
     if !plot.ok() {
         return;
     }

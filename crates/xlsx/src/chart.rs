@@ -696,6 +696,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
                         | ChartKind::Radar
                         | ChartKind::Stock
                 ) && sel.and_then(|s| s.path(&["spPr", "noFill"])).is_some(),
+                outline_color: sel.and_then(|e| e.path(&["spPr", "ln", "solidFill"])).and_then(dml_color),
                 axes: sel.and_then(|el| series_axes.get(&std::ptr::from_ref(el))).cloned(),
                 secondary: sec,
                 kind: None,
@@ -786,6 +787,14 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
     };
     // Series of one family are one chart; series of other families make a combination chart.
     ch.set_drawn_kinds(&drawn, first_kind);
+    for (s, original) in ch.series.iter_mut().zip(&drawn) {
+        if matches!(original, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100)
+            && matches!(s.kind, Some(ChartKind::ColumnClustered | ChartKind::ColumnStacked | ChartKind::ColumnStacked100))
+            && let Some(axes) = &mut s.axes
+        {
+            std::mem::swap(&mut axes.x, &mut axes.y);
+        }
+    }
     (ch, caches)
 }
 
@@ -1135,7 +1144,15 @@ fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: u
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
     match (&color, line_like) {
-        _ if s.no_fill => x.push_str("<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>"),
+        _ if s.no_fill => {
+            x.push_str("<c:spPr><a:noFill/><a:ln>");
+            if let Some(c) = s.outline_color.as_ref().and_then(|c| srgb(c, &wb.theme)) {
+                let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+            } else {
+                x.push_str("<a:noFill/>");
+            }
+            x.push_str("</a:ln></c:spPr>");
+        }
         (Some(c), true) => {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
         }
@@ -1146,7 +1163,16 @@ fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: u
             );
         }
         (Some(c), false) => {
-            let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill></c:spPr>");
+            let _ = write!(x, "<c:spPr><a:solidFill>{c}</a:solidFill>");
+            if let Some(outline) = s.outline_color.as_ref().and_then(|c| srgb(c, &wb.theme)) {
+                let _ = write!(x, "<a:ln><a:solidFill>{outline}</a:solidFill></a:ln>");
+            }
+            x.push_str("</c:spPr>");
+        }
+        (None, false) if s.outline_color.is_some() => {
+            if let Some(outline) = s.outline_color.as_ref().and_then(|c| srgb(c, &wb.theme)) {
+                let _ = write!(x, "<c:spPr><a:ln><a:solidFill>{outline}</a:solidFill></a:ln></c:spPr>");
+            }
         }
         (None, _) if g == (G::Scatter { lines: false }) || g == G::Stock => x.push_str("<c:spPr><a:ln w=\"19050\"><a:noFill/></a:ln></c:spPr>"),
         _ => {}
@@ -1395,9 +1421,25 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     // A chart without axes (a pie or doughnut chart) has no secondary axes either: its series
     // are all one group. (A combination chart's pies are drawn as columns, on axes.)
     let has_axes = (0..all.len()).any(|i| axes_of(group_of(i)) != Axes::None);
+    // Horizontal bars need category/value axes, whereas XY series need two value axes.
+    // Give the families separate pairs even when the model assigned both to one pair.
+    let horizontal_xy = ch.horizontal_xy_combo();
+    let bar_secondary = ch
+        .series
+        .iter()
+        .zip(&kinds)
+        .find(|(_, k)| matches!(k, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100))
+        .is_some_and(|(s, _)| s.secondary);
+    let secondary_of = |i: usize, series: &Series| {
+        if horizontal_xy {
+            if matches!(kinds.get(i), Some(ChartKind::Scatter | ChartKind::ScatterLines)) { !bar_secondary } else { bar_secondary }
+        } else {
+            series.secondary && has_axes
+        }
+    };
     let groups = |secondary: bool| {
         let mut out: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
-        for &(i, x) in all.iter().filter(|(_, x)| stock || (x.secondary && has_axes) == secondary) {
+        for &(i, x) in all.iter().filter(|(i, x)| stock || secondary_of(*i, x) == secondary) {
             let g = group_of(i);
             match out.iter_mut().find(|(k, _)| *k == g) {
                 Some((_, members)) => members.push((i, x)),

@@ -89,10 +89,16 @@ pub(super) fn level_groups(level: &[String], n: usize) -> Vec<(usize, usize)> {
 
 pub(super) struct ValAxis<'a> {
     pub(super) scale: Scale,
+    pub(super) reversed: bool,
     pub(super) fmt: &'a Fmt,
 }
 
 impl ValAxis<'_> {
+    pub(super) fn frac(&self, v: f64) -> f32 {
+        let f = self.scale.frac(v);
+        if self.reversed { 1.0 - f } else { f }
+    }
+
     fn labels(&self) -> Vec<(f64, String)> {
         self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, Some(self.scale.step)))).collect()
     }
@@ -125,7 +131,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             return plot;
         }
         for (v, t) in &ylabels {
-            let yy = plot.bottom() - y.scale.frac(*v) * plot.h;
+            let yy = plot.bottom() - y.frac(*v) * plot.h;
             if grid {
                 ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
             }
@@ -133,12 +139,12 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         }
         if let (Some(a), Some(l)) = (y2, &y2labels) {
             for (v, t) in l {
-                let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
+                let yy = plot.bottom() - a.frac(*v) * plot.h;
                 ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, (HAlign::Left, VAlign::Middle));
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let y0 = plot.bottom() - y.scale.frac(zero) * plot.h;
+        let y0 = plot.bottom() - y.frac(zero) * plot.h;
         ctx.hline(plot.x, plot.right(), y0, AXIS, 0.75);
         match cat {
             CatAxis::Table(..) => {}
@@ -206,7 +212,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let slot = plot.w / ylabels.len().max(1) as f32;
         let k = (((vw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
         for (i, (v, t)) in ylabels.iter().enumerate() {
-            let xx = plot.x + y.scale.frac(*v) * plot.w;
+            let xx = plot.x + y.frac(*v) * plot.w;
             if grid {
                 ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
             }
@@ -215,7 +221,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
-        let x0 = plot.x + y.scale.frac(zero) * plot.w;
+        let x0 = plot.x + y.frac(zero) * plot.w;
         ctx.vline(x0, plot.y, plot.bottom(), AXIS, 0.75);
         let n = labels.len().max(1);
         let ch = plot.h / n as f32;

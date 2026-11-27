@@ -549,9 +549,12 @@ pub struct Series {
     /// X values for scatter / bubble sizes.
     pub bubble_sizes: Option<String>,
     pub color: Option<Color>,
-    /// An invisible series still contributes to a stack (floating range charts).
+    /// Suppress the series fill while retaining any explicit outline.
     #[serde(default)]
     pub no_fill: bool,
+    /// Explicit outline colour, independent of the series fill.
+    #[serde(default)]
+    pub outline_color: Option<Color>,
     /// Physical horizontal and vertical axes imported with this series.
     #[serde(default)]
     pub axes: Option<SeriesAxes>,
