@@ -18,8 +18,15 @@ pub(crate) fn is_formula_input(input: &str) -> bool {
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
 /// format). Inherits the destination's cell, row or column style, including its number
-/// format, before parsing. Errors when the formula can't be parsed.
-pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
+/// format, before parsing. `conv` (the Automatic Data Conversion options) decides which
+/// number-like text becomes a number. Errors when the formula can't be parsed.
+pub(crate) fn input_to_cell(
+    input: &str,
+    sheet: usize,
+    at: CellRef,
+    wb: &mut gridcraft_model::Workbook,
+    conv: &gridcraft_core::parse::DataConversion,
+) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style, py: None };
@@ -37,7 +44,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
     if is_formula
         && !input.starts_with('=')
-        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb)
+        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb, conv)
     {
         return Ok(cell);
     }
@@ -70,7 +77,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let mut parsed = gridcraft_core::parse::parse_input_with(input, wb.date_system, conv);
     // Excel cuts typed text to 32,767 characters (after any leading apostrophe is dropped).
     parsed.value = gridcraft_core::cap_value(parsed.value);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
@@ -134,7 +141,8 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.selection.active,
     };
     // Both spellings take a string, number or boolean, as typed (#697).
-    let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let raw = p.get("input").or_else(|| p.get("value")).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let input = json_to_input(raw);
     let array = bool_param(p, "array").unwrap_or(false);
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
@@ -144,6 +152,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(m));
     }
+    let conv = conversion_for(raw, &s.prefs.data_conversion);
     let active_sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         if array {
@@ -151,7 +160,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb, &conv)?.unwrap_or_default();
             // Excel forms no array from a constant: every cell of the selection takes the value.
             if cell.formula.is_none() && !range.is_single() {
                 if range.count() > crate::fill::MAX_FILL_CELLS {
@@ -163,7 +172,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                     let filled = match by_style.get(&style) {
                         Some(filled) => filled.clone(),
                         None => {
-                            let filled = input_to_cell(&input, sheet, c, &mut cx.wb)?;
+                            let filled = input_to_cell(&input, sheet, c, &mut cx.wb, &conv)?;
                             by_style.insert(style, filled.clone());
                             filled
                         }
@@ -213,7 +222,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let cell = input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?;
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -242,6 +251,16 @@ pub(crate) fn json_to_input(v: &Json) -> String {
         Json::Number(n) => n.to_string(),
         Json::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// The conversion options for a JSON value read through [`json_to_input`]. They decide how text
+/// reads; a JSON number or boolean is already a value, so it reads with the defaults, as before the
+/// options existed. Otherwise `serde_json`'s spelling (`1e-5`, `100.0`) would decide its type.
+pub(crate) fn conversion_for(v: &Json, conv: &gridcraft_core::parse::DataConversion) -> gridcraft_core::parse::DataConversion {
+    match v {
+        Json::Number(_) | Json::Bool(_) => gridcraft_core::parse::DataConversion::default(),
+        _ => *conv,
     }
 }
 
@@ -278,6 +297,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("range.setValues", "too many rows"));
     }
     let mut count = 0;
+    let conv = s.prefs.data_conversion;
     // The strings typed input read as something other than the text given, for the result: a
     // caller can notice a "05.04.2026" that became a date without reading the file back (#2255).
     let mut converted: Vec<(CellRef, String)> = Vec::new();
@@ -312,7 +332,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             // An empty string clears the cell, as `null` and the default path do:
                             // an empty text cell is not blank, and a script clearing cells with
                             // `""` would leave cells `COUNTA` counts. The cell keeps its formatting.
-                            input_to_cell("", sheet, at, &mut cx.wb)?
+                            input_to_cell("", sheet, at, &mut cx.wb, &conv)?
                         } else {
                             let mut style = cx.wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
                             // Line breaks still turn on Wrap Text, as typed input does.
@@ -322,7 +342,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             Some(Cell { value: gridcraft_core::cap_value(Value::Text(text.as_str().into())), formula: None, style, py: None })
                         }
                     }
-                    _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
+                    _ => input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?,
                 };
                 // A string that became a formula was written as one (`=`), which is deliberate;
                 // only a number (dates and times included), boolean or error is a reading of the
@@ -369,6 +389,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         // Each cell gets what typing the input there gives: the automatic number format where
         // it's General, its own format otherwise, text where it's Text. That depends only on
@@ -387,7 +408,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let c = input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?;
                         by_style.insert(style, c.clone());
                         c
                     }

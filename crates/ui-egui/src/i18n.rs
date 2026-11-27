@@ -205,8 +205,8 @@ impl Language {
         self.translated(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
     }
 
-    /// The catalog entry for `text`, if this language has one.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    /// The catalog's own translation of `text`, or `None` when it falls back to English.
+    pub(crate) fn translated(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
