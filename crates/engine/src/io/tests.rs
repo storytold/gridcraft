@@ -517,11 +517,17 @@ fn web_page_space_runs_read_back_as_ordinary_spaces() {
         <tr><td>Alpha&nbsp;Beta</td></tr>\
         <tr><td>A<span style='mso-spacerun:yes'>&nbsp;<span>X</span>&nbsp;</span>B</td></tr>\
         <tr><td>A<span style='mso-spacerun:yes'>X<br>Y</span>Z</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp; </span> Beta</td></tr>\
+        <tr><td>Alpha <span style='mso-spacerun:yes'> &nbsp;</span>Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp;</span> Beta</td></tr>\
         </table></body></html>";
     let (wb, _) = open_bytes("sheet001.htm", page.as_bytes()).unwrap();
     let sh = wb.sheet(0).unwrap();
-    let texts: Vec<String> = (0..9).map(|r| sh.value(CellRef::new(r, 0)).as_text().unwrap_or_default().to_string()).collect();
-    assert_eq!(texts, ["Alpha  Beta", "Alpha   Beta", " Alpha", "Alpha ", "  ", "Alpha Beta", "Alpha\u{a0}Beta", "A\u{a0}X\u{a0}B", "AX YZ"]);
+    let texts: Vec<String> = (0..12).map(|r| sh.value(CellRef::new(r, 0)).as_text().unwrap_or_default().to_string()).collect();
+    assert_eq!(texts[..9], ["Alpha  Beta", "Alpha   Beta", " Alpha", "Alpha ", "  ", "Alpha Beta", "Alpha\u{a0}Beta", "A\u{a0}X\u{a0}B", "AX YZ"]);
+    // Whitespace outside a span next to an ordinary space inside it collapses with it, as a
+    // browser shows it.
+    assert_eq!(texts[9..], ["Alpha  Beta"; 3]);
 }
 
 #[test]

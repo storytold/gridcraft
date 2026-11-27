@@ -140,9 +140,8 @@ struct OpenCell {
     cell: HtmlCell,
     colspan: usize,
     rowspan: usize,
-    /// Runs of spaces from `mso-spacerun` spans: the byte offset in the raw `cell.text` where
-    /// each goes and how many spaces it holds. They are kept as written, not collapsed.
-    runs: Vec<(usize, usize)>,
+    /// Runs of spaces from `mso-spacerun` spans, kept as written, not collapsed.
+    runs: Vec<SpaceRun>,
     /// The raw text of the `mso-spacerun` span being read, if any.
     spacerun: Option<String>,
     /// Spans opened inside that one and not closed yet.
@@ -177,8 +176,26 @@ impl OpenCell {
             }
             space = c != '\u{a0}';
         }
-        self.runs.push((self.cell.text.len(), n));
+        let ordinary = |c: Option<char>| c.is_some_and(|c| c != '\u{a0}');
+        self.runs.push(SpaceRun {
+            at: self.cell.text.len(),
+            n,
+            starts_ordinary: ordinary(text.chars().next()),
+            ends_ordinary: ordinary(text.chars().last()),
+        });
     }
+}
+
+/// A run of spaces from a `mso-spacerun` span.
+struct SpaceRun {
+    /// The byte offset in the raw `cell.text` where the run goes.
+    at: usize,
+    /// How many spaces it holds.
+    n: usize,
+    /// Whether its first or last character is an ordinary (collapsible) space: whitespace
+    /// outside the span next to it collapses with it in a browser, so it adds no space.
+    starts_ordinary: bool,
+    ends_ordinary: bool,
 }
 
 /// Whether a tag's attributes carry the `mso-spacerun:yes` style.
@@ -356,23 +373,33 @@ fn decode(raw: &str) -> String {
 
 /// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
 /// space, trimmed. The text only serves to match a cell with the tab-separated text. `runs` of
-/// spaces (byte offset in `raw`, count) from `mso-spacerun` spans are put in as written: a run is
-/// cell content, so it is neither collapsed nor trimmed.
-fn decode_with_runs(raw: &str, runs: &[(usize, usize)]) -> String {
+/// spaces from `mso-spacerun` spans are put in as written: a run is cell content, so it is
+/// neither collapsed nor trimmed.
+fn decode_with_runs(raw: &str, runs: &[SpaceRun]) -> String {
     let mut text = String::with_capacity(raw.len());
     let mut space = false;
     let mut from = 0;
-    for &(at, n) in runs {
-        fold(&mut text, &mut space, &entities(raw.get(from..at).unwrap_or_default()));
-        if space && !text.is_empty() {
+    let mut after_ordinary = false;
+    for run in runs {
+        fold_after_run(&mut text, &mut space, raw.get(from..run.at).unwrap_or_default(), after_ordinary);
+        if space && !text.is_empty() && !run.starts_ordinary {
             text.push(' ');
         }
         space = false;
-        text.push_str(&" ".repeat(n));
-        from = at;
+        text.push_str(&" ".repeat(run.n));
+        from = run.at;
+        after_ordinary = run.ends_ordinary;
     }
-    fold(&mut text, &mut space, &entities(raw.get(from..).unwrap_or_default()));
+    fold_after_run(&mut text, &mut space, raw.get(from..).unwrap_or_default(), after_ordinary);
     text
+}
+
+/// [`fold`] of the raw text that follows a run; whitespace at its start is dropped when the run
+/// ends in an ordinary space, which it collapses with.
+fn fold_after_run(text: &mut String, space: &mut bool, raw: &str, after_ordinary: bool) {
+    let s = entities(raw);
+    let s = if after_ordinary { s.trim_start_matches(|c: char| c.is_whitespace() && c != '\u{a0}') } else { &s };
+    fold(text, space, s);
 }
 
 /// HTML entities decoded.
