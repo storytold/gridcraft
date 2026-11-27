@@ -103,11 +103,7 @@ impl<'h> Evaluator<'h> {
         // uses no more native stack at 5,000 deep than at 5. Each link still spends fuel.
         let snap_root = |body: &Expr| matches!(body, Expr::Binary(BinOp::Add | BinOp::Sub, ..));
         let mut tails = 0;
-        let mut step = if snap_root(&l.body) {
-            Tail::Done(Ev::V(self.value_root(&l.body)))
-        } else {
-            self.tail_step(&l.body)
-        };
+        let mut step = if snap_root(&l.body) { Tail::Done(Ev::V(self.value_root(&l.body))) } else { self.tail_step(&l.body) };
         let r = loop {
             match step {
                 Tail::Done(v) => break v,
@@ -123,11 +119,7 @@ impl<'h> Evaluator<'h> {
                     self.env.clear();
                     self.env.extend(next.env.iter().cloned());
                     self.env.extend(bound);
-                    step = if snap_root(&next.body) {
-                        Tail::Done(Ev::V(self.value_root(&next.body)))
-                    } else {
-                        self.tail_step(&next.body)
-                    };
+                    step = if snap_root(&next.body) { Tail::Done(Ev::V(self.value_root(&next.body))) } else { self.tail_step(&next.body) };
                 }
             }
         };
