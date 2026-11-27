@@ -420,6 +420,63 @@ fn quitting_with_one_of_two_workbooks_unsaved_asks_once() {
     assert!(h.state().dialog.is_none());
 }
 
+#[test]
+/// With AutoSave on, closing the window saves a workbook that has an .xlsx file instead of
+/// asking about it; a workbook without a file is still asked about.
+fn closing_with_autosave_saves_instead_of_asking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-close-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx");
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    h.state_mut().ui.autosave = true;
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "123"})).unwrap();
+    h.run_steps(2);
+
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "the workbook is saved and the window closes: {sent:?}");
+    assert!(h.state().dialog.is_none(), "nothing is asked");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0), "the change is in the file");
+
+    // A new workbook has no file for AutoSave to write to: it is asked about as before.
+    let mut h = harness(Services::default());
+    h.state_mut().ui.autosave = true;
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    h.run_steps(2);
+    let sent = request_window_close(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::CancelClose), "{sent:?}");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+/// With AutoSave on, closing a workbook's window (its close button runs `window.close`) saves
+/// the workbook and closes it instead of asking about its changes.
+fn closing_a_workbook_window_with_autosave_saves_instead_of_asking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-window-close-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx");
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+    h.state_mut().ui.autosave = true;
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    // A second workbook keeps the session open once the first one closes.
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+    let window = h.state().session.doc_window(h.state().session.documents()[0].uid).unwrap();
+
+    h.state_mut().run_or_alert("window.close", serde_json::json!({"window": window}));
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "nothing is asked");
+    assert_eq!(h.state().session.documents().len(), 1, "the workbook closed");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0), "the change is in the file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).
 fn typing_in_book1_then_new(h: &mut egui_kittest::Harness<'static, SheetApp>) -> u64 {
     h.input_mut().events.push(egui::Event::Text("hello".into()));

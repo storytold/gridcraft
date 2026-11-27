@@ -420,6 +420,13 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // Closing a workbook with AutoSave on (its window's close button, File › Close): AutoSave
+        // saves it and it closes, as answering Save would, instead of asking. Quitting saves in
+        // `continue_quit`, before it asks. A workbook AutoSave can't save is asked about.
+        if name == "saveChanges" && params.get("quit") != Some(&Json::Bool(true)) && self.autosave_before_close() {
+            self.run_or_alert("file.close", json!({"force": true, "document": true}));
+            return;
+        }
         // A protection action taken while a reference box picks on another sheet is for the
         // dialog's sheet: the pick ends, showing that sheet again, before the action is chosen.
         if matches!(name, "protectSheet" | "unprotectSheet")

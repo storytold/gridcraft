@@ -5,8 +5,12 @@ use gridcraft_engine::Session;
 #[test]
 /// AutoSave defaults off, toggles on and off, and survives `UiState` serialization.
 fn autosave_survives_a_restart() {
-    let mut app = crate::common::app(Session::new());
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = crate::common::app(session);
     assert!(!app.ui.autosave, "off by default");
+    // AutoSave turns on only for a workbook that has an .xlsx file to save to.
+    app.session.active_mut().unwrap().path = Some(std::env::temp_dir().join("gridcraft-autosave-persist.xlsx").to_string_lossy().into_owned());
     app.toggle_autosave();
     assert!(app.ui.autosave, "the toggle flips the persisted flag");
     // What the desktop app writes to ui.json, and reads back on the next launch.
