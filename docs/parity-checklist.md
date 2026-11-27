@@ -6,6 +6,8 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 
 **Overall: 282 / 296 commands implemented (95.3%).**
 
+**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): 282 yes, 14 no (window 0, os 10, engine-gap 4), 0 partial, 0 unknown.** An implemented command is `headless: yes`: it is in the engine registry that `gridcraft-cli` and the MCP server load. A missing one carries its hand mark from `HEADLESS` in `xtask/src/parity.rs`, or `unknown`.
+
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
 | File | 11 | 11 | 100% |
@@ -166,12 +168,12 @@ Implemented:
 
 Missing:
 
-- `insert.smartArt` Diagram (Illustrations)
-- `insert.screenshot` Screenshot (Illustrations)
-- `insert.map` Maps (Charts)
-- `insert.timeline` Timeline (Filters)
-- `insert.signatureLine` Signature Line (Text)
-- `insert.object` Object (Text)
+- `insert.smartArt` Diagram (Illustrations): headless: no, reach: engine-gap (diagrams could be built by a command)
+- `insert.screenshot` Screenshot (Illustrations): headless: no, reach: os (screen capture of other windows)
+- `insert.map` Maps (Charts): headless: no, reach: os (online map service)
+- `insert.timeline` Timeline (Filters): headless: no, reach: engine-gap (a date filter for pivot tables could be a command)
+- `insert.signatureLine` Signature Line (Text): headless: no, reach: engine-gap (a signature line object could be inserted by a command)
+- `insert.object` Object (Text): headless: no, reach: os (embedding another program's object)
 
 ## Draw (4 / 4, 100%)
 
@@ -268,11 +270,11 @@ Implemented:
 
 Missing:
 
-- `data.fromWeb` From Web (Get & Transform Data)
-- `data.stocks` Stocks (Data Types)
-- `data.geography` Geography (Data Types)
-- `data.relationships` Relationships (Data Tools)
-- `data.analyzeData` Analyze Data (Analysis)
+- `data.fromWeb` From Web (Get & Transform Data): headless: no, reach: os (fetching a web page)
+- `data.stocks` Stocks (Data Types): headless: no, reach: os (online stock data service)
+- `data.geography` Geography (Data Types): headless: no, reach: os (online geography data service)
+- `data.relationships` Relationships (Data Tools): headless: no, reach: engine-gap (data-model relationships could be commands)
+- `data.analyzeData` Analyze Data (Analysis): headless: no, reach: os (online analysis service)
 
 ## Review (15 / 18, 83%)
 
@@ -296,9 +298,9 @@ Implemented:
 
 Missing:
 
-- `review.smartLookup` Smart Lookup (Insights)
-- `review.translate` Translate (Language)
-- `review.showChanges` Show Changes (Changes)
+- `review.smartLookup` Smart Lookup (Insights): headless: no, reach: os (online search service)
+- `review.translate` Translate (Language): headless: no, reach: os (online translation service)
+- `review.showChanges` Show Changes (Changes): headless: no, reach: os (co-authoring change history service)
 
 ## View (21 / 21, 100%)
 
