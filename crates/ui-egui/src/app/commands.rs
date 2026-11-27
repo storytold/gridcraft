@@ -1,5 +1,5 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
 };
 
@@ -25,6 +25,9 @@ impl SheetApp {
         }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
+        }
+        if let Some(refused) = dialogs::refuse_sheet_change(self, id) {
+            return Err(refused);
         }
         if matches!(
             id,
@@ -96,6 +99,21 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        // The scan stopped at its cell allowance: say that some cells were not checked.
+        if id == "data.circleInvalid"
+            && let Ok(r) = &r
+            && r.get("truncated").and_then(Json::as_bool) == Some(true)
+        {
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
+        }
         r
     }
 
@@ -112,6 +130,15 @@ impl SheetApp {
         // Programmatic callers use `run` and keep getting the PDF bytes back.
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
+        }
+        // Menu-style AutoSum on one cell proposes its formula in the editor with the range
+        // pointed and selected, so a click, drag, arrow key or typing replaces it, as in Excel.
+        // Programmatic callers use `run` and get the total entered.
+        if id == "formulas.autoSum"
+            && params.get("range").and_then(Json::as_str).is_none()
+            && self.session.active().is_some_and(|d| d.selection.current().is_single())
+        {
+            return self.auto_sum_in_editor(params);
         }
         // Recommended Charts with no chart type named (ribbon button, keytip, command search) asks
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
@@ -134,8 +161,26 @@ impl SheetApp {
         }
     }
 
+    /// Runs AutoSum on the active cell without entering it (`enter: false`) and points the
+    /// proposed range in the editor that opens.
+    fn auto_sum_in_editor(&mut self, params: Json) {
+        let mut params = if params.is_object() { params } else { json!({}) };
+        if let Some(map) = params.as_object_mut() {
+            map.insert("enter".into(), Json::Bool(false));
+        }
+        if let Err(e) = self.run("formulas.autoSum", params) {
+            return self.alert(e);
+        }
+        if let Some(ed) = self.editor.as_mut() {
+            ed.point_last_argument();
+            if ed.can_point() {
+                self.session.mode = gridcraft_engine::Mode::Point;
+            }
+        }
+    }
+
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
@@ -148,6 +193,26 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                Ok(Json::Null)
+            }
+            "ui.window.maximize" => {
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(true);
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(on));
+                Ok(Json::Null)
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                Ok(Json::Null)
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = p.get("direction").and_then(Json::as_str).and_then(crate::parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                Ok(Json::Null)
+            }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)
@@ -163,8 +228,19 @@ impl SheetApp {
                 Ok(Json::Null)
             }
             "view.expandFormulaBar" => {
-                self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
-                Ok(json!({"on": self.ui.formula_bar_expanded}))
+                // `lines` is where a drag of the bar's bottom edge left it: one line collapses it,
+                // more expands it to that height, which expanding returns to afterwards.
+                if let Some(lines) = p.get("lines").and_then(Json::as_u64) {
+                    let lines = usize::try_from(lines).unwrap_or(usize::MAX).clamp(1, crate::formula_bar::MAX_DRAG_LINES);
+                    self.ui.formula_bar_expanded = lines > 1;
+                    if lines > 1 {
+                        self.ui.formula_bar_lines = lines;
+                    }
+                    Ok(json!({"on": self.ui.formula_bar_expanded, "lines": self.ui.formula_bar_lines}))
+                } else {
+                    self.ui.formula_bar_expanded = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.formula_bar_expanded);
+                    Ok(json!({"on": self.ui.formula_bar_expanded}))
+                }
             }
             "view.darkMode" => {
                 let current = if self.ui.system_theme { self.effective_dark } else { self.ui.dark };
@@ -190,6 +266,10 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.highlightActiveRow" => {
+                self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
+                Ok(json!({"on": self.ui.highlight_active_row}))
             }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
@@ -225,6 +305,7 @@ impl SheetApp {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
             }
+            "ui.quickAnalysis" => crate::quick_analysis::toggle(self, p.get("open").and_then(Json::as_bool)),
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.
                 match p.get("page").and_then(Json::as_str).map(str::trim) {
@@ -245,6 +326,18 @@ impl SheetApp {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
+            }
+            "ui.selectionMode" => {
+                // `{"mode": "extend"}` (F8), `"add"` (Shift+F8) or `"off"`; `{}` reports the mode.
+                match p.get("mode").and_then(Json::as_str) {
+                    Some(id) => match crate::grid::SelectionMode::parse(id) {
+                        Some(mode) => self.grid.set_selection_mode(mode),
+                        None => return Some(Err(format!("unknown selection mode {id:?} (use \"extend\", \"add\" or \"off\")"))),
+                    },
+                    None if p.get("mode").is_some_and(|v| !v.is_null()) => return Some(Err("`mode` must be \"extend\", \"add\" or \"off\"".into())),
+                    None => {}
+                }
+                Ok(json!({"mode": self.grid.selection_mode.id()}))
             }
             "ui.pythonMode" => {
                 // `{"on": true}` starts Python mode on the active cell (or switches the edit in
@@ -287,6 +380,7 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -312,7 +406,7 @@ impl SheetApp {
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
-    /// Sheet labels and actions). While a dialog's reference boxes have picked, it is the dialog's
+    /// Sheet labels and actions). While a dialog with reference boxes is open, it is the dialog's
     /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
     pub fn active_sheet_protected(&self) -> bool {
         if let Some(protected) = self.dialog.as_ref().and_then(|d| d.home_sheet_protected(self)) {

@@ -27,7 +27,15 @@ pub(super) fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 pub(super) fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
-    let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
+    let Some(rest) = app
+        .keytips
+        .prefix()
+        .filter(|prefix| keytip_table::paints_badges(prefix))
+        .and_then(|prefix| sequence.strip_prefix(prefix))
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
     let t = Tokens::get(ui.ctx());
     let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
@@ -240,7 +248,7 @@ fn combo_popup(
     if filter {
         height += ui.spacing().interact_size.y + 4.0 * spacing + 1.0;
     }
-    let menu = craft_ui::combo::Menu::new(ui, &field).height(height);
+    let menu = crate::combo_menu::Menu::new(ui, &field).height(height);
     let text_id = anchor.id.with(salt).with("__combo_text");
     let sel0 = st.sel;
     let shown = if filter {

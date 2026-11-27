@@ -1,3 +1,4 @@
+use gridcraft_model::{Sparkline, SparklineKind};
 use serde_json::json;
 
 use super::*;
@@ -14,6 +15,35 @@ fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
 }
 fn contains(hay: &[u8], needle: &str) -> bool {
     hay.windows(needle.len()).any(|w| w == needle.as_bytes())
+}
+fn arabic_face_available() -> bool {
+    let mut doc = gridcraft_pdf::PdfDoc::new();
+    doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    !doc.missing_arabic_font()
+}
+
+#[test]
+fn right_to_left_sheets_mirror_link_rectangles_and_targets() {
+    fn numbers_after(pdf: &[u8], key: &str, n: usize) -> Vec<f32> {
+        let text = String::from_utf8_lossy(pdf);
+        let at = text.find(key).unwrap() + key.len();
+        text[at..].split([' ', ']']).filter_map(|t| t.parse().ok()).take(n).collect()
+    }
+    let mut s = s();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A2", "target": "Sheet1!B60"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B60", "input": "Destination"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    let axis = numbers_after(&ltr, "/MediaBox [", 4)[2];
+    let (l, r) = (numbers_after(&ltr, "/Rect [", 4), numbers_after(&rtl, "/Rect [", 4));
+    assert!((r[0] - (axis - l[2])).abs() < 0.01 && (r[2] - (axis - l[0])).abs() < 0.01, "{l:?} mirrors to {r:?}");
+    assert_eq!(r[1], l[1]);
+    let b_width = s.doc().unwrap().wb.active().unwrap().col_width(1);
+    let (lx, rx) = (numbers_after(&ltr, "/XYZ ", 1)[0], numbers_after(&rtl, "/XYZ ", 1)[0]);
+    let k = (l[2] - l[0]) / s.doc().unwrap().wb.active().unwrap().col_width(0);
+    assert!((rx - (axis - lx - b_width * k)).abs() < 0.01, "target {lx} mirrors to {rx}");
 }
 
 #[test]
@@ -56,6 +86,227 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let cropped = String::from_utf8_lossy(&cropped);
     assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
     assert!(!cropped.contains("/Dest ["));
+}
+
+#[test]
+fn pdf_export_rotates_a_shape_outline_and_its_text() {
+    let make_page = |rotation| {
+        let mut s = s();
+        let id = s
+            .execute(
+                "insert.shape",
+                json!({"kind": "rectangle", "at": "A1", "width": 120, "height": 60, "text": "TURNED", "fill": "#FF0000", "line": "#0000FF"}),
+            )
+            .unwrap()["shape"]
+            .as_u64()
+            .unwrap();
+        if rotation != 0 {
+            s.execute("object.move", json!({"kind": "shape", "id": id, "at": "A1", "rotation": rotation})).unwrap();
+        }
+        pdf_pages(&mut s).remove(0)
+    };
+    let upright = make_page(0);
+    let turned = make_page(90);
+    let red_path = |page: &str| {
+        let start = page.find("1 0 0 rg").expect("red rectangle fill");
+        let tail = &page[start..];
+        let end = tail.find(" B").expect("filled and stroked rectangle path") + 2;
+        tail[..end].to_string()
+    };
+    assert_ne!(red_path(&upright), red_path(&turned), "the rectangle's printed outline is rotated");
+    assert!(turned.contains("0 -1 1 0") && turned.contains("(TURNED) Tj"), "shape text uses the rotation matrix: {turned}");
+}
+#[test]
+fn arabic_with_characters_its_font_lacks_still_exports() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "مرحبا Привет"})).unwrap();
+    let out = s.execute("file.exportPdf", json!({})).unwrap();
+    assert_eq!(out["pages"], 1);
+}
+
+#[test]
+fn wrapping_keeps_combining_marks_with_their_letters() {
+    let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+    let lines = wrap_lines(word, Font::Helvetica, 10.0, 7.0, TextDirection::Auto);
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), word);
+    assert!(lines.iter().all(|line| line.text == "a\u{301}"));
+}
+
+#[test]
+fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+    if !arabic_face_available() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return;
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+    s.execute("home.bold", json!({"range": "A2"})).unwrap();
+    s.execute("home.italic", json!({"range": "A3"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+    s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for chart in &mut wb.sheet_mut(0).unwrap().charts {
+            chart.anchor.cell = CellRef::new(8, 0);
+            chart.anchor.width = 500.0;
+            chart.anchor.height = 280.0;
+        }
+    }
+    let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/Subtype /Type3"));
+    for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+    }
+    let lines = wrap_lines("العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0, TextDirection::Auto);
+    assert_eq!(lines.iter().map(|line| line.text.as_str()).collect::<String>(), "العَرَبِيَّةالعَرَبِيَّة");
+    assert!(lines.iter().all(|line| !line.text.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+    assert!(lines.iter().all(|line| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 20.0, &line.text, line.direction) <= 40.0));
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic PDF artifact: {}", path.display());
+}
+
+#[test]
+fn arabic_reading_order_export_artifact() {
+    if !arabic_face_available() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return;
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Context", "LeftToRight", "RightToLeft"], ["مرحبا ABC !", "مرحبا ABC !", "مرحبا ABC !"], ["123 مرحبا ABC", "123 مرحبا ABC", "123 مرحبا ABC"], ["(مرحبا) ABC", "(مرحبا) ABC", "(مرحبا) ABC"], ["مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا", "مرحبا ABC ! DEF ? مرحبا"]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:C", "chars": 24})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:5", "height": 60})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A2:C5", "size": 18})).unwrap();
+    for (range, order) in [("A2:A5", "Context"), ("B2:B5", "LeftToRight"), ("C2:C5", "RightToLeft")] {
+        s.execute("home.formatCells", json!({"range": range, "style": {"align": {"reading_order": order}}})).unwrap();
+    }
+    s.execute("home.wrapText", json!({"range": "A5:C5"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"gridlines": true, "header": "&CArabic cell reading order"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    for text in ["مرحبا ABC !", "123 مرحبا ABC", "(مرحبا) ABC"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")));
+    }
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-reading-order-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic reading-order PDF artifact: {}", path.display());
+}
+
+#[test]
+fn wrapped_lines_keep_the_paragraph_direction() {
+    let lines = wrap_lines("مرحبا ABC ! DEF ?\nLatin مرحبا !", Font::Helvetica, 10.0, 30.0, TextDirection::Auto);
+    let split = lines.iter().position(|l| l.text.starts_with("Latin")).unwrap();
+    assert!(split > 0);
+    assert!(lines[..split].iter().all(|l| l.direction == TextDirection::RightToLeft));
+    assert!(lines[split..].iter().all(|l| l.direction == TextDirection::LeftToRight));
+    let lines = wrap_lines("123 مرحبا ABC !", Font::Helvetica, 10.0, 30.0, TextDirection::Context.resolve("123 مرحبا ABC !"));
+    assert!(lines.iter().all(|l| l.direction == TextDirection::LeftToRight));
+}
+
+fn exported_text_x(pdf: &[u8], text: &str) -> f32 {
+    let pdf = String::from_utf8_lossy(pdf);
+    let marker = format!("({text}) Tj");
+    let before = &pdf[..pdf.find(&marker).unwrap()];
+    let matrix = before.lines().rev().find(|line| line.ends_with(" Tm")).unwrap();
+    matrix.split_whitespace().nth(4).unwrap().parse().unwrap()
+}
+
+#[test]
+fn cell_reading_order_and_conditional_context_reach_pdf() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "ABC !"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&rtl, "(! ABC) Tj"));
+    assert!(!contains(&rtl, "/Subtype /Type3"));
+    s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": {"align": {"reading_order": "Context"}}}}))
+        .unwrap();
+    let (context, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&context, "(ABC !) Tj"));
+    assert!(!contains(&context, "(! ABC) Tj"));
+    assert!(exported_text_x(&rtl, "! ABC") > exported_text_x(&context, "ABC !"));
+}
+
+#[test]
+fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::Number(1.0));
+    sh.set_value(CellRef::new(1, 0), Value::Number(3.0));
+    sh.sparklines.push(Sparkline {
+        cell: CellRef::new(0, 1),
+        source: "A1:A2".into(),
+        kind: SparklineKind::Line,
+        color: Color::rgb(255, 0, 0),
+        markers: false,
+    });
+    let options = PrintOptions { ranges: RangeRef::parse("A1:B2").into_iter().collect(), ..PrintOptions::default() };
+    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
+    wb.sheet_mut(0).unwrap().right_to_left = true;
+    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
+    let points = |pdf: &[u8]| {
+        let pdf = String::from_utf8_lossy(pdf);
+        let after = pdf.split("1 0 0 RG\n").nth(1).unwrap();
+        let line = after.lines().find(|line| line.ends_with(" l  S")).unwrap();
+        let values: Vec<_> = line.split_whitespace().collect();
+        (values[0].parse::<f32>().unwrap(), values[3].parse::<f32>().unwrap())
+    };
+    let (left0, left1) = points(&ltr);
+    let (right0, right1) = points(&rtl);
+    assert!(left0 < left1 && right0 > right1);
+    assert!((left0 + right0 - 612.0).abs() < 0.001);
+    assert!((left1 + right1 - 612.0).abs() < 0.001);
+}
+
+#[test]
+fn explicit_left_and_right_keep_their_side_on_a_right_to_left_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["LEFT"], ["RIGHT"]]})).unwrap();
+    s.execute("home.alignLeft", json!({"range": "A1"})).unwrap();
+    s.execute("home.alignRight", json!({"range": "A2"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    let width = |label| gridcraft_pdf::text_width(Font::Helvetica, 11.0, label);
+    let (left, right) = (width("LEFT"), width("RIGHT"));
+    let ltr_gap = exported_text_x(&ltr, "RIGHT") + right - exported_text_x(&ltr, "LEFT");
+    let rtl_gap = exported_text_x(&rtl, "RIGHT") + right - exported_text_x(&rtl, "LEFT");
+    assert!((ltr_gap - rtl_gap).abs() < 0.01, "Left stays left of Right in the cell: {ltr_gap}, {rtl_gap}");
+    assert!(exported_text_x(&rtl, "LEFT") + left < exported_text_x(&rtl, "RIGHT") + right);
+}
+
+#[test]
+fn rtl_sheet_pdf_mirrors_cells_merges_headings_and_object_anchors() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["FIRST", "SECOND"], [null, "MERGED"]]})).unwrap();
+    s.execute("home.mergeCenter", json!({"range": "B2:C2"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:D5", "headings": true, "gridlines": true, "left": 0.8, "right": 0.4})).unwrap();
+    s.execute("insert.shape", json!({"kind": "rectangle", "at": "B4", "width": 128, "height": 30, "text": "OBJECT"})).unwrap();
+    let (ltr, _) = pdf_of(&mut s, json!({}));
+    s.execute("view.rightToLeft", json!({"on": true})).unwrap();
+    let (rtl, _) = pdf_of(&mut s, json!({}));
+    for label in ["FIRST", "SECOND", "MERGED", "A", "B", "C", "D", "1", "2", "OBJECT"] {
+        let left = exported_text_x(&ltr, label);
+        let right = exported_text_x(&rtl, label);
+        let font_size = if ["A", "B", "C", "D", "1", "2"].contains(&label) { 9.0 } else { 11.0 };
+        let width = gridcraft_pdf::text_width(Font::Helvetica, font_size, label);
+        assert!((left + right + width - 612.0).abs() < 0.01, "{label}: {left}, {right}, {width}");
+    }
+    assert!(exported_text_x(&ltr, "FIRST") < exported_text_x(&ltr, "SECOND"));
+    assert!(exported_text_x(&rtl, "FIRST") > exported_text_x(&rtl, "SECOND"));
+    for (name, pdf) in [("ltr", ltr), ("rtl", rtl)] {
+        let path = std::env::temp_dir().join(format!("gridcraft-print-direction-{name}-{}.pdf", std::process::id()));
+        std::fs::write(&path, pdf).unwrap();
+        eprintln!("Print direction PDF artifact: {}", path.display());
+    }
 }
 
 #[test]
@@ -414,6 +665,12 @@ fn pdf_contains_text_and_header_codes_expand() {
     assert_eq!(r.text, "P4/9 9:00 AM");
     assert_eq!(expand_header_footer("plain", &cx)[1].text, "plain");
     assert_eq!(expand_header_footer("&", &cx)[1].text, "");
+    // A megabyte sheet name repeated by 5,000 `&A` codes stops at the section's 64 KiB.
+    let long = HfContext { sheet: "S".repeat(1024 * 1024), ..cx };
+    let [_, c, _] = expand_header_footer(&"&A".repeat(5_000), &long);
+    assert!(c.text.is_empty(), "the name alone is over the limit");
+    let short = HfContext { sheet: "S".repeat(1000), ..Default::default() };
+    assert_eq!(expand_header_footer(&"&A".repeat(5_000), &short)[1].text.len(), 65_000);
 }
 
 #[test]
@@ -522,6 +779,98 @@ fn charts_and_images_are_drawn() {
     }
 }
 
+/// Bytes of pixel data the pages of a PDF hold: 3 per RGB pixel plus 1 per soft-mask pixel, for
+/// every image each page references. The writer shares identical images across pages, but each
+/// page kept its own copy while the document was built, so a shared image counts once per page.
+fn image_bytes(pdf: &[u8]) -> u64 {
+    let text = String::from_utf8_lossy(pdf);
+    let num_after = |s: &str, key: &str| -> u64 {
+        let at = s.find(key).unwrap() + key.len();
+        s[at..].split_whitespace().next().unwrap().parse().unwrap()
+    };
+    // Object id → (pixel bytes, soft mask id).
+    let mut images = std::collections::HashMap::new();
+    let mut pages = vec![];
+    for obj in text.split("endobj").filter(|o| o.contains(" 0 obj")) {
+        let head = &obj[..obj.find(" 0 obj").unwrap()];
+        let id: u64 = head.split_whitespace().last().unwrap().parse().unwrap();
+        let dict = &obj[..obj.find(">>").unwrap_or(obj.len())];
+        if dict.contains("/Subtype /Image") {
+            let bytes = num_after(dict, "/Width ") * num_after(dict, "/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 };
+            let smask = dict.contains("/SMask ").then(|| num_after(dict, "/SMask "));
+            images.insert(id, (bytes, smask));
+        } else if obj.contains("/Type /Page /Parent") {
+            pages.push(obj);
+        }
+    }
+    let with_mask = |id: u64| -> u64 {
+        let (bytes, smask) = images[&id];
+        bytes + smask.map_or(0, |m| images[&m].0)
+    };
+    pages
+        .iter()
+        .filter_map(|page| page.find("/XObject << ").map(|at| &page[at + "/XObject << ".len()..]))
+        .map(|refs| {
+            let refs = &refs[..refs.find(">>").unwrap()];
+            let tokens: Vec<&str> = refs.split_whitespace().collect();
+            tokens.chunks(4).map(|c| with_mask(c[1].parse().unwrap())).sum::<u64>()
+        })
+        .sum()
+}
+
+/// A picture anchored across many pages keeps no more copies in the PDF than the image budget
+/// allows, and the export still succeeds.
+#[test]
+fn picture_copies_across_pages_stay_within_the_image_budget() {
+    // Each page a picture overlaps kept its own decoded copy in the PDF with no document-wide
+    // bound: a 3 KB workbook with one tall picture reached 2 GiB before running out of pages.
+    let mut s = s();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 120, 200, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Title"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    let sh = wb.sheet_mut(0).unwrap();
+    // A floating picture over some 20 pages, and a cell picture in the title row on every page.
+    sh.images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 200.0, height: 19_990.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: std::sync::Arc::new(png.clone()),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    // `set_picture` gives C1 the cell value `draw_block` needs to reach the picture at all.
+    sh.set_picture(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
+    let d = s.doc().unwrap();
+    let lays = layouts(&d.wb, &PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap());
+
+    let RenderedPdf { bytes: full, pages, .. } = render_pdf(&d.wb, &lays, "t", "").unwrap();
+    assert!(pages >= 15, "{pages} pages");
+    // Within the default budget every page draws (and holds while the PDF is built) its own copy.
+    // Identical copies are written to the file once, so the draws are what to count.
+    let draws = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches(" Do Q").count();
+    let full_draws = draws(&full);
+    // The cell picture, on its own: the same render without it draws one picture fewer per page.
+    let mut floating_only = (*d.wb).clone();
+    floating_only.sheet_mut(0).unwrap().cell_pictures.clear();
+    let floating_draws = draws(&render_pdf(&floating_only, &lays, "t", "").unwrap().bytes);
+    assert!(floating_draws >= pages - 1, "{floating_draws} floating picture draws on {pages} pages");
+    assert_eq!(full_draws - floating_draws, pages, "the title-row cell picture draws once on each of {pages} pages");
+
+    // 64×64 RGB is 12,288 bytes: a 64 KiB budget holds a handful of page copies, not one per page.
+    let budget = 64 * 1024;
+    let RenderedPdf { bytes: capped, pages: capped_pages, .. } = render_pdf_with_image_budget(&d.wb, &lays, "t", "", budget).unwrap();
+    assert_eq!(capped_pages, pages, "pages past the budget still print, without the pictures");
+    let capped_draws = draws(&capped);
+    assert!((1..full_draws / 2).contains(&capped_draws), "{capped_draws} of {full_draws} picture draws kept with a {budget}-byte budget");
+    let kept = image_bytes(&capped);
+    assert!((1..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
+    assert!(contains(&capped, "%%EOF"));
+}
+
 #[test]
 fn page_setup_edits_settings() {
     let mut s = s();
@@ -625,6 +974,48 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
 }
 
+/// An empty paper name means no paper is stated; it prints on Letter.
+#[test]
+fn an_unstated_paper_prints_on_letter() {
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.paper = String::new();
+    let layouts = super::layout::layouts(&wb, &super::layout::PrintOptions::default());
+    let l = &layouts[0];
+    assert_eq!((l.page_w, l.page_h), (612.0, 792.0));
+    assert_eq!(paper_size(""), (612.0, 792.0));
+}
+
+/// Both commands that set the paper store a known one under its table name, so every file
+/// format finds it.
+#[test]
+fn paper_size_commands_store_the_table_name() {
+    let mut s = s();
+    s.execute("pageLayout.size", json!({"paper": "b5-jis"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
+    s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
+    // Statement and the envelopes XLSX names are accepted by both commands (Page Setup refused
+    // them before), stored under their table name and printed on their own size.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+    for (cmd, given, stored, w, h) in [
+        ("pageLayout.pageSetup", "statement", "Statement", 396.0, 612.0),
+        ("pageLayout.pageSetup", "envelope #10", "Envelope #10", 297.0, 684.0),
+        ("pageLayout.pageSetup", "Envelope-DL", "Envelope DL", 311.81, 623.62),
+        ("pageLayout.size", "Statement", "Statement", 396.0, 612.0),
+        ("pageLayout.size", "envelope dl", "Envelope DL", 311.81, 623.62),
+    ] {
+        s.execute(cmd, json!({"paper": given})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, stored, "{cmd} {given}");
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        let page = &pv["pageList"][0];
+        assert!(close(&page["width"], w) && close(&page["height"], h), "{cmd} {given}: {page}");
+    }
+    // A new workbook still prints on Letter.
+    assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
+}
+
 #[test]
 fn hostile_settings_never_panic_and_cap_pages() {
     let mut s = s();
@@ -688,11 +1079,121 @@ fn bands_unit() {
     let b = bands(0, 2, |r| if r == 1 { 100.0 } else { 10.0 }, |_| 35.0, &[], 100);
     assert_eq!(b, vec![(0, 0), (1, 1), (2, 2)]);
     assert_eq!(bands(0, 1_000_000, |_| 10.0, |_| 5.0, &[], 3).len(), 3);
-    let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0);
+    let w = wrap_lines("the quick brown fox jumps", Font::Helvetica, 10.0, 50.0, TextDirection::Auto);
     assert!(w.len() >= 2);
-    assert!(w.iter().all(|l| gridcraft_pdf::text_width(Font::Helvetica, 10.0, l) <= 50.0 || !l.contains(' ')));
-    let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0);
+    assert!(w.iter().all(|l| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, &l.text, l.direction) <= 50.0 || !l.text.contains(' ')));
+    let w = wrap_lines("Supercalifragilistic", Font::Helvetica, 10.0, 20.0, TextDirection::Auto);
     assert!(w.len() > 2);
+    let long = "abcdefghij".repeat(300);
+    let w = wrap_lines(&long, Font::Helvetica, 10.0, 50.0, TextDirection::Auto);
+    assert_eq!(w.iter().map(|l| l.text.as_str()).collect::<String>(), long);
+    assert!(w.iter().all(|l| gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, &l.text, l.direction) <= 50.0));
+    let mut at = 0;
+    for l in &w[..w.len() - 1] {
+        let one_more = &long[at..at + l.text.len() + 1];
+        assert!(gridcraft_pdf::text_width_with_direction(Font::Helvetica, 10.0, one_more, l.direction) > 50.0, "each split is as long as fits");
+        at += l.text.len();
+    }
+}
+
+fn wrapped_text(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    wrap_lines(text, font, size, width, TextDirection::Auto).into_iter().map(|line| line.text).collect()
+}
+
+#[test]
+fn wrapping_ignores_the_width_of_undrawn_bidi_marks() {
+    let word = "i\u{200e}".repeat(20);
+    assert!(gridcraft_pdf::text_width(Font::Helvetica, 10.0, &word) <= 50.0);
+    assert_eq!(wrapped_text(&word, Font::Helvetica, 10.0, 50.0), vec![word.clone()]);
+}
+
+/// The wrapper `wrap_lines` replaced, re-measuring strings, as the reference for its lines.
+fn wrap_lines_remeasuring(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split(' ') {
+            let cand = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if line.is_empty() || gridcraft_pdf::text_width(font, size, &cand) <= width {
+                line = cand;
+            } else {
+                out.push(std::mem::take(&mut line));
+                line = word.to_string();
+            }
+            while gridcraft_pdf::text_width(font, size, &line) > width && line.chars().count() > 1 {
+                let chars: Vec<char> = line.chars().collect();
+                let (mut lo, mut hi) = (1usize, chars.len());
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    let cut: String = chars[..mid].iter().collect();
+                    if gridcraft_pdf::text_width(font, size, &cut) <= width {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+                if lo == chars.len() {
+                    break;
+                }
+                out.push(chars[..lo].iter().collect());
+                line = chars[lo..].iter().collect();
+            }
+            if out.len() > 2000 {
+                return out;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+#[test]
+fn wrap_lines_matches_the_remeasuring_wrapper() {
+    let texts = [
+        "the quick brown fox jumps",
+        "Supercalifragilistic",
+        "a  b   c\n\nverylongwordthatneedsbreaking short\nend ",
+        "Wide WWWWWWWWWW words, iiiiiiii narrow ones; mixed MMMMiiiiMMMM",
+        "€ ü ß — unicode Ünïcödé text",
+        "",
+        " ",
+    ];
+    for text in texts {
+        for font in [Font::Helvetica, Font::HelveticaBold, Font::Courier] {
+            for (size, width) in [(10.0, 50.0), (10.0, 20.0), (11.0, 1.0), (8.0, 300.0), (12.0, 0.0)] {
+                assert_eq!(
+                    wrapped_text(text, font, size, width),
+                    wrap_lines_remeasuring(text, font, size, width),
+                    "{text:?} {font:?} {size} {width}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn wrapping_a_long_word_in_a_narrow_box_stops_at_the_line_limit() {
+    // One character per line: the old wrapper re-measured and copied the rest of the word for
+    // each of the 100,000 lines before checking the limit.
+    let word = "w".repeat(100_000);
+    let lines = wrapped_text(&word, Font::Helvetica, 10.0, 1.0);
+    assert!(lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().all(|l| l == "w"));
+    // A long paragraph in a very wide box is one line.
+    let para = vec!["word"; 50_000].join(" ");
+    assert_eq!(wrapped_text(&para, Font::Helvetica, 10.0, 1.0e9), vec![para.clone()]);
+}
+
+#[test]
+fn wrapping_a_long_arabic_word_measures_pieces_not_the_rest_of_the_word() {
+    let word = "مرحبا".repeat(10_000);
+    if !arabic_face_available() {
+        return;
+    }
+    let lines = wrapped_text(&word, Font::Helvetica, 10.0, 20.0);
+    assert!(lines.len() > 2000 && lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().take(2000).all(|line| gridcraft_pdf::text_width(Font::Helvetica, 10.0, line) <= 20.0));
+    assert!(word.starts_with(&lines.concat()));
 }
 
 #[test]
@@ -858,4 +1359,98 @@ fn equations_print_with_the_symbol_font() {
     assert!(contains(&pdf, "(\\345) Tj") && contains(&pdf, "(a) Tj"));
     // A glyph no standard font has is a [?] box.
     assert!(contains(&pdf, "(?) Tj"));
+}
+
+#[test]
+fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
+    use gridcraft_chart::Prim;
+    let line = |n: usize| Prim::Line { pts: vec![[0.0, 0.0]; n], color: [0, 0, 0, 255], width: 1.0, dash: false };
+    // A smoothed line is its points, not one unit.
+    assert_eq!(chart_cost(&[line(4000), Prim::Circle { cx: 0.0, cy: 0.0, r: 1.0, fill: None, stroke: None }]), 4002);
+    // Room for exactly two copies of a 1,000-point chart.
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 2002;
+    let mut renders = 0;
+    for expect in [true, true, false, false] {
+        let got = pics.chart((0, 0), || {
+            renders += 1;
+            vec![line(1000)]
+        });
+        assert_eq!(got.is_some(), expect);
+    }
+    assert_eq!(renders, 1, "a rejected chart is not rendered again");
+    assert!(pics.charts.is_empty(), "and its primitives are not kept");
+    // A chart too big for what is left is dropped without being cached at all.
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 10;
+    assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
+    assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
+
+fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+    let r = s.execute("file.printPreview", p).unwrap();
+    r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+    assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+    // Several areas, like a multi-area selection: one run of pages each, in the order given.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+    let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+    assert_eq!(pages, 2);
+    for bad in ["A1:B2,", "A1:B2,nope", ","] {
+        assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+    let mut s = s();
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    // A comma inside a quoted sheet name is not an area separator.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
+}
+
+/// XLSX id 34 is ISO B5 (176 × 250 mm), not the Letter fallback of the old name.
+#[test]
+fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
+    use std::io::{Cursor, Read, Write};
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    wb.sheet_mut(0).unwrap().print.paper = "Legal".into();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..input.len() {
+        let mut part = input.by_index(i).unwrap();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        let name = part.name().unwrap().to_string();
+        if name == "xl/worksheets/sheet1.xml" {
+            let xml = String::from_utf8(data).unwrap();
+            assert!(xml.contains(r#"paperSize="5""#));
+            // Set the input id independently of the shared paper-name mapping under test.
+            data = xml.replace(r#"paperSize="5""#, r#"paperSize="34""#).into_bytes();
+        }
+        output.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    let bytes = output.finish().unwrap().into_inner();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "iso-b5.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let preview = s.execute("file.printPreview", json!({})).unwrap();
+    let page = &preview["pageList"][0];
+    assert!((page["width"].as_f64().unwrap() - 498.90).abs() < 0.01, "{page}");
+    assert!((page["height"].as_f64().unwrap() - 708.66).abs() < 0.01, "{page}");
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/MediaBox [0 0 498.9 708.66]"));
 }

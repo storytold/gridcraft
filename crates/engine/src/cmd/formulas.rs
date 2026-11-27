@@ -1,7 +1,7 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -101,7 +101,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculation Options",
             ["Formulas", "Calculation"],
             None,
-            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
+            "{mode?: automatic|automaticExceptTables|manual, iterative?: bool (Enable iterative calculation), maxIterations?: 1–32767 (100), maxChange?: number (0.001), precisionAsDisplayed?: bool (Set precision as displayed: numbers are stored as their format shows them; turning it on rounds every number constant permanently)} → the settings. File › Options › Formulas › Calculation options; stored in the workbook.",
             has_doc,
             calc_options
         ),
@@ -179,10 +179,7 @@ fn guessed_range(sh: &gridcraft_model::sheet::Sheet, at: CellRef) -> Option<Rang
     let mut range = None;
     if at.row > 0 && (numeric(CellRef::new(at.row - 1, at.col)) || at.col == 0 || !numeric(CellRef::new(at.row, at.col - 1))) {
         let mut top = at.row - 1;
-        while top > 0
-            && (numeric(CellRef::new(top - 1, at.col))
-                || sh.value(CellRef::new(top - 1, at.col)).is_empty() && top > 1 && numeric(CellRef::new(top - 2, at.col)))
-        {
+        while top > 0 && numeric(CellRef::new(top - 1, at.col)) {
             top -= 1;
         }
         if numeric(CellRef::new(at.row - 1, at.col)) {
@@ -293,6 +290,12 @@ pub fn function_list() -> Vec<Json> {
         ("SHEETS", "Information", "SHEETS([reference])", "Number of sheets."),
         ("AREAS", "Lookup", "AREAS(reference)", "Number of areas in a reference."),
         ("TRIMRANGE", "Lookup", "TRIMRANGE(range, [trim_rows], [trim_cols])", "A range or array without its blank outer rows and columns."),
+        (
+            "GETPIVOTDATA",
+            "Lookup",
+            "GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)",
+            "A value from a PivotTable report, by value field and items.",
+        ),
         ("ISOMITTED", "Information", "ISOMITTED(argument)", "TRUE when a LAMBDA argument was left out."),
     ];
     for (n, c, sig, d) in specials {
@@ -405,10 +408,12 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         if let Some((old_name, old_scope)) = &old {
-            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
+            // Formulas are renamed while the old name is still defined, so a chart series named
+            // by it is still read as a reference.
             if !old_name.eq_ignore_ascii_case(&name) {
-                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name);
+                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
             }
+            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
         cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
@@ -417,49 +422,124 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Formulas that use a renamed name follow it: cell formulas and other names' definitions, on
+/// References to a renamed name follow it: every one the workbook holds
+/// ([`gridcraft_model::Workbook::rewrite_references`]) and Python cells' `xl()` references, on
 /// the sheets where `old` resolves to the renamed name (its own sheet for a sheet-scoped name;
 /// every sheet without a same-named sheet-level name for a workbook-level one).
-fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) {
+fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) -> Result<()> {
     let shadowed: Vec<usize> = wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(old)).filter_map(|n| n.scope).collect();
     let applies = |sheet: usize| match old_scope {
         Some(s) => s == sheet,
         None => !shadowed.contains(&sheet),
     };
-    // The renamed expression, or `None` when the name doesn't occur in it.
+    // Set when an occurrence would be captured by a LET or LAMBDA local of the new name.
+    let captured = std::cell::Cell::new(false);
     let rename = |e: gridcraft_formula::Expr| {
-        let mut hit = false;
-        let out = e.map(&mut |x| match x {
-            gridcraft_formula::Expr::Name(n) if n.eq_ignore_ascii_case(old) => {
-                hit = true;
-                gridcraft_formula::Expr::Name(new.to_string())
-            }
-            o => o,
-        });
-        hit.then_some(out)
+        let mut bound = Vec::new();
+        rename_free_name(e, old, new, &mut bound, &captured, 0)
     };
-    for i in 0..wb.sheets.len() {
-        if !applies(i) {
-            continue;
-        }
-        let Some(sh) = wb.sheet_mut(i) else { continue };
-        let formulas: Vec<(CellRef, std::sync::Arc<Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
-        for (c, f) in formulas {
-            let Some(e) = f.expr().and_then(rename) else { continue };
-            let mut nf = Formula::from_expr(e);
-            nf.array = f.array;
-            nf.dynamic = f.dynamic;
-            if let Some(cell) = sh.cells.get_mut(c) {
-                cell.formula = Some(std::sync::Arc::new(nf));
-            }
-        }
+    // Every reference held where the renamed name is the one meant: on its sheet (or, for a
+    // workbook name, every sheet without one of its own), and in workbook names.
+    wb.rewrite_references(&|host, e| if host.sheet.is_none_or(applies) { rename(e) } else { e });
+    // Python cells' `xl("…")` references too.
+    let sheet_of: std::collections::HashMap<String, usize> = wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
+    crate::cmd::edit::rewrite_python_refs(wb, &|host, e| {
+        if sheet_of.get(&host.to_ascii_lowercase()).copied().is_none_or(applies) { rename(e) } else { e }
+    })?;
+    if captured.get() {
+        return Err(EngineError::Other(format!(
+            "The name can't be changed to {new}: a LET or LAMBDA in a formula that uses it already has a local name {new}."
+        )));
     }
-    for n in wb.names.iter_mut() {
-        if n.scope.is_none_or(applies)
-            && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
-        {
-            n.formula = gridcraft_formula::print(&e);
+    Ok(())
+}
+
+/// `e` with every free occurrence of the name `old` renamed to `new`. A LET or LAMBDA local is not
+/// the defined name, so its own occurrences (of `old`) are left alone, and a free occurrence
+/// inside the scope of a local named `new` would be captured by it: that sets `captured`. `bound`
+/// holds the locals in scope. Nesting deeper than any formula the parser accepts is left as it is.
+fn rename_free_name(
+    e: gridcraft_formula::Expr,
+    old: &str,
+    new: &str,
+    bound: &mut Vec<String>,
+    captured: &std::cell::Cell<bool>,
+    depth: usize,
+) -> gridcraft_formula::Expr {
+    use gridcraft_formula::Expr;
+    const MAX_DEPTH: usize = 512;
+    if depth > MAX_DEPTH {
+        return e;
+    }
+    let is_bound = |bound: &[String], n: &str| bound.iter().any(|b| b.eq_ignore_ascii_case(n));
+    let walk = |e: Expr, bound: &mut Vec<String>| rename_free_name(e, old, new, bound, captured, depth + 1);
+    match e {
+        Expr::Name(n) if n.eq_ignore_ascii_case(old) && !is_bound(bound, &n) => {
+            if is_bound(bound, new) {
+                captured.set(true);
+            }
+            Expr::Name(new.to_string())
         }
+        Expr::Call(name, args) if name == "LET" && args.len() >= 3 && !args.len().is_multiple_of(2) => {
+            let saved = bound.len();
+            let mut args = args;
+            // The arguments are odd in number: pairs of a declaration and its value, then the body.
+            let body = args.pop();
+            let mut out = Vec::with_capacity(args.len() + 1);
+            let mut pairs = args.into_iter();
+            while let (Some(declaration), Some(value)) = (pairs.next(), pairs.next()) {
+                // A value comes before its own local is in scope; the declaration is the local's
+                // own name, never the defined name.
+                let value = walk(value, bound);
+                if let Expr::Name(n) = &declaration {
+                    bound.push(n.clone());
+                }
+                out.push(declaration);
+                out.push(value);
+            }
+            out.extend(body.map(|b| walk(b, bound)));
+            bound.truncate(saved);
+            Expr::Call(name, out)
+        }
+        Expr::Call(name, args) if name == "LAMBDA" => {
+            let saved = bound.len();
+            let last = args.len().saturating_sub(1);
+            let mut out = Vec::with_capacity(args.len());
+            for (i, arg) in args.into_iter().enumerate() {
+                if i == last {
+                    out.push(walk(arg, bound));
+                } else {
+                    if let Expr::Name(n) = &arg {
+                        bound.push(n.clone());
+                    }
+                    out.push(arg);
+                }
+            }
+            bound.truncate(saved);
+            Expr::Call(name, out)
+        }
+        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| walk(a, bound)).collect()),
+        Expr::Invoke(callee, args) => Expr::Invoke(Box::new(walk(*callee, bound)), args.into_iter().map(|a| walk(a, bound)).collect()),
+        Expr::Array(rows) => Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|x| walk(x, bound)).collect()).collect()),
+        Expr::Unary(op, x) => Expr::Unary(op, Box::new(walk(*x, bound))),
+        Expr::Binary(op, a, b) => {
+            // A long operator chain is unwound, not recursed into once per operand (as
+            // `Expr::map` does), so its length doesn't count toward the nesting limit.
+            let mut spine = vec![(op, b)];
+            let mut node = *a;
+            while let Expr::Binary(op, a, b) = node {
+                spine.push((op, b));
+                node = *a;
+            }
+            let mut acc = walk(node, bound);
+            while let Some((op, b)) = spine.pop() {
+                let b = walk(*b, bound);
+                acc = Expr::Binary(op, Box::new(acc), Box::new(b));
+            }
+            acc
+        }
+        Expr::Paren(x) => Expr::Paren(Box::new(walk(*x, bound))),
+        other => other,
     }
 }
 
@@ -960,14 +1040,30 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = f64_param(p, "maxChange") {
             cx.wb.calc.set_max_change(v);
         }
+        let precision = bool_param(p, "precisionAsDisplayed");
+        if let Some(v) = precision {
+            cx.wb.calc.precision_as_displayed = v;
+            if v && !before.precision_as_displayed {
+                crate::cmd::round_all_constants_as_displayed(&mut cx.wb);
+            }
+        }
         let c = &cx.wb.calc;
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
         let iteration_changed = (c.iterative, c.max_iterations, c.max_change) != (before.iterative, before.max_iterations, before.max_change);
-        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) {
+        // Switching precision as displayed recalculates the workbook, in manual mode too, so the
+        // values change as soon as it is switched on or off.
+        let precision_changed = c.precision_as_displayed != before.precision_as_displayed;
+        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
             cx.structural = true;
         }
-        Ok(json!({"mode": format!("{:?}", c.mode), "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change}))
+        Ok(json!({
+            "mode": format!("{:?}", c.mode),
+            "iterative": c.iterative,
+            "maxIterations": c.max_iterations,
+            "maxChange": c.max_change,
+            "precisionAsDisplayed": c.precision_as_displayed,
+        }))
     })
 }
 

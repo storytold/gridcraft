@@ -23,7 +23,7 @@ use cell::{cell_set, range_fill, range_set_values};
 pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
-use clipboard::{clear_clipboard, copy, cut, paste};
+use clipboard::{clear_clipboard, copy, cut, paste, range_move};
 use fill::{auto_fill, fill_dir, fill_series, flash_fill};
 #[cfg(test)]
 use find::replace_ci;
@@ -35,8 +35,8 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
-use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
+pub(crate) use paste_special::{place_moved_rules, rewrite_all_formulas_many, rewrite_python_refs};
+use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -62,6 +62,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "selection.set", "Select", [], None, "{range: \"A1:B2,D4\" | cell, active?: \"A1\", sheet?}", has_doc, selection_set),
         cmd!(noundo "selection.move", "Move Selection", [], None, "{dr, dc, extend?: bool, jump?: bool (Ctrl+arrow), page?: bool}", has_doc, selection_move),
         cmd!(noundo "selection.next", "Next Cell in Selection", [], None, "{forward?: true, byRow?: false} (Enter/Tab inside a selection)", has_doc, selection_next),
+        cmd!(
+            noundo "selection.nextCorner",
+            "Next Corner of Selection",
+            [],
+            Some("Ctrl+."),
+            "{} (the active cell moves clockwise to the next corner of the selected area, which stays selected)",
+            has_doc,
+            selection_next_corner
+        ),
         cmd!(noundo "edit.selectAll", "Select All", ["Edit"], Some("Cmd+A"), "{} (current region first, then the whole sheet)", has_doc, select_all),
         cmd!(noundo "selection.currentRegion", "Select Current Region", [], Some("Ctrl+Shift+8"), "{}", has_doc, select_region),
         cmd!(noundo "selection.row", "Select Entire Row", [], Some("Shift+Space"), "{}", has_doc, select_row),
@@ -80,6 +89,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{at?: \"C3\", text?: \"tab-separated text from the system clipboard\", html?: \"the clipboard's HTML flavour; cells the source recorded as numbers (x:num, sdval) stay numbers\"}",
             has_doc,
             paste
+        ),
+        cmd!(
+            "range.move",
+            "Drag and Drop",
+            [],
+            None,
+            "{range?, to: \"C3\", overwrite?: bool} (drag the selection's border: a cut and paste that asks before replacing data unless overwrite)",
+            has_doc,
+            range_move
         ),
         CommandSpec {
             shortcut_mac: Some("Ctrl+Cmd+V"),
@@ -112,7 +130,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AutoFill",
             [],
             None,
-            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday)",
+            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years|linearTrend|growthTrend}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday; linearTrend, growthTrend = Linear Trend, Growth Trend: the targets continue the least-squares line or the exponential curve fitted to each row or column of source numbers, and the source keeps its values; an error when a source cell is not a number or holds a formula, or for growthTrend when a row or column mixes signs or holds zero)",
             has_doc,
             auto_fill
         ),
@@ -126,13 +144,13 @@ pub fn specs() -> Vec<CommandSpec> {
             fill_series
         ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
-        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook}", has_doc, find),
+        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook|selection} (selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
         cmd!(
             "edit.replace",
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook|selection} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),
@@ -188,6 +206,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -209,6 +228,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -221,7 +241,12 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
 fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
-    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
+    let spans = sh.filter_row_spans();
+    if spans.is_empty() {
+        return Default::default();
+    }
+    let filtered = |row: u32| spans.iter().any(|&(first, last)| row >= first && row <= last);
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
 }
 
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
@@ -244,21 +269,36 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
             })
         })
     };
+    // Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+    // doesn't see them go: a locked cell's are refused here, stored cell or not.
+    if matches!(what, "all" | "comments" | "hyperlinks") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet).filter(|sh| sh.is_protected()) {
+            for &whole in &ranges {
+                let skip = filtered_rows(sh, whole);
+                let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                for &c in notes.chain(links).filter(|c| whole.contains(**c) && !skip.contains(&c.row)) {
+                    if d.wb.styles.get(sh.style_id(c)).protection.locked
+                        && let Some(m) = locked_cell_error(sh, c, &d.unlocked_ranges)
+                    {
+                        return Err(EngineError::Other(m));
+                    }
+                }
+            }
+        }
+    }
     edit(s, |cx| {
-        for r in &ranges {
-            let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
-                Some(u) => match r.intersection(&u) {
-                    Some(x) => x,
-                    None => continue,
-                },
-                None => continue,
+        for &whole in &ranges {
+            // Cells are only stored inside the used range. Notes and links are kept apart from
+            // them, so they are cleared over the whole range: one from a file can sit on a cell
+            // with nothing stored in it.
+            let used = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| whole.intersection(&u));
+            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, whole)).unwrap_or_default();
+            let cells: Vec<(CellRef, Cell)> = match (cx.wb.sheet(sheet), used) {
+                (Some(sh), Some(r)) => sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect(),
+                _ => Vec::new(),
             };
-            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, r)).unwrap_or_default();
-            let cells: Vec<(CellRef, Cell)> = cx
-                .wb
-                .sheet(sheet)
-                .map(|sh| sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect())
-                .unwrap_or_default();
             // Report every stored cell we touch, even beyond a million coordinates in a sparse
             // selection. Removed formula anchors must also reach calc so their spills disappear.
             cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
@@ -278,6 +318,18 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     }
                 }
             }
+            let cleared = |c: CellRef| whole.contains(c) && !skip.contains(&c.row);
+            // A removed note or link changes its cell even with nothing stored there.
+            let metadata: Vec<CellRef> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| {
+                    let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                    let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                    notes.chain(links).copied().filter(|c| cleared(*c)).collect()
+                })
+                .unwrap_or_default();
+            cx.changed.extend(metadata.into_iter().map(|c| (sheet, c)));
             let sh = cx.sheet_mut(sheet)?;
             for (c, mut cell) in cells {
                 match what {
@@ -294,14 +346,15 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     _ => {}
                 }
             }
-            let cleared = |c: CellRef| r.contains(c) && !skip.contains(&c.row);
             if matches!(what, "all" | "comments") {
                 sh.comments.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "hyperlinks") {
                 sh.hyperlinks.retain(|c, _| !cleared(*c));
             }
-            if matches!(what, "all" | "formats") {
+            if let Some(r) = used
+                && matches!(what, "all" | "formats")
+            {
                 let mut unmerged = false;
                 sh.merges.retain(|m| {
                     let keep = !r.contains_range(m) || skip.range(m.start.row..=m.end.row).next().is_some();

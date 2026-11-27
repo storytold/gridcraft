@@ -3,6 +3,11 @@ use super::{
     block, bool_param, edit, json, rewrite, shift_cell_features, str_param, target_range, target_sheet, with,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- tables
 
 pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
@@ -51,7 +56,7 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The header row pushes the data down one row: never off the end of the sheet.
             let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            if sh.cells.iter_range(last).any(|(_, x)| x.has_content()) {
                 return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
             }
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
@@ -68,6 +73,13 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             cx.structural = true;
             RangeRef::new(r.start, CellRef::new((r.end.row + 1).min(MAX_ROWS - 1), r.end.col))
         };
+        let sh = cx.sheet_mut(sheet)?;
+        // As in Excel, the table unmerges the merged cells it covers: a table can't hold them.
+        let merged = sh.merges.len();
+        sh.merges.retain(|m| !m.intersects(&r));
+        if sh.merges.len() != merged {
+            cx.structural = true;
+        }
         let sh = cx.sheet_mut(sheet)?;
         let mut names: Vec<String> = Vec::new();
         // Lower-case names taken, and the next suffix for each header, so that thousands of equal
@@ -211,7 +223,10 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(
+                c,
+                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+            );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
@@ -285,28 +300,39 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = cx.sheet_mut(si)?.tables.get_mut(ti) {
             t.name = name.clone();
         }
-        // Structured references follow the rename.
+        // Every reference to the table follows the rename. A bare name that is also a defined
+        // name where it is held resolves to the defined name, so it is not the table; in a
+        // workbook name, that is a workbook-level defined name.
+        let shadowed: Vec<bool> = (0..cx.wb.sheets.len()).map(|i| cx.wb.name(&old, i).is_some()).collect();
+        let shadowed_in_book = cx.wb.names.iter().any(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(&old));
+        let sheet_of: std::collections::HashMap<String, usize> =
+            cx.wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
+        let rename = |sheet: Option<usize>, e: gridcraft_formula::Expr| {
+            let shadow = sheet.map_or(shadowed_in_book, |i| shadowed.get(i).copied().unwrap_or(false));
+            e.map(&mut |x| match x {
+                gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                    st.table = name.clone();
+                    gridcraft_formula::Expr::Struct(st)
+                }
+                gridcraft_formula::Expr::Name(n) if !shadow && n.eq_ignore_ascii_case(&old) => gridcraft_formula::Expr::Name(name.clone()),
+                o => o,
+            })
+        };
+        cx.wb.rewrite_references(&|host, e| rename(host.sheet, e));
+        // A bare PivotTable source binds to a table before a defined name (`pivot::resolve_source`),
+        // so a defined name with the old name doesn't shadow it: it follows the rename regardless.
         for i in 0..cx.wb.sheets.len() {
-            let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
-                cx.wb.sheets.get(i).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
-            // A bare name that is also a defined name resolves to the defined name, so it is not the table.
-            let shadowed = cx.wb.name(&old, i).is_some();
-            let Some(sh) = cx.wb.sheet_mut(i) else { continue };
-            for (c, f) in keys {
-                let Some(e) = f.expr() else { continue };
-                let ne = e.map(&mut |x| match x {
-                    gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
-                        st.table = name.clone();
-                        gridcraft_formula::Expr::Struct(st)
-                    }
-                    gridcraft_formula::Expr::Name(n) if !shadowed && n.eq_ignore_ascii_case(&old) => gridcraft_formula::Expr::Name(name.clone()),
-                    o => o,
-                });
-                if let Some(cell) = sh.cells.get_mut(c) {
-                    cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+            let names_old = |src: &str| src.trim().trim_start_matches('=').trim().eq_ignore_ascii_case(&old);
+            if !cx.wb.sheet(i).is_some_and(|sh| sh.pivots.iter().any(|pt| names_old(&pt.source))) {
+                continue;
+            }
+            for pt in &mut cx.sheet_mut(i)?.pivots {
+                if names_old(&pt.source) {
+                    pt.source = name.clone();
                 }
             }
         }
+        crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|host, e| rename(sheet_of.get(&host.to_ascii_lowercase()).copied(), e))?;
         cx.structural = true;
         Ok(Json::Null)
     })

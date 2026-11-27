@@ -1,8 +1,10 @@
 //! Excel-compatible password hashes for protection (ECMA-376 Part 1 §18.2.29 and §18.3.1.66
 //! attribute sets): the legacy 16-bit hash (`password="CC1A"`) and the iterated, salted hash
-//! (`algorithmName`, `hashValue`, `saltValue`, `spinCount`). Protection is a convenience, not
-//! security, but verification really checks the password: an unsupported variant is refused,
-//! never accepted.
+//! (`algorithmName`, `hashValue`, `saltValue`, `spinCount`); and the unsalted SHA-256 digest
+//! OpenDocument stores (`table:protection-key`). A sheet or workbook password set in GridCraft
+//! keeps both an Excel form and the SHA-256 one, so it survives saving in either format (edit
+//! ranges keep only the Excel form). Protection is a convenience, not security, but verification
+//! really checks the password: an unsupported variant is refused, never accepted.
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
@@ -12,13 +14,82 @@ pub const DEFAULT_SPIN_COUNT: u32 = 100_000;
 /// Largest spin count accepted when verifying (the documented maximum); a file asking for more
 /// would only make verification hang.
 pub const MAX_SPIN_COUNT: u32 = 10_000_000;
+/// Largest decoded hash or salt accepted from a file (a SHA-512 hash is 64 bytes, Excel's salts
+/// 16); anything longer is damaged, and decoding it would only allocate.
+const MAX_STORED_BYTES: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredHash", into = "StoredHash")]
 pub enum PasswordHash {
     /// The legacy 16-bit hash.
     Legacy(u16),
     /// An iterated, salted hash as stored in the file: algorithm name, base64 hash and salt.
     Iterated { algorithm: String, hash: String, salt: String, spin_count: u32 },
+    /// The base64 SHA-256 digest of the password's UTF-8 bytes, unsalted: the form OpenDocument
+    /// stores in `table:protection-key` (ODF 1.3 part 3 §19.701) when
+    /// `table:protection-key-digest-algorithm` (§19.702) names SHA-256. A writer writes both
+    /// attributes; a key under any other or no digest algorithm is not this form.
+    Sha256Digest(String),
+    /// A password set in GridCraft, kept in the form each file format stores: Excel's hash
+    /// (which verifies it) and the SHA-256 digest.
+    Both { excel: Box<PasswordHash>, odf: String },
+}
+
+/// How a [`PasswordHash`] is saved in a GridCraft JSON workbook. A password set in GridCraft
+/// (`Both` with an iterated Excel form, the usual case) is saved in the `Iterated` shape older
+/// GridCraft versions read, with the SHA-256 digest in an extra `odf` field they ignore, so an
+/// ordinary Protect Sheet or Protect Workbook doesn't make a workbook unreadable to them. The
+/// shapes older versions don't know (`Sha256Digest`, and `Both` over a legacy hash) come only
+/// from OpenDocument files, which those versions can't open either.
+#[derive(Serialize, Deserialize)]
+enum StoredHash {
+    Legacy(u16),
+    Iterated {
+        algorithm: String,
+        hash: String,
+        salt: String,
+        spin_count: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        odf: Option<String>,
+    },
+    Sha256Digest(String),
+    Both {
+        excel: Box<PasswordHash>,
+        odf: String,
+    },
+}
+
+impl From<StoredHash> for PasswordHash {
+    fn from(s: StoredHash) -> PasswordHash {
+        match s {
+            StoredHash::Legacy(h) => PasswordHash::Legacy(h),
+            StoredHash::Iterated { algorithm, hash, salt, spin_count, odf } => {
+                let iterated = PasswordHash::Iterated { algorithm, hash, salt, spin_count };
+                match odf {
+                    Some(odf) => PasswordHash::Both { excel: Box::new(iterated), odf },
+                    None => iterated,
+                }
+            }
+            StoredHash::Sha256Digest(k) => PasswordHash::Sha256Digest(k),
+            StoredHash::Both { excel, odf } => PasswordHash::Both { excel, odf },
+        }
+    }
+}
+
+impl From<PasswordHash> for StoredHash {
+    fn from(h: PasswordHash) -> StoredHash {
+        match h {
+            PasswordHash::Legacy(h) => StoredHash::Legacy(h),
+            PasswordHash::Iterated { algorithm, hash, salt, spin_count } => StoredHash::Iterated { algorithm, hash, salt, spin_count, odf: None },
+            PasswordHash::Sha256Digest(k) => StoredHash::Sha256Digest(k),
+            PasswordHash::Both { excel, odf } => match *excel {
+                PasswordHash::Iterated { algorithm, hash, salt, spin_count } => {
+                    StoredHash::Iterated { algorithm, hash, salt, spin_count, odf: Some(odf) }
+                }
+                excel => StoredHash::Both { excel: Box::new(excel), odf },
+            },
+        }
+    }
 }
 
 impl PasswordHash {
@@ -33,11 +104,49 @@ impl PasswordHash {
         }
     }
 
+    /// A SHA-256 digest of a new password (the form OpenDocument stores).
+    pub fn new_sha256_digest(password: &str) -> PasswordHash {
+        PasswordHash::Sha256Digest(sha256_digest(password))
+    }
+
+    /// A new password in every form a file keeps: Excel's (SHA-512, salted) and the SHA-256
+    /// digest, so it survives saving in either format.
+    pub fn new_for_files(password: &str, salt: &[u8]) -> PasswordHash {
+        PasswordHash::Both { excel: Box::new(PasswordHash::new_sha512(password, salt)), odf: sha256_digest(password) }
+    }
+
+    /// The hash as Excel stores it, if it has that form. Not recursive: a `Both` read from a
+    /// damaged file that nests another `Both` has no Excel form.
+    pub fn excel(&self) -> Option<&PasswordHash> {
+        match self {
+            PasswordHash::Legacy(_) | PasswordHash::Iterated { .. } => Some(self),
+            PasswordHash::Sha256Digest(_) => None,
+            PasswordHash::Both { excel, .. } => match excel.as_ref() {
+                h @ (PasswordHash::Legacy(_) | PasswordHash::Iterated { .. }) => Some(h),
+                PasswordHash::Sha256Digest(_) | PasswordHash::Both { .. } => None,
+            },
+        }
+    }
+
+    /// The SHA-256 digest (base64), if it has that form.
+    pub fn odf_key(&self) -> Option<&str> {
+        match self {
+            PasswordHash::Sha256Digest(k) | PasswordHash::Both { odf: k, .. } => Some(k),
+            PasswordHash::Legacy(_) | PasswordHash::Iterated { .. } => None,
+        }
+    }
+
     /// Whether `password` matches. `Err` when the hash can't be checked (unsupported algorithm,
     /// broken base64, spin count over [`MAX_SPIN_COUNT`]).
     pub fn verify(&self, password: &str) -> Result<bool, String> {
         match self {
             PasswordHash::Legacy(h) => Ok(legacy_hash(password) == *h),
+            // Checked through its Excel form (one level only: see `excel`), else its digest.
+            PasswordHash::Both { odf, .. } => match self.excel() {
+                Some(excel) => excel.verify(password),
+                None => verify_sha256_digest(odf, password),
+            },
+            PasswordHash::Sha256Digest(hash) => verify_sha256_digest(hash, password),
             PasswordHash::Iterated { algorithm, hash, salt, spin_count } => {
                 if algorithm.is_empty() {
                     return Err("the stored password hash is damaged".into());
@@ -45,10 +154,13 @@ impl PasswordHash {
                 if *spin_count > MAX_SPIN_COUNT {
                     return Err(format!("the password uses a spin count of {spin_count}, more than the {MAX_SPIN_COUNT} allowed"));
                 }
-                let (Some(want), Some(salt)) = (crate::b64::decode(hash), crate::b64::decode(salt)) else {
+                let (Some(want), Some(salt)) =
+                    (crate::b64::decode_limited(hash, MAX_STORED_BYTES), crate::b64::decode_limited(salt, MAX_STORED_BYTES))
+                else {
                     return Err("the stored password hash is damaged".into());
                 };
                 let got = match algorithm.to_ascii_uppercase().replace('_', "-").as_str() {
+                    "SHA-1" => iterated::<sha1::Sha1>(password, &salt, *spin_count),
                     "SHA-512" => iterated::<sha2::Sha512>(password, &salt, *spin_count),
                     "SHA-384" => iterated::<sha2::Sha384>(password, &salt, *spin_count),
                     "SHA-256" => iterated::<sha2::Sha256>(password, &salt, *spin_count),
@@ -58,6 +170,16 @@ impl PasswordHash {
             }
         }
     }
+}
+
+/// The base64 SHA-256 digest of `password`'s UTF-8 bytes.
+fn sha256_digest(password: &str) -> String {
+    crate::b64::encode(&sha2::Sha256::digest(password.as_bytes()))
+}
+
+fn verify_sha256_digest(hash: &str, password: &str) -> Result<bool, String> {
+    let want = crate::b64::decode_limited(hash, 64).ok_or_else(|| "the stored password hash is damaged".to_string())?;
+    Ok(sha2::Sha256::digest(password.as_bytes()).as_slice() == want.as_slice())
 }
 
 /// A 16-byte salt derived from `seed` (callers mix in what varies: names, a counter, the clock).
@@ -116,6 +238,19 @@ mod tests {
     }
 
     #[test]
+    fn sha1_iterated_hash_verifies_the_correct_password() {
+        // Known answer for "s3cret", salt "0123456789abcdef", spin count 10, computed outside this code.
+        let h = PasswordHash::Iterated {
+            algorithm: "SHA-1".into(),
+            hash: "b2+ArdbduWEP3TNb+4NZg6qjkEk=".into(),
+            salt: crate::b64::encode(b"0123456789abcdef"),
+            spin_count: 10,
+        };
+        assert!(h.verify("s3cret").unwrap());
+        assert!(!h.verify("s3cret ").unwrap());
+    }
+
+    #[test]
     fn iterated_hash_verifies_and_refuses_what_it_cannot_check() -> Result<(), Box<dyn std::error::Error>> {
         let h = PasswordHash::new_sha512("s3cret", b"0123456789abcdef");
         assert!(h.verify("s3cret")?);
@@ -124,12 +259,79 @@ mod tests {
         let PasswordHash::Iterated { hash, salt, .. } = h else { return Err("not an iterated hash".into()) };
         let other =
             |algorithm: &str, spin_count| PasswordHash::Iterated { algorithm: algorithm.into(), hash: hash.clone(), salt: salt.clone(), spin_count };
-        assert!(other("SHA-1", 10).verify("s3cret").is_err());
+        assert!(!other("SHA-1", 10).verify("s3cret").unwrap());
         assert!(other("MD5", 10).verify("s3cret").is_err());
         assert!(other("SHA-512", MAX_SPIN_COUNT + 1).verify("s3cret").is_err());
         assert!(!other("SHA-256", 2).verify("s3cret")?);
         let broken = PasswordHash::Iterated { algorithm: "SHA-512".into(), hash: "!!".into(), salt: salt.clone(), spin_count: 1 };
         assert!(broken.verify("s3cret").is_err());
+        let huge_salt = PasswordHash::Iterated { algorithm: "SHA-512".into(), hash, salt: "A".repeat(4 * MAX_STORED_BYTES), spin_count: 1 };
+        assert!(huge_salt.verify("s3cret").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn sha256_digests_verify() -> Result<(), Box<dyn std::error::Error>> {
+        // SHA-256 of "abc", base64.
+        let h = PasswordHash::Sha256Digest("ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=".into());
+        assert_eq!(h, PasswordHash::new_sha256_digest("abc"));
+        assert!(h.verify("abc")?);
+        assert!(!h.verify("abd")?);
+        assert!(PasswordHash::Sha256Digest("!!".into()).verify("abc").is_err());
+        assert_eq!(h.excel(), None);
+        assert_eq!(h.odf_key(), Some("ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0="));
+        Ok(())
+    }
+
+    #[test]
+    fn passwords_set_in_gridcraft_keep_both_forms() -> Result<(), Box<dyn std::error::Error>> {
+        let h = PasswordHash::new_for_files("pa55", b"0123456789abcdef");
+        assert_eq!(h.excel(), Some(&PasswordHash::new_sha512("pa55", b"0123456789abcdef")));
+        assert_eq!(h.odf_key(), PasswordHash::new_sha256_digest("pa55").odf_key());
+        assert!(h.verify("pa55")?);
+        assert!(!h.verify("pass")?);
+        // Each form checks the password on its own.
+        assert!(h.excel().ok_or("no Excel form")?.verify("pa55")?);
+        assert!(PasswordHash::Sha256Digest(h.odf_key().ok_or("no digest")?.into()).verify("pa55")?);
+        // A nested `Both` (only a damaged file makes one) has no Excel form and falls back to its digest.
+        let nested = PasswordHash::Both { excel: Box::new(h.clone()), odf: PasswordHash::new_sha256_digest("x").odf_key().unwrap_or("").into() };
+        assert_eq!(nested.excel(), None);
+        assert!(nested.verify("x")?);
+        assert!(!nested.verify("pa55")?);
+        // The JSON form round-trips.
+        let back: PasswordHash = serde_json::from_str(&serde_json::to_string(&h)?)?;
+        assert_eq!(back, h);
+        Ok(())
+    }
+
+    /// An ordinary password set in GridCraft is saved in the shape an older GridCraft reads (its
+    /// `PasswordHash` had only `Legacy` and `Iterated`), and reads back with both forms.
+    #[test]
+    fn a_gridcraft_password_is_saved_so_older_versions_read_it() -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        enum OlderPasswordHash {
+            Legacy(u16),
+            Iterated { algorithm: String, hash: String, salt: String, spin_count: u32 },
+        }
+        let both = PasswordHash::new_for_files("pa55", b"0123456789abcdef");
+        let saved = serde_json::to_string(&both)?;
+        let older: OlderPasswordHash = serde_json::from_str(&saved)?;
+        let Some(PasswordHash::Iterated { algorithm, hash, salt, spin_count }) = both.excel().cloned() else {
+            return Err("no Excel form".into());
+        };
+        assert_eq!(older, OlderPasswordHash::Iterated { algorithm, hash, salt, spin_count });
+        // This version reads both forms back.
+        let back: PasswordHash = serde_json::from_str(&saved)?;
+        assert_eq!(back, both);
+        assert!(back.verify("pa55")?);
+        // What an older version saved still opens.
+        let excel_only = PasswordHash::new_sha512("pa55", b"0123456789abcdef");
+        let back: PasswordHash = serde_json::from_str(&serde_json::to_string(&excel_only)?)?;
+        assert_eq!(back, excel_only);
+        assert_eq!(serde_json::from_str::<PasswordHash>("{\"Legacy\":52250}")?, PasswordHash::Legacy(52250));
+        // A legacy hash with a digest has no older shape and keeps its own.
+        let legacy_both = PasswordHash::Both { excel: Box::new(PasswordHash::Legacy(52250)), odf: "AA==".into() };
+        assert_eq!(serde_json::from_str::<PasswordHash>(&serde_json::to_string(&legacy_both)?)?, legacy_both);
         Ok(())
     }
 }
