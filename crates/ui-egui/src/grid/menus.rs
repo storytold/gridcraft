@@ -31,14 +31,9 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
-    let values = gridcraft_engine::cmd::data::filter_values(&wb, si, col);
-    let key = egui::Id::unique(("filter_sel", col));
-    let search_key = egui::Id::unique(("filter_search", col));
-    let buttons_key = egui::Id::unique(("filter_buttons", col));
     // Enter is the menu's OK, as in Excel: taken before the search box (which would only drop its
     // focus) and the value checkboxes (which would toggle) see it. A focused button keeps it as its click.
-    let buttons: Vec<egui::Id> = ui.ctx().data_mut(|d| d.get_temp(buttons_key)).unwrap_or_default();
-    let on_button = ui.ctx().memory(|m| m.focused()).is_some_and(|f| buttons.contains(&f));
+    let on_button = ui.ctx().memory(|m| m.focused()).is_some_and(|f| app.grid.filter_buttons.contains(&f));
     let enter = !on_button && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut close = false;
     let area = egui::Area::new(egui::Id::unique("filter_menu")).fixed_pos(at + vec2(-180.0, 10.0)).order(egui::Order::Foreground);
@@ -57,35 +52,40 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             ui.separator();
             ui.label(egui::RichText::new("Filter").strong());
-            let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
+            let mut checks = app.grid.filter_checks.clone().unwrap_or_else(|| gridcraft_engine::cmd::data::filter_choices(&wb, si, col));
             // A search narrows the list; Select All and Apply then only cover the matches.
-            let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
+            let mut search = app.grid.filter_search.clone();
             let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
             let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+            let all = checks.iter().filter(|c| matches(&c.label)).all(|c| c.checked);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
             if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    c.1 = all_new;
+                for c in checks.iter_mut().filter(|c| matches(&c.label)) {
+                    c.checked = all_new;
                 }
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, v.as_str());
+                for c in checks.iter_mut().filter(|c| matches(&c.label)) {
+                    ui.checkbox(&mut c.checked, c.label.as_str());
                 }
             });
-            ui.ctx().data_mut(|d| {
-                d.insert_temp(key, checks.clone());
-                d.insert_temp(search_key, search.clone());
-            });
-            let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
+            app.grid.filter_checks = Some(checks.clone());
+            app.grid.filter_search.clone_from(&search);
+            let visible_checks: Vec<gridcraft_engine::cmd::data::FilterChoice> = checks
+                .iter()
+                .cloned()
+                .map(|mut c| {
+                    c.checked &= matches(&c.label);
+                    c
+                })
+                .collect();
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button("Clear Filter");
@@ -94,17 +94,16 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(|(_, on)| *on);
+                let any = visible_checks.iter().any(|c| c.checked);
                 let apply = ui.button("Apply");
-                ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
+                app.grid.filter_buttons = vec![ascending.id, descending.id, clear.id, apply.id];
                 if apply.clicked() || (enter && any) {
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
-                        json!({"column": col_to_letters(col), "clear": true})
-                    } else {
-                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
-                    };
+                    let mut merged = gridcraft_engine::cmd::data::filter_choices_selection(&wb, si, col, &visible_checks);
+                    for c in &mut merged {
+                        c.checked &= matches(&c.label);
+                    }
+                    let active_checks: Vec<_> = merged.iter().map(|c| (c, c.checked)).collect();
+                    let p = gridcraft_engine::cmd::data::filter_choices_params(&col_to_letters(col), &active_checks);
                     let _ = app.run("data.filterBy", p);
                     close = true;
                 }
@@ -112,11 +111,9 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
-        ui.ctx().data_mut(|d| {
-            d.remove::<Vec<(String, bool)>>(key);
-            d.remove::<String>(search_key);
-            d.remove::<Vec<egui::Id>>(buttons_key);
-        });
+        app.grid.filter_checks = None;
+        app.grid.filter_search.clear();
+        app.grid.filter_buttons.clear();
         app.grid.filter_menu = None;
     }
 }
@@ -198,12 +195,16 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
                                 let a = d.selection.active;
-                                let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
+                                let col = col_to_letters(a.col);
+                                let params =
+                                    d.wb.active()
+                                        .map(|sh| gridcraft_engine::cmd::data::filter_by_cell_params(&d.wb, sh, a, &col))
+                                        .unwrap_or_else(|| json!({"column": col, "values": [], "blanks": true}));
                                 let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
                                 if !has {
                                     let _ = app.run("data.filter", json!({}));
                                 }
-                                app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
+                                app.run_or_alert("data.filterBy", params);
                             }
                         }
                         "edit.copy" | "edit.cut" => {
@@ -221,7 +222,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     // menu, so it doesn't count as a click elsewhere.
     let opened_now = app.grid.context_menu_frame == ui.ctx().cumulative_frame_nr();
     if close
-        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        || crate::framework::escape_pressed(ui.ctx())
         || (!opened_now
             && ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
@@ -272,6 +273,26 @@ const DATE_FILL_MODES: [(&str, &str); 4] = [("Fill Days", "days"), ("Fill Weekda
 fn fill_modes(app: &SheetApp, src: RangeRef) -> Vec<(&'static str, &'static str)> {
     let dates = app.session.active().is_some_and(|d| gridcraft_engine::fill::starts_with_date(&d.wb, d.wb.active_sheet(), src));
     FILL_MODES.into_iter().chain(DATE_FILL_MODES.into_iter().filter(|_| dates)).collect()
+}
+
+/// Linear Trend and Growth Trend, which the right-drag fill menu adds after the other fill modes
+/// when they apply to a fill from `src` to `target` on the active sheet.
+fn trend_fill_modes(app: &mut SheetApp, src: RangeRef, target: RangeRef) -> Vec<(&'static str, &'static str)> {
+    let Some(d) = app.session.active() else { return Vec::new() };
+    let key = (d.uid, d.revision, d.wb.active_sheet(), src, target);
+    if let Some((k, modes)) = &app.grid.fill_menu_trends
+        && *k == key
+    {
+        return modes.clone();
+    }
+    let (linear, growth) = gridcraft_engine::fill::trends_that_apply(&d.wb, d.wb.active_sheet(), src, target);
+    let modes: Vec<(&'static str, &'static str)> = [("Linear Trend", "linearTrend", linear), ("Growth Trend", "growthTrend", growth)]
+        .into_iter()
+        .filter(|(_, _, applies)| *applies)
+        .map(|(label, mode, _)| (label, mode))
+        .collect();
+    app.grid.fill_menu_trends = Some((key, modes.clone()));
+    modes
 }
 
 /// Remembers the fill just made so the Auto Fill Options button can offer the other ways.
@@ -357,6 +378,7 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((src, target, at)) = app.grid.fill_menu else { return };
     let mut close = false;
     let mut items = fill_modes(app, src);
+    items.extend(trend_fill_modes(app, src, target));
     items.extend([("-", ""), ("Series…", "ui:series")]);
     let response = egui::Area::new(egui::Id::unique("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -385,14 +407,22 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     }
 }
 
-/// The right-click menu of a chart, picture, shape or slicer.
+/// The right-click menu of a chart, picture, shape, slicer or form control (Edit Text and Assign
+/// Action for a button, and Format Control, before Delete).
 pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some((at, kind, id)) = app.grid.object_menu else { return };
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            let mut items = vec![("Delete", "object.delete")];
+            let mut items = vec![];
+            if kind == "control" {
+                if crate::control_ui::is_button(app, id) {
+                    items.extend([("Edit Text", "ui:editText"), ("Assign Action…", "ui:assignAction")]);
+                }
+                items.extend([("Format Control…", "ui:formatControl"), ("-", "")]);
+            }
+            items.push(("Delete", "object.delete"));
             if kind == "chart" {
                 items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
             }
@@ -407,6 +437,9 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     match action {
                         "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
                         "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+                        "ui:editText" => app.open_dialog("formatControl", json!({"id": id, "textOnly": true})),
+                        "ui:assignAction" => app.open_dialog("assignAction", json!({"id": id})),
+                        "ui:formatControl" => app.open_dialog("formatControl", json!({"id": id})),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
                             app.selected_object = None;
@@ -417,7 +450,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         });
     });
     if close
-        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        || crate::framework::escape_pressed(ui.ctx())
         || (ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
@@ -485,7 +518,7 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                     ("Copy", "edit.copy"),
                     ("Paste", "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertRows"),
+                    ("Header Menu|Insert", "home.insertRows"),
                     ("Delete", "home.deleteRows"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),
@@ -502,7 +535,7 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                     ("Copy", "edit.copy"),
                     ("Paste", "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertColumns"),
+                    ("Header Menu|Insert", "home.insertColumns"),
                     ("Delete", "home.deleteColumns"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),

@@ -1,5 +1,5 @@
 use super::*;
-use crate::adjust::{Axis, Edit, adjust, rename_sheet, shift_relative};
+use crate::adjust::{Axis, Edit, adjust, rename_sheet, shift_relative, transpose_relative};
 
 fn rt(src: &str) -> String {
     match parse(src) {
@@ -106,6 +106,15 @@ fn spill_operator() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Files spell `@x` as `_xlfn.SINGLE(x)`; an operation inside keeps its parentheses.
+#[test]
+fn single_is_the_implicit_intersection_operator() {
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3)*2"), "@A1:A3*2");
+    assert_eq!(rt("_xlfn.SINGLE(A1:A3*2)"), "@(A1:A3*2)");
+    assert_eq!(rt("_xlfn.SINGLE(-A1:A3)"), "@(-A1:A3)");
+    assert_eq!(rt("SQRT(_xlfn.SINGLE(Data[Qty]))"), "SQRT(@Data[Qty])");
+}
+
 #[test]
 fn delete_sheet_shrinks_3d_span() -> Result<(), Box<dyn std::error::Error>> {
     let order: Vec<String> = ["Sheet1", "Sheet2", "Sheet3", "Results"].iter().map(|s| s.to_string()).collect();
@@ -171,6 +180,28 @@ fn copy_shift() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+fn copy_transpose() -> Result<(), Box<dyn std::error::Error>> {
+    let at = gridcraft_core::CellRef::new;
+    // The row of each reference drives its new column and the other way round (Excel, observed:
+    // A1 → F6 carrying =B1+1 comes out as =F7+1).
+    let e = parse("B1+SUM(B1:C3)+Sheet2!A1")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "F7+SUM(F7:H8)+Sheet2!F6");
+    // The turn is around the two positions of the formula's cell, not around A1.
+    let e = parse("G3+SUM(1:2)")?;
+    assert_eq!(print(&transpose_relative(e, at(1, 2), at(9, 5))), "G14+SUM(E$8:F$1048576)");
+    // A reference pinned with `$` is left exactly as it stands.
+    let e = parse("$B$1+B$1+$B1+SUM($B$1:$C$3)")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "$B$1+B$1+$B1+SUM($B$1:$C$3)");
+    // Whole rows and columns come back as a cell range open to the sheet's edge.
+    let e = parse("SUM(1:2)+SUM(B:D)")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "SUM(F$6:G$1048576)+SUM($F7:$XFD9)");
+    // Off the grid is #REF!, like a copy that runs past the edge.
+    let e = parse("A16384+B1")?;
+    assert_eq!(print(&transpose_relative(e, at(0, 0), at(5, 5))), "#REF!+F7");
+    Ok(())
+}
+
+#[test]
 fn insert_delete() -> Result<(), Box<dyn std::error::Error>> {
     let ins = Edit::Insert { axis: Axis::Rows, at: 2, count: 2 };
     let e = parse("A1+A3+SUM(A2:A5)+Other!A3")?;
@@ -229,6 +260,10 @@ fn rename_sheet_updates_qualified_names() -> Result<(), Box<dyn std::error::Erro
     let e = rename_sheet(parse("Data!MyName")?, "Data", "It's");
     assert_eq!(e, Expr::Name("It's!MyName".into()));
     assert_eq!(print(&rename_sheet(e, "It's", "Totals")), "Totals!MyName");
+    // A sheet whose name holds a '!' splits at the last one: renaming "A" leaves "A!B"'s names alone.
+    let e = Expr::Name("A!B!MyName".into());
+    assert_eq!(rename_sheet(e.clone(), "A", "Z"), e);
+    assert_eq!(rename_sheet(e, "a!b", "Z"), Expr::Name("Z!MyName".into()));
     Ok(())
 }
 
@@ -566,4 +601,20 @@ fn column_starting_with_at_round_trips() {
         let text = format!("={}", printer::struct_ref(&s));
         assert_eq!(parse(&text).ok(), Some(Expr::Struct(s)), "printed as {text}");
     }
+}
+
+#[test]
+fn wrappers_stacked_across_levels_are_bounded_as_a_whole() {
+    // Each level adds 40 percents inside the parser's per-level bound, so no level is too deep alone.
+    let stacked = |levels: usize| {
+        let mut f = "1".to_string();
+        for _ in 0..levels {
+            f = format!("({f}){}", "%".repeat(40));
+        }
+        f
+    };
+    assert!(parse(&stacked(5)).is_ok());
+    assert!(parse(&stacked(7)).is_err(), "7 x 41 wrappers on one path");
+    assert!(parse(&format!("{}1{}", "(".repeat(200), ")".repeat(200))).is_ok());
+    assert!(parse(&format!("={}", vec!["A1%"; 100].join("+"))).is_ok(), "siblings are not stacked");
 }
