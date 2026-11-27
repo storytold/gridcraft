@@ -8,6 +8,11 @@ const ARG_LIMIT: usize = 256 * 1024;
 // A byte limit on raw SSE frames alone still permits a single enormous egui label.
 const TEXT_LIMIT: usize = 512 * 1024;
 
+pub(super) enum Completion {
+    Answer(Reply),
+    MissingFinal,
+}
+
 pub(in super::super) struct Reply {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
@@ -64,6 +69,7 @@ pub(super) struct Assembly {
     reasoning: String,
     calls: BTreeMap<usize, ToolCall>,
     finish: Option<String>,
+    refusal: bool,
 }
 impl Assembly {
     pub(super) fn completion(&mut self, v: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
@@ -75,10 +81,17 @@ impl Assembly {
         let Some(choice) = choices.iter().find(|c| c["index"].as_u64().unwrap_or(0) == 0) else {
             return Ok(());
         };
-        let partial = choice.get("delta");
-        if let Some(message) = partial.or_else(|| choice.get("message")) {
+        if !choice.is_object() {
+            return Err("Invalid completion choice.".into());
+        }
+        let partial = choice.get("delta").filter(|v| !v.is_null());
+        if let Some(message) = partial.or_else(|| choice.get("message").filter(|v| !v.is_null())) {
             self.text(message, notify)?;
-            if let Some(calls) = message["tool_calls"].as_array() {
+            if !message["function_call"].is_null() {
+                return Err("Legacy function calls are unsupported; no actions were taken.".into());
+            }
+            if !message["tool_calls"].is_null() {
+                let calls = message["tool_calls"].as_array().ok_or("Invalid provider tool-call list.")?;
                 for (i, c) in calls.iter().enumerate() {
                     let index = match c["index"].as_u64() {
                         Some(n) => usize::try_from(n).map_err(|_| "Invalid tool index.")?,
@@ -99,9 +112,10 @@ impl Assembly {
         if v.get("error").is_some_and(|e| !e.is_null()) {
             return Err("Ollama reported a completion error.".into());
         }
-        if let Some(m) = v.get("message") {
+        if let Some(m) = v.get("message").filter(|m| !m.is_null()) {
             self.text(m, notify)?;
-            if let Some(calls) = m["tool_calls"].as_array() {
+            if !m["tool_calls"].is_null() {
+                let calls = m["tool_calls"].as_array().ok_or("Invalid Ollama tool-call list.")?;
                 for c in calls {
                     let i = self.calls.len();
                     // Native Ollama emits whole argument objects, and identifies the
@@ -122,6 +136,9 @@ impl Assembly {
     }
 
     fn text(&mut self, message: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
+        if !message.is_object() {
+            return Err("Invalid assistant message.".into());
+        }
         let mut append = |s: &str| -> Result<(), String> {
             if self.content.len() + s.len() > TEXT_LIMIT {
                 return Err("Assistant reply exceeds 512 KiB. Ask for a smaller result.".into());
@@ -135,15 +152,21 @@ impl Assembly {
             Value::String(s) => append(s)?,
             Value::Array(parts) => {
                 for part in parts {
-                    if let Some(s) = part["text"].as_str() {
+                    if part["type"] == "refusal" {
+                        self.refusal = true;
+                        if let Some(s) = part["refusal"].as_str() {
+                            append(s)?;
+                        }
+                    } else if let Some(s) = part["text"].as_str() {
                         append(s)?;
                     }
                 }
             }
             _ => return Err("Unsupported assistant content.".into()),
         }
-        if let Some(s) = message["refusal"].as_str() {
-            append(s)?;
+        if !message["refusal"].is_null() {
+            self.refusal = true;
+            append(message["refusal"].as_str().ok_or("Invalid refusal response.")?)?;
         }
         if let Some(s) = message["reasoning_content"].as_str().or_else(|| message["thinking"].as_str()) {
             if self.reasoning.len() + s.len() > TEXT_LIMIT {
@@ -176,23 +199,33 @@ impl Assembly {
         Ok(())
     }
     fn record_finish(&mut self, reason: &str) {
-        if !self.finish.as_deref().is_some_and(|previous| !matches!(previous, "stop" | "tool_calls")) {
-            self.finish = Some(reason.to_owned());
+        match self.finish.as_deref() {
+            None => self.finish = Some(reason.to_owned()),
+            Some(previous) if previous != reason => self.finish = Some("conflicting completion reasons".into()),
+            _ => {}
         }
     }
     pub(super) fn finished(&self) -> bool {
         self.finish.is_some()
     }
-    pub(super) fn reply(self, terminated: bool, retain_reasoning: bool) -> Result<Reply, String> {
+    pub(super) fn reply(self, terminated: bool, retain_reasoning: bool) -> Result<Completion, String> {
         if !terminated && self.finish.is_none() {
             return Err("Connection ended before a complete reply arrived.".into());
+        }
+        if self.refusal && (!self.calls.is_empty() || self.content.trim().is_empty()) {
+            return Err("The provider declined to answer. No tool calls were applied.".into());
+        }
+        // A clean end (or a thinking model's output limit) can contain reasoning but
+        // neither an answer nor an action. Only this case permits a text-only follow-up.
+        if self.calls.is_empty() && self.content.trim().is_empty() && matches!(self.finish.as_deref(), None | Some("stop" | "length")) {
+            return Ok(Completion::MissingFinal);
         }
         if self.finish.as_deref().is_some_and(|r| !matches!(r, "stop" | "tool_calls")) {
             return Err("The provider stopped before completing the reply; no tool calls were applied.".into());
         }
         let calls: Vec<_> = self.calls.into_values().collect();
-        if calls.is_empty() && self.content.is_empty() {
-            return Err("The provider returned neither an answer nor a tool call.".into());
+        if calls.is_empty() && self.finish.as_deref() == Some("tool_calls") {
+            return Err("The provider indicated a tool call but supplied none.".into());
         }
         let mut seen = BTreeSet::new();
         let mut wire = Vec::new();
@@ -213,7 +246,7 @@ impl Assembly {
         if retain_reasoning && !self.reasoning.is_empty() {
             message["reasoning_content"] = self.reasoning.into();
         }
-        Ok(Reply { content: self.content, tool_calls: calls, message })
+        Ok(Completion::Answer(Reply { content: self.content, tool_calls: calls, message }))
     }
 }
 
@@ -282,6 +315,9 @@ impl Lines {
         }
         let bytes = std::mem::take(&mut self.data);
         if bytes.trim_ascii() == b"[DONE]" {
+            if self.native && !a.finished() {
+                return Err("Ollama stream ended before the final done message.".into());
+            }
             self.done = true;
         } else {
             if self.native {

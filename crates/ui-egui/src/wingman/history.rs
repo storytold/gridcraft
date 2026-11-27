@@ -105,6 +105,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn navigation_on_a_read_only_workbook_obeys_native_selection_protection() {
+        use gridcraft_engine::model::SheetProtection;
+        let mut s = Session::new();
+        s.new_workbook();
+        let d = s.active_mut().unwrap();
+        d.read_only_source = Some("book.xlsx".into());
+        let sh = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap();
+        let sheet = sh.name.clone();
+        sh.protection = Some(SheetProtection { select_locked: true, ..Default::default() });
+        let mut app = SheetApp::new(s, Services::default());
+        let args = json!({"sheet":sheet,"range":"B2"});
+        assert!(execute(&mut app, "select_range", &args, false).is_err());
+        execute(&mut app, "select_range", &args, true).unwrap();
+        let wb = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().protection.as_mut().unwrap().select_locked = false;
+        assert!(execute(&mut app, "select_range", &json!({"sheet":sheet,"range":"C3"}), true).is_err());
+        assert_eq!(app.session.active().unwrap().selection.active.a1(), "B2");
+    }
+
+    #[test]
     fn moving_a_note_requires_approval_and_undo_restores_it_along_with_the_header() {
         let mut session = Session::new();
         session.new_workbook();

@@ -1,4 +1,4 @@
-use super::{AgentKey, Mode, PanelState, Target, Turn, composer, provider, workbook};
+use super::{AgentKey, Approval, Mode, PanelState, Target, Turn, composer, provider, workbook};
 use crate::SheetApp;
 use egui::Context;
 use serde_json::{Value, json};
@@ -71,7 +71,7 @@ impl PanelState {
             native_offered: Default::default(),
             completed_wire: 0,
             final_answer: false,
-            calls: 0,
+            approval: if app.synthetic_pending { Approval::Ask } else { self.approval },
             wire: vec![json!({"role":"user","content":content})],
             job: None,
             partial: String::new(),
@@ -105,7 +105,7 @@ impl PanelState {
         match cmd {
             "/help" => self.thread.line("Wingman", "Attach @selection, @macro or @read A1:B6. /new keeps the old thread, /clear discards it. /mode chat|read|write|mcp changes permissions. Connect MCP servers explicitly in MCP mode. /settings opens wingman.json."),
             "/new" => self.fresh(),
-            "/clear" => { self.stop(); self.mcp.disconnect(); self.thread = Default::default(); self.note.clear(); }
+            "/clear" => { self.stop(); self.approval = Approval::Ask; self.mcp.disconnect(); self.thread = Default::default(); self.note.clear(); }
             "/settings" => provider::open_config()?,
             "/mode" => {
                 let mode = match arg {
@@ -126,7 +126,7 @@ impl PanelState {
     fn request(&self, turn: &mut Turn, ctx: &Context) -> Result<(), String> {
         // Reserve the final request for the answer. Do not spend the whole budget on tools
         // and then discard the model's opportunity to explain results it already obtained.
-        turn.final_answer = turn.rounds >= 11 || turn.calls >= 32;
+        turn.final_answer = self.tool_rounds.final_request(turn.rounds);
         let size = |v: &[Value]| v.iter().map(|m| m.to_string().len()).sum::<usize>();
         let mut tools = if self.mode == Mode::Chat || !turn.agent.supports_tools || turn.final_answer {
             Vec::new()
@@ -190,7 +190,7 @@ impl PanelState {
         }
         messages.extend(turn.wire.iter().cloned());
         turn.job = Some(provider::start(&turn.agent, messages, tools, ctx.clone())?);
-        turn.rounds += 1;
+        turn.rounds = turn.rounds.saturating_add(1);
         Ok(())
     }
 
@@ -211,13 +211,7 @@ impl PanelState {
             Ok(true) => self.turn = Some(turn),
             Ok(false) => self.remember(turn.wire),
             Err(message) => {
-                if turn.completed_wire > 0 {
-                    turn.wire.truncate(turn.completed_wire);
-                    self.remember(turn.wire);
-                }
-                if !turn.partial.is_empty() {
-                    self.thread.line("Assistant (partial)", turn.partial);
-                }
+                self.recover(turn);
                 self.thread.line("Stopped", message);
             }
         }
@@ -241,6 +235,9 @@ impl PanelState {
             self.thread.line("External tool", format!("{}\n{}", pending.label, data));
             turn.wire.push(json!({"role":"tool","tool_call_id":pending.id,"content":data.to_string()}));
             turn.external = None;
+            if turn.queue.is_empty() {
+                turn.completed_wire = turn.wire.len();
+            }
             if !turn.target.matches(app) {
                 return Err("Workbook target changed during the external call; no follow-up edits were applied.".into());
             }
@@ -250,6 +247,10 @@ impl PanelState {
             for _ in 0..64 {
                 match job.poll() {
                     None => return Ok(true),
+                    Some(provider::Event::FindingFinal) => {
+                        turn.partial.clear();
+                        self.thread.line("Wingman", "No final answer arrived. Requesting a text-only response.");
+                    }
                     Some(provider::Event::Text(s)) => turn.partial.push_str(&s),
                     Some(provider::Event::Done(result)) => {
                         let reply = result?;
@@ -267,10 +268,6 @@ impl PanelState {
                         if self.mode == Mode::Chat || !turn.agent.supports_tools {
                             return Err("The provider requested a tool in a chat-only turn.".into());
                         }
-                        turn.calls += reply.tool_calls.len();
-                        if turn.calls > 32 {
-                            return Err("Stopped at the tool-call limit.".into());
-                        }
                         turn.queue = reply.tool_calls.into();
                         turn.job = None;
                         break;
@@ -284,10 +281,11 @@ impl PanelState {
         }
         if let Some(call) = turn.queue.front() {
             Self::check_target(app, turn)?;
-            if self.needs_approval(turn, call) {
+            let needs_consent = self.requires_consent(turn, call);
+            if needs_consent && turn.approval == Approval::Ask {
                 return Ok(true);
             }
-            self.resolve(app, turn, false)?;
+            self.resolve(app, turn, needs_consent)?;
             ctx.request_repaint();
         }
         if turn.queue.is_empty() {
@@ -300,7 +298,7 @@ impl PanelState {
         Ok(true)
     }
 
-    pub(super) fn needs_approval(&self, turn: &Turn, call: &provider::ToolCall) -> bool {
+    pub(super) fn requires_consent(&self, turn: &Turn, call: &provider::ToolCall) -> bool {
         (self.mode.writes() && turn.native_offered.contains(&call.name) && workbook::is_write(&call.name) == Ok(true))
             || (self.mode == Mode::Mcp && turn.offered.contains_key(&call.name))
     }
@@ -415,10 +413,16 @@ impl PanelState {
         }
         match self.resolve(app, &mut t, approve) {
             Ok(()) => {
+                if t.queue.is_empty() && t.external.is_none() {
+                    t.completed_wire = t.wire.len();
+                }
                 self.turn = Some(t);
                 ctx.request_repaint();
             }
-            Err(e) => self.thread.line("Stopped", e),
+            Err(e) => {
+                self.recover(t);
+                self.thread.line("Stopped", e);
+            }
         }
     }
 }

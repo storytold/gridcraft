@@ -193,7 +193,10 @@ pub(in crate::wingman) struct Matcher {
 }
 
 pub(super) fn grep_slice(d: &DocState, p: &Json, matcher: &mut Option<Matcher>) -> Result<Json, String> {
-    let pattern = p["pattern"].as_str().filter(|s| !s.is_empty() && s.len() <= 512).ok_or("pattern must contain 1–512 UTF-8 bytes")?;
+    let pattern = p["pattern"]
+        .as_str()
+        .filter(|s| !s.is_empty() && s.chars().count() <= super::PATTERN_CHARS)
+        .ok_or("Pattern must contain 1–512 characters.")?;
     let literal = !p["regex"].as_bool().unwrap_or(false);
     let sensitive = p["caseSensitive"].as_bool().unwrap_or(false);
     let scope = p["scope"].as_str().unwrap_or(if p.get("sheet").is_some() { "sheet" } else { "workbook" });
@@ -393,6 +396,7 @@ mod tests {
         s.run("review.replyComment", json!({"cell":"D5","author":"Jo","text":"x/y is different"})).unwrap();
         let doc = s.active().unwrap();
         let mut args = json!({"pattern":"x.y","searchIn":"comment","limit":1});
+        assert!(!grep(doc, &json!({"pattern":"字".repeat(200),"searchIn":"comment"})).unwrap()["matches"].as_array().unwrap().is_empty());
         let page = grep(doc, &args).unwrap();
         assert_eq!(page["matches"][0]["reply"], 1);
         assert_eq!(page["matches"][0]["clipped"], true);

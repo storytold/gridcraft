@@ -343,7 +343,11 @@ pub fn preview_goal_seek(d: &DocState, sheet: usize, set: CellRef, changing: Cel
     if !target.is_finite() {
         return Err(bad("data.goalSeek", "target must be a finite number"));
     }
-    let r = goal_seek_trial(d, sheet, set, sheet, changing, target, d.wb.calc.max_iterations.min(max_iterations))?;
+    let limit = d.wb.calc.max_iterations.min(max_iterations);
+    if limit == 0 {
+        return Err(bad("data.goalSeek", "Goal Seek preview needs at least one iteration."));
+    }
+    let r = goal_seek_trial(d, sheet, set, sheet, changing, target, limit)?;
     Ok(json!({"value":r.x,"residual":r.fx.is_finite().then_some(r.fx),"iterations":r.iterations,"converged":r.converged}))
 }
 

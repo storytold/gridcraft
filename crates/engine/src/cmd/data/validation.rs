@@ -570,10 +570,24 @@ pub(in super::super) fn move_rule_formula(f: &str, first: CellRef, to: CellRef) 
     if first == to {
         return f.to_string();
     }
-    let moved = formula_at(f, first, to);
-    let has_relative = gridcraft_formula::parse(f.trim_start_matches('=')).is_ok_and(|e| gridcraft_formula::print(&e) != moved);
-    let eq = if f.starts_with('=') { "=" } else { "" };
-    if has_relative { format!("{eq}{moved}") } else { f.to_string() }
+    map_rule_formula(f, |e| {
+        gridcraft_formula::adjust::shift_relative(e, i64::from(to.row) - i64::from(first.row), i64::from(to.col) - i64::from(first.col))
+    })
+}
+
+pub(in super::super) fn transpose_rule_formula(f: &str, first: CellRef, source: CellRef, to: CellRef) -> String {
+    map_rule_formula(f, |e| {
+        let at_source =
+            gridcraft_formula::adjust::shift_relative(e, i64::from(source.row) - i64::from(first.row), i64::from(source.col) - i64::from(first.col));
+        gridcraft_formula::adjust::transpose_relative(at_source, source, to)
+    })
+}
+
+fn map_rule_formula(f: &str, map: impl FnOnce(gridcraft_formula::Expr) -> gridcraft_formula::Expr) -> String {
+    let Ok(expr) = gridcraft_formula::parse(f.trim_start_matches('=')) else { return f.to_owned() };
+    let original = gridcraft_formula::print(&expr);
+    let moved = gridcraft_formula::print(&map(expr));
+    if moved == original { f.to_owned() } else { format!("{}{moved}", if f.starts_with('=') { "=" } else { "" }) }
 }
 
 fn compare_op(op: CfOperator, n: f64, a: Option<f64>, b: Option<f64>) -> bool {

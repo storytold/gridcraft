@@ -20,6 +20,19 @@ fn chart_range(p: &Json) -> Result<RangeRef, String> {
 }
 
 pub(super) fn prepare_chart(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) -> Result<(), String> {
+    if name == "update_chart" && p.get("type").is_none() && p.get("subtype").is_some() {
+        use gridcraft_engine::model::ChartKind::*;
+        let chart = sh.charts.iter().find(|c| Some(u64::from(c.id)) == p["chart"].as_u64()).ok_or("No such chart on this worksheet.")?;
+        // chart.set consumes subtype only together with type.
+        p["type"] = json!(match chart.kind {
+            ColumnClustered | ColumnStacked | ColumnStacked100 => "column",
+            BarClustered | BarStacked | BarStacked100 => "bar",
+            Line | LineMarkers | LineStacked | LineStacked100 | LineStacked100Markers => "line",
+            Area | AreaStacked | AreaStacked100 => "area",
+            Scatter | ScatterLines => "scatter",
+            _ => return Err("This chart type has no configurable subtype.".into()),
+        });
+    }
     let typ = p["type"].as_str();
     if let Some(sub) = p["subtype"].as_str() {
         let valid = match typ {
@@ -30,7 +43,7 @@ pub(super) fn prepare_chart(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) 
             _ => false,
         };
         if !valid {
-            return Err("The subtype must match its explicit chart type; omit subtype for auto/default.".into());
+            return Err("The subtype must match the chart type; omit subtype for auto/default.".into());
         }
     }
     match name {
@@ -58,7 +71,7 @@ pub(super) fn prepare_chart(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) 
 
 // Imported series can carry paths to other files or inline data caches. Show only bounded
 // local references into visible worksheets, never the external/cache strings.
-fn visible_ref<'a>(wb: &Workbook, source: Option<&'a str>) -> Option<&'a str> {
+pub(super) fn visible_ref<'a>(wb: &Workbook, source: Option<&'a str>) -> Option<&'a str> {
     let s = source.filter(|s| s.len() <= 256)?;
     let Expr::Ref(r) = formula::parse(s).ok()? else { return None };
     match r.sheet {
@@ -332,5 +345,15 @@ mod tests {
         assert!(first["categoryRef"].as_str().unwrap().contains("$A$1:$A$3"));
         assert!(first["valuesRef"].as_str().unwrap().contains("$B$1:$B$3"));
         assert!(visible_ref(&app.session.active().unwrap().wb, Some("[other.xlsx]Sheet1!A1")).is_none());
+        let subtype = json!({"sheet":sh,"chart":id,"subtype":"lines"});
+        super::super::execute(&mut app, "update_chart", &subtype, true).unwrap();
+        assert_eq!(query(&app, "inspect_chart", &subtype).unwrap()["kind"], "ScatterLines");
+        app.run("home.insertSheet", json!({"name":"PrivateData"})).unwrap();
+        app.run("sheet.hide", json!({"sheet":"PrivateData"})).unwrap();
+        let wb = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().charts[0].source = Some("PrivateData!A1:B3".into());
+        let listing = context::mention(&app, "@charts").unwrap();
+        assert!(listing["page"]["items"][0]["id"] == id);
+        assert!(listing["page"]["items"][0]["source"].is_null());
     }
 }

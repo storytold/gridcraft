@@ -135,7 +135,7 @@ impl Query {
             // after the caret. Two consecutive quotes are a literal apostrophe in A1 syntax.
             let full = &text[pos - raw.len()..];
             let mut chars = full.char_indices().peekable();
-            let mut rest = tail.trim_start_matches(word);
+            let mut rest = None;
             let mut prefix = raw;
             while let Some((at, ch)) = chars.next() {
                 match ch {
@@ -147,14 +147,16 @@ impl Query {
                         if at + 1 == raw.len() {
                             prefix = &raw[..at];
                         }
-                        rest = &full[at + 1..];
+                        rest = Some(&full[at + 1..]);
                         break;
                     }
                     '\r' | '\n' => break,
                     _ => {}
                 }
             }
-            (prefix.replace("''", "'"), rest)
+            // With no closing quote, text after the caret could be either a name or
+            // ordinary prose. Only offer completion at the end of that line.
+            (prefix.replace("''", "'"), rest.or_else(|| (tail.is_empty() || tail.starts_with(['\r', '\n'])).then_some(tail))?)
         } else {
             if !target.chars().all(word) {
                 return None;
@@ -517,10 +519,16 @@ mod reference_tests {
         let q = Query::sheet_at(text, 9, &app).unwrap();
         assert_eq!(q.span, 0..text.len());
         assert_eq!(q.prefix, "q1");
+        let unfinished = "@read 'Sales old\nnext line";
+        assert!(Query::sheet_at(unfinished, "@read 'Sales".len(), &app).is_none());
+        let end = "@read 'Sales old".len();
+        assert_eq!(Query::sheet_at(unfinished, end, &app).unwrap().span, 0..end);
     }
     #[test]
     fn quoted_fences_never_attach_pasted_workbook_tokens() {
         assert_eq!(mentions("@A1\n> ~~~\n> @B2\n> ~~~\n@C3").unwrap(), ["@read:A1", "@read:C3"]);
         assert_eq!(mentions("> > ~~~\n> > @B2\n> @C3").unwrap(), ["@read:C3"]);
+        assert_eq!(mentions("> > ~~~\r\n>\t> @B2\r\n>\t> ~~~\t\r\n@C3").unwrap(), ["@read:C3"]);
+        assert_eq!(mentions("~~~\n~~~\x0c\n@B2\n~~~\n@C3").unwrap(), ["@read:C3"]);
     }
 }

@@ -174,7 +174,7 @@ fn objects(d: &DocState, sh: &Sheet, kind: &str, column: Option<&str>, search: O
     let chart_id = search.and_then(|s| s.parse::<u32>().ok());
     let data = match kind {
         "charts" => page(sh.charts.iter().filter(|c| matches(c.title.as_deref().unwrap_or_default()) || Some(c.id)==chart_id).skip(offset).map(|c|json!({"id":c.id,"type":format!("{:?}",c.kind),
-            "title":c.title.as_deref().map(|s|clip(s,128)),"at":c.anchor.cell.a1(),"source":c.source.as_deref().map(|s|clip(s,240)),
+            "title":c.title.as_deref().map(|s|clip(s,128)),"at":c.anchor.cell.a1(),"source":super::analysis::visible_ref(&d.wb,c.source.as_deref()).map(|s|clip(s,240)),
             "series":c.series.len(),"xTitle":c.x_title.as_deref().map(|s|clip(s,128)),"yTitle":c.y_title.as_deref().map(|s|clip(s,128)),
             "legend":format!("{:?}",c.legend),"dataLabels":c.data_labels,"gridlines":c.gridlines})),offset,32),
         // Iterate stored notes/threads in address order, not every cell in a whole-column range.

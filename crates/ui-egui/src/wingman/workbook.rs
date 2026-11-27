@@ -35,6 +35,7 @@ pub(super) use search::Matcher;
 const MAX_ARGS: usize = 64 * 1024;
 const MAX_RESULT: usize = 32 * 1024;
 const MAX_CELLS: u64 = 1024;
+const PATTERN_CHARS: usize = 512;
 const CHARTS: &[&str] = &[
     "column",
     "bar",
@@ -383,7 +384,7 @@ fn field(k: &str) -> Json {
         "code" => string(255),
         "width" | "height" => json!({"type":"number","minimum":32,"maximum":4096}),
         "subtype" => json!({"type":"string","enum":["clustered","stacked","stacked100","markers","stacked100Markers","lines"]}),
-        "pattern" => string(512),
+        "pattern" => string(PATTERN_CHARS),
         "scope" => json!({"type":"string","enum":["sheet","workbook"]}),
         "searchIn" => json!({"type":"string","enum":["all","value","display","formula","comment","error"]}),
         "regex" | "caseSensitive" => boolean(),
@@ -664,13 +665,19 @@ fn script_or_function_page(app: &mut SheetApp, name: &str, args: &Json) -> Resul
 }
 
 fn write_args(d: &gridcraft_engine::DocState, t: &Tool, supplied: &Json) -> Result<Json, String> {
-    if d.read_only_source.is_some() {
-        return Err("This workbook was opened read-only.".into());
-    }
     let resolved = ribbon::resolve_selection(d, supplied)?;
     let args = &*resolved;
     let mut p = args.clone();
     let sh = context::sheet(d, args)?;
+    if t.name == "select_range" {
+        // Navigation still needs the write profile and a visible target. Native
+        // selection.set decides whether a protected sheet permits this selection.
+        args["range"].as_str().and_then(RangeRef::parse).ok_or("Specify one literal A1 range.")?;
+        return Ok(p);
+    }
+    if d.read_only_source.is_some() {
+        return Err("This workbook was opened read-only.".into());
+    }
     // Cells and styles go through the corresponding protection-aware engine paths. The object
     // and comment commands assume the ribbon checked protection, so enforce it here as well.
     if sh.is_protected()
@@ -711,7 +718,7 @@ fn write_args(d: &gridcraft_engine::DocState, t: &Tool, supplied: &Json) -> Resu
     }
     if let Some(range) = args["range"].as_str() {
         match t.name {
-            "select_range" | "filter_column" => {
+            "filter_column" => {
                 RangeRef::parse(range).ok_or("Specify one literal A1 range.")?;
             }
             "set_fill" | "set_ink" | "number_format" => {

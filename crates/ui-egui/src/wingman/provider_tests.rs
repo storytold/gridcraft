@@ -1,4 +1,4 @@
-use super::stream::{Assembly, Frames, Lines, Reply};
+use super::stream::{Assembly, Completion, Frames, Lines, Reply};
 use super::{
     settings::Protocol,
     thinking::{Levels, Thinking},
@@ -10,6 +10,12 @@ fn receive(bytes: &[u8], native: bool) -> Result<Reply, String> {
     framed(bytes, if native { Frames::JsonLines } else { Frames::Sse }, native)
 }
 fn framed(bytes: &[u8], frames: Frames, native: bool) -> Result<Reply, String> {
+    match completed(bytes, frames, native)? {
+        Completion::Answer(reply) => Ok(reply),
+        Completion::MissingFinal => Err("No final answer".into()),
+    }
+}
+fn completed(bytes: &[u8], frames: Frames, native: bool) -> Result<Completion, String> {
     let mut lines = Lines::new(frames, native);
     let mut assembly = Assembly::default();
     for chunk in bytes.chunks(1) {
@@ -21,6 +27,40 @@ fn framed(bytes: &[u8], frames: Frames, native: bool) -> Result<Reply, String> {
 
 fn event(delta: Value, finish: Value) -> String {
     format!("data: {}\r\n\r\n", json!({"choices":[{"delta":delta,"finish_reason":finish}]}))
+}
+
+#[test]
+fn empty_answers_recover_but_truncated_calls_and_refusals_do_not() {
+    for finish in ["length", "stop"] {
+        let reasoning = event(json!({"reasoning_content":"draft","content":"  "}), json!(finish));
+        assert!(matches!(completed(reasoning.as_bytes(), Frames::Sse, false), Ok(Completion::MissingFinal)));
+        let native = json!({"message":{"thinking":"draft"},"done":true,"done_reason":finish}).to_string();
+        assert!(matches!(completed(native.as_bytes(), Frames::JsonLines, true), Ok(Completion::MissingFinal)));
+    }
+    for data in [
+        event(json!({"content":null}), json!("content_filter")),
+        event(json!({"content":null}), json!("length")) + &event(json!({}), json!("content_filter")),
+        event(json!(42), json!("stop")),
+        event(json!({"refusal":" "}), json!("stop")),
+        event(json!({"tool_calls":[{"id":"one","function":{"arguments":"{"}}]}), json!("length")),
+        event(json!({"reasoning_content":"draft"}), Value::Null),
+    ] {
+        assert!(completed(data.as_bytes(), Frames::Sse, false).is_err());
+    }
+    let unfinished = format!("data: {}\n\ndata: [DONE]\n\n", json!({"message":{"thinking":"draft"},"done":false}));
+    assert!(completed(unfinished.as_bytes(), Frames::Sse, true).is_err());
+}
+
+#[test]
+fn final_only_request_keeps_prior_tool_receipts_but_withdraws_tools() {
+    let messages = json!([{"role":"system","content":"GridCraft"},{"role":"user","content":"Edit A1"},
+        {"role":"assistant","content":"","tool_calls":[{"id":"one"}]},{"role":"tool","tool_call_id":"one","content":"saved"}]);
+    let mut body = json!({"messages":messages,"tools":[{"type":"function"}],"parallel_tool_calls":true,"model":"local"});
+    super::transport::final_only(&mut body).unwrap();
+    assert!(body.get("tools").is_none() && body.get("parallel_tool_calls").is_none());
+    assert_eq!(body["messages"].as_array().unwrap()[1..], messages.as_array().unwrap()[1..]);
+    assert_eq!(body["model"], "local");
+    assert_ne!(body["messages"][0]["content"], messages[0]["content"]);
 }
 
 #[test]

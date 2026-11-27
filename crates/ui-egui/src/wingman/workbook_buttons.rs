@@ -275,6 +275,14 @@ mod tests {
         assert_eq!(execute(&mut app, "inspect_rules", &range, false).unwrap()["page"]["items"].as_array().unwrap().len(), 1);
         list["validationRule"] = json!({"type":"list","source":"https://example.invalid"});
         assert!(execute(&mut app, "set_validation", &list, true).is_err());
+        list["validationRule"] = json!({"type":"whole","operator":"between","value":10,"value2":9_007_199_254_740_993_u64});
+        assert!(execute(&mut app, "set_validation", &list, true).unwrap_err().contains("exactly"));
+        for token in ["9007199254740993.0", "9.007199254740993e15", "18446744073709551616"] {
+            list["validationRule"]["value2"] = serde_json::from_str(token).unwrap();
+            assert!(execute(&mut app, "set_validation", &list, true).unwrap_err().contains("exactly"));
+        }
+        list["validationRule"]["value2"] = json!(9_007_199_254_740_994_u64);
+        execute(&mut app, "set_validation", &list, true).unwrap();
     }
     #[test]
     fn totals_do_not_overwrite_other_rows_or_custom_formulas() {

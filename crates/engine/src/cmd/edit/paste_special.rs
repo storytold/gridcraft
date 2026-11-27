@@ -147,6 +147,9 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
             // The agent explicitly approved replacing this whole block, including blank
             // source positions. Reads below use clip.wb, independent of this COW mutation.
             let sh = cx.sheet_mut(dest_sheet)?;
+            if !cut_move {
+                crate::cmd::data::remove_rule_cells(&mut sh.cond_formats, &[dest]);
+            }
             let cleared: std::collections::BTreeSet<_> = sh
                 .comments
                 .range(dest.start..=dest.end)
@@ -592,7 +595,7 @@ fn paste_validations(
     let mut total = 0usize;
     for dv in &src_sheet.validations {
         let parts: Vec<RangeRef> = dv.ranges.iter().filter_map(|r| r.intersection(&src)).collect();
-        let Some(first) = dv.ranges.first().map(|r| r.start) else { continue };
+        let Some(first) = RangeRef::top_left(&dv.ranges) else { continue };
         if parts.is_empty() {
             continue;
         }
@@ -620,12 +623,18 @@ fn paste_validations(
         }
         // The rows a filter hides keep what they have.
         let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
-        let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
+        let Some(anchor) = RangeRef::top_left(&ranges) else { continue };
         let mut rule = dv.clone();
-        // Relative references move with the rule, as pasted formulas do: they are written for the
-        // rule's first cell.
-        rule.f1 = super::super::data::move_rule_formula(&dv.f1, first, anchor);
-        rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, first, anchor));
+        for f in rule.formulas_mut() {
+            *f = if transpose {
+                // A clipped rule may start outside the copied cells. Find the source cell
+                // corresponding to the new anchor before turning its relative references.
+                let sc = CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
+                super::super::data::transpose_rule_formula(f, first, sc, anchor)
+            } else {
+                super::super::data::move_rule_formula(f, first, anchor)
+            };
+        }
         rule.ranges = ranges;
         rules.push(rule);
     }

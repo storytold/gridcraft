@@ -9,12 +9,12 @@ Use the [command and control index](wingman-commands.md) for individual GridCraf
 | `grep` | `grep` against typed values, displayed text, formula source, comments or actual errors | Literal by default; optional regex, scope, sheet, range and continuation cursor. |
 | `list_directory` | `workbook_info`, `list_objects`, `list_scripts` | Visible workbook scope; metadata is paged. |
 | `read_file` | `read_range`, `inspect_cell`, `read_script` and explicit context mentions | No general file reader. Oversized previews do not truncate an edit's source. |
-| `fetch` | A configured MCP read tool, under **External** | Separate connection and approval; no implicit browser. |
+| `fetch` | A configured MCP read tool, under **External** | Requires an explicit connection and follows the selected approval policy; no implicit browser. |
 | `search_web` | A connected search provider, e.g. Localflame | Not a model-provider subscription or an automatic transfer of sheet data. |
 | `copy_path` | `transfer_range` in copy or transpose mode | Native relative reference handling; collision and object checks. |
 | `create_directory` | `add_sheet` to make a workbook container | No OS directory creation. |
-| `delete_path` | `clear_contents`, `delete_rows`, `delete_columns` | Destructive worksheet actions require approval. No file deletion. |
-| `edit_file` | `set_cell`, typed range/object controls, and native macro draft edits | Arguments shown before mutation; the workbook owns Undo. |
+| `delete_path` | `clear_contents`, `delete_rows`, `delete_columns` | Ask before destructive worksheet actions by default. No file deletion. |
+| `edit_file` | `set_cell`, typed range/object controls, and native macro draft edits | Review arguments in Ask mode; the workbook owns Undo. |
 | `move_path` | `transfer_range` in move mode; `rename_sheet` or `rename_table` for names | Cut has different formula-reference semantics from copy then clear. |
 | `write_file` | `set_values`, `save_script` for native scripts | Existing content, overwrite and protection rules are tool-specific. No file save on behalf of the user. |
 | `terminal` | No built-in equivalent | Wingman cannot shell out, run a macro, or evaluate VBA. |
@@ -22,11 +22,11 @@ Use the [command and control index](wingman-commands.md) for individual GridCraf
 | `spawn_agent` | Switch between configured agents in the dock | A switch starts another conversation, not an autonomous child. |
 | Agent panel and model selection | Resizable Wingman dock, explicit model/agent, thinking level where supported | The launcher is opt-in. No provider contact just from opening the pane. |
 | Context and slash commands | Composer suggestions, `@selection`, sheet/range and macro context, local slash commands | Only the contexts and commands shown in completion are supported. |
-| [Profiles and permissions](https://zed.dev/docs/ai/tool-permissions) | Chat only, Read only, Read / write, Read / write / MCP | Availability is distinct from approval. No persistent always-approve rule. |
+| [Profiles and permissions](https://zed.dev/docs/ai/tool-permissions) | Chat only, Read only, Read / write, Read / write / MCP | Approval is separate: Ask every time by default, or Always allow for this thread and access mode. |
 | Context-specific tool palette | `change_tab` swaps schemas for the next request; optionally narrow to a named group | The agent’s ribbon is independent of the user’s. Discovery alone grants no permission. |
 | Review and revert | Inspect exact arguments, approve a call or atomic `apply_edits` plan, undo/redo in the workbook | External actions are separate; they cannot be rolled back with Ctrl+Z. |
 | Provider API | Configured Chat Completions and native Ollama, model discovery and manual reasoning effort | Discovery does not establish which optional protocols a server implements. |
-| [MCP](https://zed.dev/docs/ai/mcp) | Explicitly connected stdio or HTTP servers, selected catalog, arguments and per-call confirmation | No automatic approval for a tool that describes itself as read-only. |
+| [MCP](https://zed.dev/docs/ai/mcp) | Explicitly connected stdio or HTTP servers, selected catalog, per-call confirmation by default | The user chooses the approval policy; a server cannot grant itself permission. |
 | [External agents / ACP](https://zed.dev/docs/ai/external-agents) | No ACP process host | An OpenAI-compatible model endpoint is not an ACP agent. |
 
 ## Working through the grid
@@ -49,7 +49,7 @@ Use the [command and control index](wingman-commands.md) for individual GridCraf
 | Add a dropdown or highlight duplicates | Data → `set_validation`; Home → `conditional_format` | Use `inspect_rules` for readback; clearing a rule is a separate operation. |
 | Style an existing table or change its totals | Table Design → `inspect_table`, `set_table_style`, `table_banded_rows`, `table_total_function` | Address the table by name; workbook ownership and protected targets are checked. |
 | Create or restyle a PivotTable | Insert → `create_pivot`; PivotTable Design → `inspect_pivots`, `set_pivot_layout` | Local source headers; create on a new sheet so existing cells are not overwritten. |
-| Annotate a diagram | Draw → `add_ink_stroke` or Insert → `create_shape`; Format → `inspect_shapes` and object styling | Actual drawing object IDs and anchors, not simulated mouse events. |
+| Annotate a diagram | Draw → `add_ink_stroke` and `inspect_shapes`; Insert → `create_shape`; Format → object styling | Actual drawing object IDs and anchors, not simulated mouse events. |
 | Set printed orientation or freeze headings | Page Layout → `set_page_layout`; View → `freeze_panes` | `inspect_layout` reads saved settings. Printing and print dialogs stay manual. |
 | Edit a repeating native macro | Automate → read draft, propose a step edit, then user saves | No auto-run. Excel VBA can be drafted as text; its binary project is preserved, not executed. |
 

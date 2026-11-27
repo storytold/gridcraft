@@ -38,7 +38,7 @@ pub use validation::{
     search_term,
 };
 use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
-pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
+pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells, transpose_rule_formula};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

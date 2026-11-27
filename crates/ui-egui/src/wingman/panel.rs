@@ -1,4 +1,4 @@
-use super::{AgentKey, Mode, PanelState, provider};
+use super::{AgentKey, Approval, Mode, PanelState, ToolRounds, provider};
 use crate::{SheetApp, i18n::Language, theme::Tokens};
 use egui::{Align, Align2, Button, Context, Layout, Rect, RichText, ScrollArea, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -330,6 +330,7 @@ impl PanelState {
                     }
                     if supports_tools {
                         self.change_mode(mode);
+                        self.turn_controls(ui, l, physical);
                         if self.mode == Mode::Mcp {
                             self.mcp.ui(ui, l, physical);
                         }
@@ -368,6 +369,60 @@ impl PanelState {
         }
     }
 
+    fn turn_controls(&mut self, ui: &mut Ui, l: Language, physical: bool) {
+        let rounds = |ui: &mut Ui, budget: &mut ToolRounds| {
+            let label = ui.label(l.tr("Tool rounds"));
+            let caption = |n: Option<usize>| n.map_or_else(|| l.tr("Unlimited").to_owned(), |n| n.to_string());
+            egui::ComboBox::from_id_salt("wingman_rounds")
+                .width(ui.available_width().min(170.0))
+                .truncate()
+                .selected_text(caption(budget.0))
+                .show_ui(ui, |ui| {
+                    for n in [Some(4), Some(8), Some(12), Some(24), Some(48), Some(96), None] {
+                        ui.selectable_value(budget, ToolRounds(n), caption(n));
+                    }
+                })
+                .response
+                .labelled_by(label.id)
+                .on_hover_text(l.tr("Finite limits reserve the last round for an answer. Unlimited runs until the model finishes or you stop it."));
+        };
+        let may_change_approval = physical && self.mode.writes();
+        let approvals = |ui: &mut Ui, approval: &mut Approval| {
+            let label = ui.label(l.tr("Approval"));
+            let mut choice = *approval;
+            ui.add_enabled_ui(may_change_approval, |ui| {
+                egui::ComboBox::from_id_salt("wingman_approval")
+                    .width(ui.available_width().min(170.0))
+                    .truncate()
+                    .selected_text(l.tr(choice.label()))
+                    .show_ui(ui, |ui| {
+                        for value in [Approval::Ask, Approval::AlwaysAllow] {
+                            ui.selectable_value(&mut choice, value, l.tr(value.label()));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id)
+                    .on_hover_text(l.tr("Always allow skips confirmations for edits and connected MCP tools in this thread and access mode."))
+                    .on_disabled_hover_text(l.tr("Approval applies to writes and connected external tools."));
+            });
+            if may_change_approval {
+                *approval = choice;
+            }
+        };
+        if ui.available_width() >= 275.0 {
+            ui.columns(2, |cols| {
+                rounds(&mut cols[0], &mut self.tool_rounds);
+                approvals(&mut cols[1], &mut self.approval);
+            });
+        } else {
+            rounds(ui, &mut self.tool_rounds);
+            approvals(ui, &mut self.approval);
+        }
+        if self.approval == Approval::AlwaysAllow && self.mode == Mode::Mcp {
+            ui.weak(l.tr("Connected tools can act without another prompt. GridCraft cannot undo external actions."));
+        }
+    }
+
     fn input(&mut self, app: &mut SheetApp, ui: &mut Ui, l: Language) {
         let ctx = ui.ctx().clone();
         ui.separator();
@@ -375,8 +430,8 @@ impl PanelState {
             let waiting = self
                 .turn
                 .as_ref()
-                .filter(|t| t.external.is_none())
-                .and_then(|t| t.queue.front().filter(|c| self.needs_approval(t, c)).map(|c| (c, t.offered.get(&c.name))));
+                .filter(|t| t.external.is_none() && t.approval == Approval::Ask)
+                .and_then(|t| t.queue.front().filter(|c| self.requires_consent(t, c)).map(|c| (c, t.offered.get(&c.name))));
             if let Some((call, external)) = waiting {
                 status(ui, l.tr(if external.is_some() { "Review external tool call" } else { "Review workbook edit" }));
                 if let Some(e) = external {

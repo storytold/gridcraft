@@ -51,8 +51,12 @@ Wingman runs its own tool loop against the configured model API. In Zed these ar
 | --- | --- |
 | Chat only | Answer from the conversation and any context you explicitly attach. No workbook tools. |
 | Read only (default) | Inspect workbook structure, cell values, formulas, formatting, comments, charts, tables, names and native scripts. |
-| Read / write | Propose changes to cells, formulas, formatting, charts, tables, comments and native scripts. Sort or filter a range, define a name, resize rows or columns, or add data bars. Each edit shows its arguments and requires **Apply edit**. |
-| Read / write / MCP | The same workbook permissions, plus tools from servers you explicitly connect. Each external call shows the destination, tool and arguments and requires **Allow call**. |
+| Read / write | Change cells, formulas, formatting, charts, tables, comments and native scripts. By default, review the arguments and choose **Apply edit**. |
+| Read / write / MCP | The same workbook permissions, plus tools from servers you explicitly connect. By default, review the destination, tool and arguments and choose **Allow call**. |
+
+**Approval** starts at **Ask every time**. Choose **Always allow** to skip confirmations for actions already permitted in this thread and access mode. In MCP mode that includes connected external tools; workbook Undo cannot reverse their actions. Changing thread, agent or access mode, reloading settings, or closing the pane restores **Ask every time**.
+
+**Tool rounds** defaults to **12**. A round is one exchange with the model, which can request several tools together. A finite budget reserves its last exchange for the answer. **Unlimited** removes the round count limit; request-size limits and **Stop** still apply. If the provider finishes without a final answer, Wingman asks once more for text using the results already received. That follow-up cannot run more tools.
 
 The initial access setting accepts `ask`, `write`, `write_mcp`, or `minimal` in `agent.default_profile`; an individual agent can override it. Type `@` for references. Arrow keys select a completion; Tab or Enter accepts it, Escape dismisses it. For example:
 

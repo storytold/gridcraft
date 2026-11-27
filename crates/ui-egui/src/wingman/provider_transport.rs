@@ -9,7 +9,7 @@ use reqwest::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
 
 use super::settings::{self, Agent, Host, Protocol};
-use super::stream::{Assembly, Frames, Lines, Reply, decode};
+use super::stream::{Assembly, Completion, Frames, Lines, Reply, decode};
 
 const REPLY_LIMIT: usize = 16 * 1024 * 1024;
 const CATALOG_LIMIT: usize = 2 * 1024 * 1024;
@@ -66,18 +66,27 @@ where
     Ok(Task { abort, rx, finished: false })
 }
 pub(in super::super) enum Event {
+    FindingFinal,
     Text(String),
     Done(Result<Reply, String>),
 }
+#[derive(Default)]
+struct Progress {
+    finding_final: bool,
+    text: String,
+}
 pub(in super::super) struct Job {
     task: Task<Reply>,
-    text: Arc<Mutex<String>>,
+    progress: Arc<Mutex<Progress>>,
 }
 impl Job {
     pub(in super::super) fn poll(&mut self) -> Option<Event> {
-        let mut text = self.text.lock().ok()?;
-        if !text.is_empty() {
-            return Some(Event::Text(std::mem::take(&mut *text)));
+        let mut progress = self.progress.lock().ok()?;
+        if std::mem::take(&mut progress.finding_final) {
+            return Some(Event::FindingFinal);
+        }
+        if !progress.text.is_empty() {
+            return Some(Event::Text(std::mem::take(&mut progress.text)));
         }
         self.task.poll().map(Event::Done)
     }
@@ -203,23 +212,57 @@ pub(super) fn payload(a: &Agent, mut messages: Vec<Value>, tools: Vec<Value>) ->
     }
     Ok(body)
 }
-async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn(&str)) -> Result<Reply, String> {
-    let native = a.protocol == Protocol::Ollama;
-    let url = format!("{}/{}", a.endpoint, if native { "api/chat" } else { "chat/completions" });
-    let payload = serde_json::to_vec(&payload(&a, messages, tools)?).map_err(|_| "Cannot encode the request.")?;
-    if payload.len() > REQUEST_LIMIT {
-        return Err("Conversation exceeds the 8 MiB request limit. Start a new thread or attach a smaller range.".into());
-    }
-    let req = client(&a)?.post(url).header("content-type", "application/json").body(payload);
-    let response = send(authorize(req, &a)?).await?;
-    let mut reply = receive(response, native, a.retain_reasoning(), notify).await?;
-    if reply.message.get("reasoning_content").is_some() {
-        reply.message[THINKING_TAG] = a.thinking.wire(a.protocol);
-    }
-    Ok(reply)
+// Keep the original request's evidence and settings, not the empty assistant reply.
+// This instruction exists on the wire only: no synthetic user turn enters chat history.
+pub(super) fn final_only(body: &mut Value) -> Result<(), String> {
+    let body = body.as_object_mut().ok_or("Invalid provider request.")?;
+    body.remove("tools");
+    body.remove("parallel_tool_calls");
+    let system = body
+        .get_mut("messages")
+        .and_then(Value::as_array_mut)
+        .and_then(|m| m.first_mut())
+        .filter(|m| m["role"] == "system")
+        .and_then(|m| m.get_mut("content"));
+    let Some(Value::String(prompt)) = system else { return Err("Missing Wingman system message.".into()) };
+    prompt.push_str("\nGive the user a final text answer now, using only the information and tool receipts already available. Identify unfinished work. Do not issue or repeat any actions.");
+    Ok(())
 }
 
-async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(&str)) -> Result<Reply, String> {
+async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn(&str), finding_final: impl Fn()) -> Result<Reply, String> {
+    let native = a.protocol == Protocol::Ollama;
+    let url = format!("{}/{}", a.endpoint, if native { "api/chat" } else { "chat/completions" });
+    let mut body = payload(&a, messages, tools)?;
+    let client = client(&a)?;
+    let mut recovering = false;
+    loop {
+        let encoded = serde_json::to_vec(&body).map_err(|_| "Cannot encode the request.")?;
+        if encoded.len() > REQUEST_LIMIT {
+            return Err("Conversation exceeds the 8 MiB request limit. Start a new thread or attach a smaller range.".into());
+        }
+        let req = client.post(&url).header("content-type", "application/json").body(encoded);
+        let response = send(authorize(req, &a)?).await?;
+        match receive(response, native, a.retain_reasoning(), &notify).await? {
+            Completion::Answer(mut reply) => {
+                if recovering && !reply.tool_calls.is_empty() {
+                    return Err("The final-answer follow-up returned a tool call instead of an answer. No new action was taken.".into());
+                }
+                if reply.message.get("reasoning_content").is_some() {
+                    reply.message[THINKING_TAG] = a.thinking.wire(a.protocol);
+                }
+                return Ok(reply);
+            }
+            Completion::MissingFinal if recovering => return Err("No final answer arrived after the automatic follow-up.".into()),
+            Completion::MissingFinal => {
+                final_only(&mut body)?;
+                recovering = true;
+                finding_final();
+            }
+        }
+    }
+}
+
+async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(&str)) -> Result<Completion, String> {
     let media = r.headers().get("content-type").and_then(|h| h.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").trim();
     let frames = if media.eq_ignore_ascii_case("text/event-stream") {
         Some(Frames::Sse)
@@ -261,18 +304,32 @@ pub(in super::super) fn start(a: &Agent, messages: Vec<Value>, tools: Vec<Value>
     if !a.completions {
         return Err(format!("{} requires the Responses API. Select a Chat Completions model.", a.name));
     }
-    let text = Arc::new(Mutex::new(String::new()));
-    let pending = Arc::clone(&text);
+    let progress = Arc::new(Mutex::new(Progress::default()));
+    let pending = Arc::clone(&progress);
+    let retry = Arc::clone(&progress);
     let paint = ctx.clone();
     let viewport = ctx.viewport_id();
     let a = a.clone();
-    let run = chat(a, messages, tools, move |delta| {
-        if let Ok(mut s) = pending.lock() {
-            s.push_str(delta);
-        }
-        paint.request_repaint_of(viewport);
-    });
-    Ok(Job { task: spawn(ctx, run)?, text })
+    let repaint = paint.clone();
+    let run = chat(
+        a,
+        messages,
+        tools,
+        move |delta| {
+            if let Ok(mut p) = pending.lock() {
+                p.text.push_str(delta);
+            }
+            paint.request_repaint_of(viewport);
+        },
+        move || {
+            if let Ok(mut p) = retry.lock() {
+                p.text.clear();
+                p.finding_final = true;
+            }
+            repaint.request_repaint_of(viewport);
+        },
+    );
+    Ok(Job { task: spawn(ctx, run)?, progress })
 }
 
 type Listings = (Vec<Agent>, Vec<String>);

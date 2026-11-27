@@ -50,6 +50,37 @@ impl Mode {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ToolRounds(Option<usize>);
+
+impl Default for ToolRounds {
+    fn default() -> Self {
+        Self(Some(12))
+    }
+}
+
+impl ToolRounds {
+    fn final_request(self, completed: usize) -> bool {
+        self.0.is_some_and(|limit| completed >= limit.saturating_sub(1))
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Approval {
+    #[default]
+    Ask,
+    AlwaysAllow,
+}
+
+impl Approval {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ask => "Ask every time",
+            Self::AlwaysAllow => "Always allow",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 struct AgentKey(String, String, String, String, [u8; 32]);
 impl From<&Agent> for AgentKey {
@@ -125,7 +156,7 @@ struct Turn {
     /// End of the last exchange with all tool calls answered (safe to replay on interruption).
     completed_wire: usize,
     final_answer: bool,
-    calls: usize,
+    approval: Approval,
     // Messages from the start of this turn, distinct from older completed history.
     wire: Vec<Value>,
     job: Option<Job>,
@@ -143,6 +174,8 @@ pub(crate) struct PanelState {
     open: bool,
     loaded: bool,
     mode: Mode,
+    tool_rounds: ToolRounds,
+    approval: Approval,
     agents: Vec<Agent>,
     selected: usize,
     discovery: Option<Discovery>,
@@ -180,33 +213,37 @@ impl PanelState {
     pub(crate) fn close(&mut self) {
         self.open = false;
         self.stop();
+        self.approval = Approval::Ask;
         self.discovery = None;
         self.mcp.disconnect();
         self.dock_rect = None;
     }
 
     fn stop(&mut self) {
-        if let Some(mut t) = self.turn.take() {
-            if t.completed_wire > 0 {
-                t.wire.truncate(t.completed_wire);
-                self.remember(t.wire);
-            }
-            if !t.partial.is_empty() {
-                self.thread.line("Assistant (partial)", t.partial);
-            }
-            self.thread.line(
-                "Wingman",
-                if t.external.is_some() {
-                    "Stopped waiting for the external tool. It may already have run; GridCraft cannot undo external actions."
-                } else {
-                    "Stopped. Previously approved edits, if any, are unchanged."
-                },
-            );
+        if let Some(t) = self.turn.take() {
+            let reason = if t.external.is_some() {
+                "Stopped waiting for the external tool. It may already have run; GridCraft cannot undo external actions."
+            } else {
+                "Stopped. Previously approved edits, if any, are unchanged."
+            };
+            self.recover(t);
+            self.thread.line("Wingman", reason);
+        }
+    }
+
+    fn recover(&mut self, mut t: Turn) {
+        if t.completed_wire > 0 {
+            t.wire.truncate(t.completed_wire);
+            self.remember(t.wire);
+        }
+        if !t.partial.is_empty() {
+            self.thread.line("Assistant (partial)", t.partial);
         }
     }
 
     fn fresh(&mut self) {
         self.stop();
+        self.approval = Approval::Ask;
         self.mcp.disconnect();
         if !self.thread.log.is_empty() {
             self.archives.push_front(std::mem::take(&mut self.thread));
@@ -230,6 +267,7 @@ impl PanelState {
     }
 
     fn reload(&mut self) {
+        self.approval = Approval::Ask;
         self.mcp.reload();
         self.discovery = None;
         self.loaded = true;
@@ -249,6 +287,7 @@ impl PanelState {
     fn change_mode(&mut self, mode: Mode) {
         if self.mode != mode {
             self.stop();
+            self.approval = Approval::Ask;
             self.mcp.disconnect();
             self.mode = mode;
         }
@@ -259,6 +298,23 @@ impl PanelState {
 mod tests {
     use super::*;
     use crate::{Services, UiState};
+
+    #[test]
+    fn changing_access_or_leaving_a_thread_revokes_standing_consent() {
+        let mut pane = PanelState { mode: Mode::Edit, approval: Approval::AlwaysAllow, tool_rounds: ToolRounds(None), ..Default::default() };
+        pane.change_mode(Mode::Mcp);
+        assert!(pane.approval == Approval::Ask, "workbook consent cannot carry into external tools");
+        pane.approval = Approval::AlwaysAllow;
+        pane.fresh();
+        assert!(pane.approval == Approval::Ask);
+        pane.approval = Approval::AlwaysAllow;
+        pane.close();
+        assert!(pane.approval == Approval::Ask);
+        assert!(!pane.tool_rounds.final_request(usize::MAX), "Unlimited has no count-based cutoff");
+        let finite = ToolRounds(Some(4));
+        assert!(!finite.final_request(2));
+        assert!(finite.final_request(3), "the fourth request must be able to answer from the receipts");
+    }
 
     #[test]
     fn opting_out_closes_parked_docks_and_survives_restart() {

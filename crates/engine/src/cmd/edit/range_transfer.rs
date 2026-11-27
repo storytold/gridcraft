@@ -198,9 +198,7 @@ pub(super) fn transfer(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if cut {
         bindings::guard_callers(&d.wb, &v)?;
-        if v.from != v.to || !d.wb.names.is_empty() {
-            bindings::guard(&d.wb, &v)?;
-        }
+        bindings::guard(&d.wb, &v)?;
     }
     if v.from == v.to && dest == v.src && !transpose {
         return Err(bad(TRANSFER, "Source and destination are the same block."));
@@ -296,12 +294,12 @@ pub(super) fn reshape(s: &mut Session, p: &Json) -> Result<Json> {
     if dest.count() > MAX_BLOCK {
         return Err(bad(RESHAPE, "The result is too wide or tall; split the source into smaller blocks."));
     }
-    check_dest(to, dest, &v, RESHAPE, false, false)?;
     if to.validations.iter().any(|dv| dv.ranges.iter().any(|r| r.intersects(&dest)))
         || to.cond_formats.iter().any(|cf| cf.ranges.iter().any(|r| r.intersects(&dest)))
     {
         return Err(bad(RESHAPE, "Choose an output area without validation or conditional-format rules."));
     }
+    check_dest(to, dest, &v, RESHAPE, false, false)?;
     let receipt = json!({"sheet":from.name,"source":v.src.a1(),"destinationSheet":to.name,"destination":dest.a1(),"fields":fields});
     edit(s, |cx| {
         let mut index = 0;
@@ -353,6 +351,45 @@ mod tests {
     fn get(s: &mut Session, sheet: &str, at: &str) -> Json {
         s.execute("cell.get", json!({"sheet":sheet,"cell":at})).unwrap()
     }
+    #[test]
+    fn same_sheet_cut_refuses_a_row_dependent_structured_reference_without_defined_names() {
+        let mut s = setup();
+        s.execute("cell.set", json!({"cell":"B2","input":"=Sales[@Amount]"})).unwrap();
+        let before = s.doc().unwrap().wb.clone();
+        let err = s.execute(TRANSFER, json!({"sheet":"Input","source":"B2","at":"B3","operation":"move"})).unwrap_err();
+        assert!(err.to_string().contains("structured reference"));
+        assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+    }
+
+    #[test]
+    fn overwrite_clears_only_conditional_formats_inside_the_destination() {
+        for operation in ["copy", "transpose"] {
+            let mut s = setup();
+            s.execute("home.conditionalFormat", json!({"range":"E2:E5","rule":{"type":"expression","formula":"E2>5","preset":"lightRedFill"}}))
+                .unwrap();
+            let before = s.doc().unwrap().wb.sheets[0].cond_formats.clone();
+            let request = json!({"sheet":"Input","source":"A1:B1","at":"E2","operation":operation,"overwrite":true});
+            let receipt = s.execute(TRANSFER, request).unwrap();
+            let dest = RangeRef::parse(receipt["destination"].as_str().unwrap()).unwrap();
+            let formats = &s.doc().unwrap().wb.sheets[0].cond_formats;
+            let outside = CellRef::parse("E5").unwrap();
+            assert!(formats.iter().flat_map(|f| &f.ranges).any(|r| r.contains(outside)));
+            assert!(!formats.iter().flat_map(|f| &f.ranges).any(|r| r.intersects(&dest)));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.sheets[0].cond_formats, before);
+        }
+    }
+
+    #[test]
+    fn copied_validation_thresholds_transpose_from_the_actual_copied_cells() {
+        let mut s = setup();
+        s.execute("data.validation", json!({"range":"A1:C2","type":"decimal","formula1":"=B1","formula2":"=$G2"})).unwrap();
+        s.execute(TRANSFER, json!({"sheet":"Input","source":"B2:C2","at":"E2","operation":"transpose"})).unwrap();
+        let dest = RangeRef::parse("E2:E3").unwrap();
+        let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|r| r.ranges.contains(&dest)).unwrap();
+        assert_eq!((rule.f1.as_str(), rule.f2.as_deref()), ("E3", Some("$G3")));
+    }
+
     #[test]
     fn unrelated_hidden_workbook_names_are_never_disclosed_by_move_guard() {
         let mut s = setup();

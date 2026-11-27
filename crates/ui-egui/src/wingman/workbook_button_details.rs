@@ -113,6 +113,17 @@ pub(super) fn table(d: &DocState, sh: &Sheet, name: &str, p: &mut Json) -> Resul
     Ok(())
 }
 
+fn threshold(v: &Json) -> Result<f64, String> {
+    let n = v.as_f64().ok_or("A numeric rule needs a threshold.")?;
+    let integer = v.as_i64().map(i128::from).or_else(|| v.as_u64().map(i128::from));
+    // Decimal/exponent tokens already parsed as f64 have lost their spelling.
+    // Outside the safe-integer range we cannot tell adjacent integers apart.
+    if integer.map_or(n.abs() >= (1_u64 << 53) as f64, |exact| n as i128 != exact) {
+        return Err("Threshold cannot be represented exactly as a worksheet number.".into());
+    }
+    Ok(n)
+}
+
 pub(super) fn validation(name: &str, sh: &Sheet, r: RangeRef, p: &mut Json) -> Result<(), String> {
     if name == "clear_validation" {
         *p = json!({"sheet":sh.name,"range":r.a1(),"clear":true});
@@ -163,8 +174,8 @@ pub(super) fn validation(name: &str, sh: &Sheet, r: RangeRef, p: &mut Json) -> R
             return Err("Entries, source, and dropdown belong to list validation.".into());
         }
         let op = v["operator"].as_str().ok_or("A numeric rule needs an operator.")?;
-        let f1 = v["value"].as_f64().ok_or("A numeric rule needs a threshold.")?;
-        let f2 = v["value2"].as_f64();
+        let f1 = threshold(&v["value"])?;
+        let f2 = v.get("value2").map(threshold).transpose()?;
         if matches!(op, "between" | "notBetween") != f2.is_some() {
             return Err("Supply value2 only for between or notBetween; both bounds are required.".into());
         }
@@ -180,9 +191,9 @@ pub(super) fn validation(name: &str, sh: &Sheet, r: RangeRef, p: &mut Json) -> R
             return Err("Use bounds appropriate to this validation type.".into());
         }
         args["operator"] = json!(op);
-        args["formula1"] = json!(f1.to_string());
-        if let Some(v) = f2 {
-            args["formula2"] = json!(v.to_string());
+        args["formula1"] = json!(v["value"].to_string());
+        if let Some(bound) = v.get("value2") {
+            args["formula2"] = json!(bound.to_string());
         }
     }
     *p = args;

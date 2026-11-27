@@ -12,61 +12,74 @@ struct Code {
     len: usize,
     fence: bool,
     quote_depth: usize,
+    line_quotes: usize,
+    fence_at: Option<usize>,
 }
 
 impl Code {
+    fn new(text: &str) -> Self {
+        let mut code = Self::default();
+        code.line_prefix(text.as_bytes(), 0);
+        code
+    }
+
+    // Read a line's blockquote prefix once. A tab advances to a four-column stop;
+    // the optional separator after '>' consumes just one of those columns.
+    fn line_prefix(&mut self, bytes: &[u8], mut at: usize) {
+        let mut column = 0;
+        let mut base = 0;
+        self.line_quotes = 0;
+        self.fence_at = None;
+        loop {
+            match bytes.get(at) {
+                Some(b' ') => column += 1,
+                Some(b'\t') => column += 4 - column % 4,
+                Some(b'>') => {
+                    self.line_quotes += 1;
+                    column += 1;
+                    base = column + usize::from(matches!(bytes.get(at + 1), Some(b' ' | b'\t')));
+                }
+                _ => {
+                    self.fence_at = Some(at);
+                    break;
+                }
+            }
+            at += 1;
+            if column > base + 3 {
+                break;
+            }
+        }
+        if self.fence && self.line_quotes < self.quote_depth {
+            self.len = 0;
+        }
+    }
+
     /// Advance over a Markdown code delimiter. Tildes only open fenced blocks at line start.
     fn advance(&mut self, text: &str, at: usize) -> usize {
         let bytes = text.as_bytes();
         let byte = bytes[at];
-        if byte == b'\n' && self.len != 0 && self.fence && self.quote_depth > 0 {
-            // A quoted fenced block cannot continue outside its blockquote container.
-            let mut line = &bytes[at + 1..];
-            for _ in 0..self.quote_depth {
-                let indent = line.iter().take(3).take_while(|&&b| b == b' ').count();
-                let Some(after) = line[indent..].strip_prefix(b">") else {
-                    self.len = 0;
-                    break;
-                };
-                line = after.strip_prefix(b" ").unwrap_or(after);
-            }
+        if byte == b'\n' || (byte == b'\r' && bytes.get(at + 1) != Some(&b'\n')) {
+            self.line_prefix(bytes, at + 1);
         }
         if !matches!(byte, b'`' | b'~') {
             return 1;
         }
         let len = bytes[at..].iter().take_while(|&&c| c == byte).count();
-        let line_start = || {
-            let mut rev = bytes[..at].iter().rev();
-            let mut indent = 0;
-            let mut quotes = 0;
-            loop {
-                match rev.next() {
-                    None | Some(b'\n') => return (indent <= 3).then_some(quotes),
-                    // One optional separating space after a Markdown blockquote marker
-                    // is not part of the fenced code block's (at most three) indent.
-                    Some(b'>') if indent <= 4 => {
-                        quotes += 1;
-                        indent = 0;
-                    }
-                    Some(b' ') if indent < 4 => indent += 1,
-                    _ => return None,
-                }
-            }
-        };
+        let at_prefix = self.fence_at == Some(at);
         if self.len == 0 {
-            let depth = (len >= 3).then(line_start).flatten();
-            let fence = depth.is_some();
+            let fence = len >= 3 && at_prefix;
             if (byte == b'`' || fence) && !text[..at].ends_with('\\') {
                 self.delimiter = byte;
                 self.len = len;
                 self.fence = fence;
-                self.quote_depth = depth.unwrap_or(0);
+                self.quote_depth = if fence { self.line_quotes } else { 0 };
             }
         } else if byte == self.delimiter {
             let close = if self.fence {
                 len >= self.len
-                    && line_start() == Some(self.quote_depth)
-                    && bytes[at + len..].iter().take_while(|&&b| b != b'\n').all(|&b| b.is_ascii_whitespace())
+                    && at_prefix
+                    && self.line_quotes == self.quote_depth
+                    && bytes[at + len..].iter().take_while(|&&b| !matches!(b, b'\r' | b'\n')).all(|&b| matches!(b, b' ' | b'\t'))
             } else {
                 len == self.len
             };
@@ -79,7 +92,7 @@ impl Code {
 }
 
 pub(super) fn in_code(text: &str) -> bool {
-    let mut code = Code::default();
+    let mut code = Code::new(text);
     let mut at = 0;
     while at < text.len() {
         at += code.advance(text, at);
@@ -203,7 +216,7 @@ fn explicit_read(after: &str) -> Option<(&str, bool)> {
 pub(in super::super) fn mentions(text: &str) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut at = 0;
-    let mut code = Code::default();
+    let mut code = Code::new(text);
     while at < text.len() {
         let b = text.as_bytes()[at];
         if b != b'@' || code.len != 0 || !boundary(&text[..at]) {
