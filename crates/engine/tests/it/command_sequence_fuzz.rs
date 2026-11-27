@@ -12,7 +12,7 @@
 //!   and saving, reloading or recalculating never panics either;
 //! - a non-undoable command never changes cell content (it would be lost to undo);
 //! - the structure stays valid: active sheet in range, sheet and table names valid and unique,
-//!   merges and tables on the sheet and not overlapping, legacy arrays anchored at their
+//!   merges and tables on the sheet and not overlapping (nor a merge inside a table), legacy arrays anchored at their
 //!   top-left cell, the selection on the sheet;
 //! - a full recalculation from scratch gives the values the incremental recalculation left
 //!   (catches stale dependency graphs);
@@ -442,6 +442,10 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
             if let Some(o) = sh.tables.iter().skip(k + 1).find(|o| overlaps(&t.range, &o.range)) {
                 return Some(format!("{}: tables `{}` ({}) and `{}` ({}) overlap", sh.name, t.name, t.range, o.name, o.range));
             }
+            // Excel removes a table that holds a merged cell when it opens the file.
+            if let Some(m) = sh.merges.iter().find(|m| overlaps(&t.range, m)) {
+                return Some(format!("{}: table `{}` ({}) holds merged cells {m}", sh.name, t.name, t.range));
+            }
         }
     }
     if sel.ranges.is_empty() || !sel.active.is_valid() || sel.ranges.iter().any(|r| !r.start.is_valid() || !r.end.is_valid()) {
@@ -525,9 +529,9 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
     wb.names.iter().find(|n| n.name == WATCH_NAME).map(|n| n.formula.as_str())
 }
 
-/// The workbook with view state (active sheet, scroll, active cell, Normal / Page Layout / Page
-/// Break Preview) and the Watch Window list reset: undo restores view state as it was, but
-/// switching sheets or views isn't an undoable edit.
+/// The workbook with view state (active sheet, scroll, active cell, zoom, Normal / Page Layout /
+/// Page Break Preview) and the Watch Window list reset: undo restores view state as it was, but
+/// switching sheets, zooming or switching views isn't an undoable edit.
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
     wb.set_active_sheet(0);
@@ -536,6 +540,7 @@ fn canonical(wb: &Workbook) -> Workbook {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();
         sh.view_top_left = CellRef::default();
+        sh.zoom = 100;
         sh.view = SheetViewMode::Normal;
     }
     wb

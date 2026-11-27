@@ -4,6 +4,8 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Linearer Trend",
+        "Growth Trend" => "Exponentieller Trend",
         "Diagram" => "Schema",
         "Decorative Text" => "Dekorativer Text",
         "Paste" => "Einfügen",
@@ -354,6 +356,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Print Active Sheets" => "Aktive Blätter drucken",
         "Print Entire Workbook" => "Gesamte Arbeitsmappe drucken",
+        "Print Selection" => "Auswahl drucken",
         "Fit Sheet on One Page" => "Blatt auf einer Seite darstellen",
         "Page Setup…" => "Seite einrichten…",
         "Page {page} of {pages}" => "Seite {page} von {pages}",
@@ -450,6 +453,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Zeigen",
         "Calculate" => "Berechnen",
         "Select destination and press Enter or choose Paste" => "Ziel auswählen und die Eingabetaste drücken oder „Einfügen“ wählen",
+        "Extend Selection" => "Markierung erweitern",
+        "Add or Remove Selection" => "Markierung hinzufügen oder entfernen",
         "General" => "Standard",
         "Number" => "Zahl",
         "Currency" => "Währung",
@@ -669,6 +674,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Series…" => "Reihe…",
         "Down" => "Nach unten",
         "Up" => "Nach oben",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Neue Formatierungsregel",
+        "Edit Formatting Rule" => "Formatierungsregel bearbeiten",
+        "Select a Rule Type" => "Regeltyp auswählen",
+        "Edit the Rule Description" => "Regelbeschreibung bearbeiten",
+        "Format all cells based on their values" => "Alle Zellen basierend auf ihren Werten formatieren",
+        "Format only cells that contain" => "Nur Zellen formatieren, die enthalten",
+        "Format only top or bottom ranked values" => "Nur Werte formatieren, die oben oder unten eingestuft sind",
+        "Format only values that are above or below average" => "Nur Werte formatieren, die über oder unter dem Durchschnitt liegen",
+        "Format only unique or duplicate values" => "Nur eindeutige oder doppelte Werte formatieren",
+        "Use a formula to determine which cells to format" => "Formel zur Ermittlung der zu formatierenden Zellen verwenden",
+        "This rule type isn't available yet." => "Dieser Regeltyp ist noch nicht verfügbar.",
+        "Format Style:" => "Formatvorlage:",
+        "2-Color Scale" => "2-Farben-Skala",
+        "3-Color Scale" => "3-Farben-Skala",
+        "Midpoint" => "Mittelpunkt",
+        "Lowest value" => "Niedrigster Wert",
+        "Highest value" => "Höchster Wert",
+        "Percent" => "Prozent",
+        "Percentile" => "Perzentil",
+        "Formula" => "Formel",
+        "Format values where this formula is true:" => "Werte formatieren, für die diese Formel wahr ist:",
+        "with" => "mit",
+        "More Rules…" => "Weitere Regeln…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Helle rote Füllung mit dunkelrotem Text",
+        "Yellow Fill with Dark Yellow Text" => "Gelbe Füllung mit dunkelgelbem Text",
+        "Green Fill with Dark Green Text" => "Grüne Füllung mit dunkelgrünem Text",
+        "Light Red Fill" => "Helle rote Füllung",
+        "Red Text" => "Roter Text",
+        "Red Border" => "Roter Rahmen",
         _ => return None,
     })
 }

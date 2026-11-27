@@ -10,7 +10,7 @@ use skrifa::{
 };
 use unicode_bidi::BidiInfo;
 
-use crate::{CID_FONT, Error, Font, TextDirection, n, needs_cid, pdf_string, pdf_utf16_string};
+use crate::{CID_FONT, EXT_FONT, Error, FONT_COUNT, Font, Run, TextDirection, n, pdf_ext_string, pdf_string, pdf_utf16_string, run_kind};
 
 include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
 
@@ -197,9 +197,25 @@ fn has_weight_axis(bytes: &[u8]) -> bool {
 
 #[derive(Debug)]
 pub(crate) enum Item {
-    Glyph { id: u32, x: f32, y: f32, source: String },
-    Latin { text: String, x: f32 },
-    Cid { text: String, x: f32 },
+    Glyph {
+        id: u32,
+        x: f32,
+        y: f32,
+        source: String,
+    },
+    Latin {
+        text: String,
+        x: f32,
+    },
+    /// Latin Extended-A letters WinAnsiEncoding lacks, set in the face's extended font.
+    Ext {
+        text: String,
+        x: f32,
+    },
+    Cid {
+        text: String,
+        x: f32,
+    },
 }
 
 pub(crate) struct Layout {
@@ -250,10 +266,14 @@ pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result
                 if !embedded {
                     let part = part.chars().map(|ch| if is_line_break(ch) { ' ' } else { ch });
                     let part: Vec<char> = if rtl { part.rev().map(mirror_ansi).collect() } else { part.collect() };
-                    for run in part.chunk_by(|a, b| needs_cid(*a) == needs_cid(*b)) {
+                    for run in part.chunk_by(|a, b| run_kind(*a) == run_kind(*b)) {
                         let (text, x) = (run.iter().collect(), layout.width);
                         layout.width += run.iter().map(|&ch| f32::from(font.char_width(ch))).sum::<f32>();
-                        layout.items.push(if run.first().is_some_and(|&ch| needs_cid(ch)) { Item::Cid { text, x } } else { Item::Latin { text, x } });
+                        layout.items.push(match run.first().map(|&ch| run_kind(ch)) {
+                            Some(Run::Cid) => Item::Cid { text, x },
+                            Some(Run::Ext) => Item::Ext { text, x },
+                            _ => Item::Latin { text, x },
+                        });
                     }
                     continue;
                 }
@@ -325,7 +345,7 @@ pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection)
                 ascent = ascent.max(y + top);
                 descent = descent.max(-y - bottom);
             }
-            Item::Latin { .. } | Item::Cid { .. } => {
+            Item::Latin { .. } | Item::Ext { .. } | Item::Cid { .. } => {
                 ascent = ascent.max(800.0);
                 descent = descent.max(220.0);
             }
@@ -410,6 +430,8 @@ pub(crate) struct Subset {
     bytes: usize,
     /// Some text on the page set a run in the CJK CID font, so the page must declare it.
     pub(crate) uses_cid: bool,
+    /// The faces (by [`Font::index`]) whose Latin Extended-A font some text on the page used.
+    pub(crate) uses_ext: [bool; FONT_COUNT],
 }
 
 struct Glyph {
@@ -478,6 +500,19 @@ impl Subset {
                 }
                 Item::Latin { text, x } => {
                     let _ = writeln!(out, "/F{} {} Tf 1 0 0 1 {} 0 Tm {} Tj", font.index() + 1, n(size), n(x * size / 1000.0), pdf_string(&text));
+                }
+                Item::Ext { text, x } => {
+                    if let Some(used) = self.uses_ext.get_mut(font.index()) {
+                        *used = true;
+                    }
+                    let _ = writeln!(
+                        out,
+                        "/F{} {} Tf 1 0 0 1 {} 0 Tm {} Tj",
+                        EXT_FONT + font.index() + 1,
+                        n(size),
+                        n(x * size / 1000.0),
+                        pdf_ext_string(&text)
+                    );
                 }
                 Item::Cid { text, x } => {
                     self.uses_cid = true;

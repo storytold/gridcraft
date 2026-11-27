@@ -76,7 +76,34 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Too many cells to paste as links at once.".into()));
     }
     let same_doc = s.doc()?.uid == clip.doc_uid;
-    let cut_move = clip.cut && same_doc && what == What::All;
+    // A cut in this workbook moves its cells: the source is emptied before the destination is
+    // written. As in Excel, it moves only as a plain Paste onto one cell or an area of its own size
+    // and shape. Every other way (a Paste Special option, tiling over a larger or differently shaped
+    // area, a row the filter hides) would write the cut cells somewhere other than one place, or not
+    // at all, after their source was gone, so it is refused here, before anything changes, and the
+    // cut stays pending.
+    let cut_move = clip.cut && same_doc;
+    if cut_move {
+        let plain = what == What::All && !link && !skip_blanks && !transpose && op == "none";
+        if !plain {
+            return Err(EngineError::Other("Cut cells can only be pasted with Paste. To use Paste Special, copy them instead.".into()));
+        }
+        let anchored = cell_param_on(s, p, "at", dest_sheet)?.is_some() || sel.is_single();
+        if !anchored && (sel.height() != h || sel.width() != w) {
+            return Err(EngineError::Other(
+                "The cut cells and the paste area aren't the same size and shape: select one cell, or an area the size of the cut cells.".into(),
+            ));
+        }
+        // The rows the cut itself would land on, whatever the paste would skip: an anchored or
+        // taller block is pasted straight down, so `skip_rows` (which only a tiled single row uses)
+        // can't tell whether it would write into a hidden row.
+        if let Some(end) = at.offset(i64::from(h) - 1, i64::from(w) - 1) {
+            let dest = RangeRef::new(at, end);
+            if s.doc()?.wb.sheet(dest_sheet).is_some_and(|sh| !super::filtered_rows(sh, dest).is_empty()) {
+                return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+            }
+        }
+    }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     // The source sheet's name now: a cut whose sheet was renamed after it moves its cells,
@@ -208,7 +235,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             moved.dynamic = f.dynamic;
                             return Some(std::sync::Arc::new(moved));
                         }
-                        let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                        let moved = if transpose {
+                            // A transposed paste turns the references instead of shifting them (#2450).
+                            gridcraft_formula::adjust::transpose_relative(e, sc, dest)
+                        } else {
+                            gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)
+                        };
                         Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
@@ -389,6 +421,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
                     let nm = RangeRef::new(a, b);
                     let sh = cx.sheet_mut(dest_sheet)?;
+                    // A table can't hold merged cells (Excel removes the table on open): the
+                    // cells are pasted there unmerged.
+                    if sh.tables.iter().any(|t| t.range.intersects(&nm)) {
+                        continue;
+                    }
                     sh.merges.retain(|x| !x.intersects(&nm));
                     sh.merges.push(nm);
                 }
