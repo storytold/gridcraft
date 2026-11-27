@@ -443,6 +443,8 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             })
             .collect();
         sheet.charts.push(Chart {

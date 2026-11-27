@@ -33,6 +33,174 @@ fn tvm() {
     is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
 }
 
+/// XIRR of `values` on `dates`, with an optional guess, as a number or an error.
+fn xirr_of(values: &[f64], dates: &[f64], guess: Option<f64>) -> Value {
+    let mut args = vec![rf(col(values)), rf(col(dates))];
+    args.extend(guess.map(n));
+    ev("XIRR", args)
+}
+
+#[track_caller]
+fn xirr_is(values: &[f64], dates: &[f64], guess: Option<f64>, expected: f64) {
+    assert_eq!(xirr_of(values, dates, guess), Value::Number(expected), "XIRR{values:?} {dates:?} {guess:?}");
+}
+
+fn irr_of(values: &[f64], guess: Option<f64>) -> Value {
+    let mut args = vec![rf(col(values))];
+    args.extend(guess.map(n));
+    ev("IRR", args)
+}
+
+/// Expected values observed in Excel 365 with these synthetic inputs. XIRR matches bit for
+/// bit: its answer is a bisection midpoint, about 1e-8 from the exact root.
+#[test]
+fn xirr_follows_excel_bisection() {
+    let (b, y1, y2) = (43831.0, 44196.0, 44561.0);
+    // Root 10%: the bracket and so the answer depend on the guess, not on the flows.
+    xirr_is(&[-100.0, 110.0], &[b, y1], None, 0.099_999_994_039_535_52);
+    xirr_is(&[-100.0, 121.0], &[b, y2], None, 0.099_999_994_039_535_52);
+    xirr_is(&[-100.0, 110.0], &[b, y1], Some(0.0), 0.099_999_995_117_187_5);
+    xirr_is(&[-100.0, 110.0], &[b, y1], Some(0.25), 0.099_999_997_764_825_82);
+    xirr_is(&[-100.0, 110.0], &[b, y1], Some(5.0), 0.100_000_002_421_438_7);
+    xirr_is(&[-100.0, 60.0, 60.0], &[b, y1, y2], None, 0.130_662_387_609_481_82);
+    xirr_is(&[-100.0, 150.0], &[b, y1], None, 0.499_999_994_039_535_54);
+    // Fractional dates are truncated.
+    xirr_is(&[-100.0, 60.0, 60.0], &[b, y1 + 0.9, y2 + 0.2], None, 0.130_662_387_609_481_82);
+    // Negative roots: minus the guess, then halfway to -100% each step.
+    xirr_is(&[-100.0, 73.0], &[b, y1], None, -0.269_999_996_572_733);
+    xirr_is(&[-100.0, 13.0], &[b, y1], None, -0.870_000_001_043_081_1);
+    xirr_is(&[-100.0, 1e-29], &[b, 45658.0], None, -0.999_999_359_104_708);
+    // A guess of 100% or more steps through rates below -100% (whole years only).
+    xirr_is(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(2.0), -1.653_112_880_885_601);
+    xirr_is(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(-0.3), -0.846_887_112_781_405_5);
+    is_err(xirr_of(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(1.0)), CellError::Num);
+    // One-day spans.
+    xirr_is(&[-100.0, 100.01], &[b, b + 1.0], None, 0.037_172_409_892_082_23);
+    xirr_is(&[-100.0, 99.99], &[b, b + 1.0], None, -0.035_843_667_387_962_34);
+    xirr_is(&[-100.0, 110.0], &[b, b + 1.0], None, 1_283_305_579_426_611.5);
+    // A leading zero cash flow scales the residual to 0: Excel halves the guess to a tiny
+    // number whatever the flows (observed), and a negative guess is #NUM!.
+    let z = [0.0, -100.0, 110.0];
+    let zd = [b, y1, y2];
+    xirr_is(&z, &zd, None, 2.980_232_238_769_531_4e-9);
+    xirr_is(&z, &zd, Some(0.2), 2.980_232_238_769_531_4e-9);
+    xirr_is(&z, &zd, Some(0.0), 4.882_812_5e-9);
+    xirr_is(&z, &zd, Some(5.0), 4.656_612_873_077_392_6e-9);
+    xirr_is(&[0.0, -100.0, 50.0], &zd, None, 2.980_232_238_769_531_4e-9);
+    is_err(xirr_of(&z, &zd, Some(-0.5)), CellError::Num);
+    // Dates before the first are allowed (time runs from the first date); in the second
+    // case the search finds no sign change.
+    xirr_is(&[-2416.93, 447.77, 1743.6], &[44331.0, 44498.0, 43849.0], None, -0.974_587_937_071_919_6);
+    is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, b - 365.0, y2], None), CellError::Num);
+    // A negative guess never reaches a positive root; a guess at or below -1 is #NUM!.
+    is_err(xirr_of(&[-100.0, 110.0], &[b, y1], Some(-0.1)), CellError::Num);
+    is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, y1, y2], Some(-1.0)), CellError::Num);
+    // Two roots with the guess outside them; all dates the same.
+    is_err(xirr_of(&[-100.0, 300.0, -210.0], &[b, y1, y2], None), CellError::Num);
+    is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, b, b], None), CellError::Num);
+}
+
+/// IRR follows Excel's answers to about 1e-12 and its #NUM! cases.
+#[test]
+fn irr_follows_excel() {
+    assert_eq!(irr_of(&[-100.0, 110.0], None), Value::Number(0.100_000_000_000_000_09));
+    close_tol(irr_of(&[-0.0001, 0.0, 0.0, 0.0, 100.0], None), 30.622_776_600_497_09, 1e-9);
+    let mut late = vec![-100.0];
+    late.extend([0.0; 19]);
+    late.push(1e-5);
+    is_err(irr_of(&late, None), CellError::Num);
+    // ...but from a guess just above -100% Newton creeps down to the root.
+    let mut late18 = vec![-100.0];
+    late18.extend([0.0; 18]);
+    late18.push(1e-5);
+    close_tol(irr_of(&late18, Some(-0.99)), -0.571_866_760_128_087_4, 1e-9);
+    close_tol(irr_of(&[-100.0, 300.0, -210.0], Some(0.9)), 0.887_298_334_620_741_5, 1e-12);
+    is_err(irr_of(&[-100.0, 60.0, 60.0], Some(-1.0)), CellError::Value);
+    close_tol(irr_of(&[-100.0, 60.0, 60.0], Some(-0.999_999)), 0.130_662_386_291_807_5, 1e-12);
+    // A small Newton step alone is not convergence when cancellation leaves a large scaled residual.
+    close_tol(irr_of(&[-1e-9, 1.0, -1e8], None), 112_701_664.379_258_29, 1e-8);
+    // An exact repeated root at the starting guess (zero slope) is the answer, as in Excel.
+    assert_eq!(irr_of(&[1.0, -2.0, 1.0], Some(0.0)), Value::Number(0.0));
+    assert_eq!(irr_of(&[-1.0, 3.0, -3.0, 1.0], Some(0.0)), Value::Number(0.0));
+    close_tol(irr_of(&[1.0, -2.0, 1.0], None), 1.09e-7, 1e-7);
+}
+
+/// RATE with the given arguments, as a number or an error.
+fn rate_of(args: &[f64]) -> Value {
+    ev("RATE", args.iter().map(|x| n(*x)).collect())
+}
+
+#[track_caller]
+fn rate_is(args: &[f64], expected: f64) {
+    close_tol(rate_of(args), expected, 1e-15);
+}
+
+/// Expected values observed in Excel 365 with these synthetic inputs.
+#[test]
+fn rate_follows_excel_iteration() {
+    // No payments and a zero future value: the answer is -100%, which the iteration
+    // approaches without reaching. Excel returns the last iterate, bit for bit.
+    rate_is(&[5.0, 0.0, -100.0, 0.0], -0.999_999_409_145_182_5);
+    rate_is(&[3.0, 0.0, -50.0, 0.0], -0.999_999_744_782_979_9);
+    rate_is(&[10.0, 0.0, -1.0, 0.0], -0.999_998_741_101_371_3);
+    rate_is(&[5.0, 0.0, -100.0, 0.0, 0.0, 0.5], -0.999_999_408_783_809_4);
+    rate_is(&[5.0, 0.0, -100.0, 0.0, 0.0, -0.99], -0.999_999_411_730_630_3);
+    // Second starting point goes the other way when the equation is positive at the guess.
+    rate_is(&[5.0, 0.0, 100.0, 0.0], -0.999_999_409_810_240_3);
+    rate_is(&[5.0, 0.0, -100.0, 1e-29], -0.999_999_260_333_075_4);
+    rate_is(&[5.0, 0.0, -100.0, 1e4], 1.511_886_431_510_563_3);
+    rate_is(&[4.0, 0.0, -1.0, 100.0], 2.162_277_660_168_009);
+    // Within 1e-7 by step but not by value: Excel keeps going.
+    rate_is(&[5.0, 0.0, -1e25, 0.0], -0.999_999_628_525_605_1);
+    // 200 steps without converging: the last iterate when it is within 1e-4, else #NUM!.
+    rate_is(&[20.0, 0.0, -1.0, 0.0], -0.999_112_071_912_539_3);
+    rate_is(&[36.0, 0.0, -1.0, 0.0, 0.0, -0.994], -0.999_875_315_309_626_9);
+    is_err(rate_of(&[12.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[25.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[20.0, 0.0, -1e60, 0.0]), CellError::Num);
+    // Large rates the iteration can't reach are #NUM! in Excel.
+    is_err(rate_of(&[4.0, 0.0, -0.0001, 100.0]), CellError::Num);
+    is_err(rate_of(&[5.0, 0.0, -100.0, 1e5]), CellError::Num);
+    is_err(rate_of(&[10.0, -300.0, 1000.0]), CellError::Num);
+    // ...but are found from a closer guess.
+    rate_is(&[4.0, 0.0, -0.1, 100.0, 0.0, 4.0], 4.623_413_251_903_489);
+    close_tol(rate_of(&[10.0, -300.0, 1000.0, 0.0, 0.0, 0.3]), 0.273_198_424_105_560_4, 1e-12);
+    // Converging on a rate at or below -100% (or within 1e-7 of it) is #NUM!.
+    is_err(rate_of(&[1.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[10.0, -1000.0, 1000.0]), CellError::Num);
+    is_err(rate_of(&[1.0, 0.0, -100.0, 1e-5]), CellError::Num);
+    rate_is(&[1.0, 0.0, -100.0, 2e-5], -0.999_999_8);
+    is_err(rate_of(&[5.0, 0.0, -1e30, 0.0]), CellError::Num);
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.0]), CellError::Num);
+    // A value that never gets near zero is #NUM!, however small the step.
+    is_err(rate_of(&[4.0, 0.0, 100.0, 100.0]), CellError::Num);
+    is_err(rate_of(&[4.0, 0.0, -1e-12, 1e-6]), CellError::Num);
+    rate_is(&[4.0, 0.0, -1e-14, 1e-8], 0.099_000_000_283_235_72);
+    // Subnormal steps are flushed to zero.
+    rate_is(&[3.0, 0.0, -1e-305, 0.0], 0.101);
+    is_err(rate_of(&[4.0, 0.0, 0.0, 100.0]), CellError::Num);
+    // Guess at or below -1 is #VALUE!; type is 0 or anything else (1).
+    is_err(rate_of(&[10.0, -100.0, 1000.0, 0.0, 0.0, -1.0]), CellError::Value);
+    is_err(rate_of(&[0.0, -100.0, 1000.0]), CellError::Num);
+    // Excel does not step the second point back to -1: a fractional nper with a guess near -1 is #NUM!
+    // even though a root exists at -0.99, and the same case from a guess of -0.99 finds it.
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.9995]), CellError::Num);
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.5]), CellError::Num);
+    close_tol(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.99]), -0.99, 1e-7);
+    assert_eq!(rate_of(&[10.0, -100.0, 1000.0, 0.0, 2.0]), rate_of(&[10.0, -100.0, 1000.0, 0.0, 1.0]));
+    // Ordinary loans, and large amounts that can't get within 1e-7 of zero.
+    close_tol(rate_of(&[360.0, -1000.0, 150000.0]), 0.005_850_253_376_759_637, 1e-11);
+    close_tol(rate_of(&[360.0, -1000.0, 150000.0, 0.0, 1.0]), 0.005_898_953_457_098_463, 1e-11);
+    close_tol(rate_of(&[1000.0, -1e6, 1e8]), 0.009_999_522_655_994_865, 1e-12);
+    close_tol(rate_of(&[360.0, -1e9, 1.5e11]), 0.005_850_253_376_759_668, 1e-12);
+    close_tol(rate_of(&[10.0, -50.0, 1000.0]), -0.109_560_293_684_682_5, 1e-14);
+    // Roots at 0% come out as rounding noise in both, so only the absolute size matters.
+    match rate_of(&[10.0, -100.0, 1000.0]) {
+        Value::Number(x) => assert!(x.abs() < 1e-8, "{x}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// PMT within about 4 ULPs of Excel's (Value2 of synthetic probes; libm differs by an ULP across
 /// platforms). The old `(1 + rate)^nper` form was 25 to 91 ULPs off on these, enough to flip a loan schedule's final `IF(p - SUM(r) > 0, ...)`.
 #[test]
@@ -67,6 +235,42 @@ fn pmt_edge_cases_follow_excel() {
     close_tol(ev("PMT", vec![n(-1e-17), n(1.0), n(1e18), n(-1e18)]), 10.0, 1e-9);
     close_tol(ev("PMT", vec![n(-0.5), n(60.0), n(1e18)]), -0.433_680_868_994_201_8, 1e-6);
     close_tol(ev("PMT", vec![n(0.05), n(10.0), n(100.0), n(50.0), n(1.0)]), -16.119701185541427, 1e-15);
+}
+
+#[test]
+fn blank_cash_flows_follow_excel_for_xirr_and_xnpv() {
+    // Each result below was observed in Excel on a synthetic workbook: five rows, the first
+    // four -10000, 2750, 4250, 3250 on 39448, 39508, 39751, 39859; the last row varies.
+    let dates = col(&[39448.0, 39508.0, 39751.0, 39859.0, 39904.0]);
+    let gap = arr([39448.0, 39508.0, 39751.0, 39859.0].iter().map(|x| vec![nv(*x)]).chain([vec![Value::Empty]]).collect());
+    let flows = |last: Value| arr([-10000.0, 2750.0, 4250.0, 3250.0].iter().map(|x| vec![nv(*x)]).chain([vec![last]]).collect());
+    let rate = 0.033791377645041754;
+    // XIRR: a blank value counts as 0 and a blank date is ignored when its value is blank or 0. The answer is a bisection midpoint, within about 1e-8 of the exact rate.
+    close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(dates.clone())]), rate, 1e-7);
+    close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(dates.clone())]), rate, 1e-7);
+    close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(gap.clone())]), rate, 1e-7);
+    close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(gap.clone())]), rate, 1e-7);
+    is_err(ev("XIRR", vec![rf(flows(nv(2750.0))), rf(gap.clone())]), CellError::Num);
+    is_err(ev("XIRR", vec![rf(flows(tv("-"))), rf(dates.clone())]), CellError::Value);
+    // XNPV is strict: a blank value is #NUM! where 0 is a number.
+    close_tol(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(dates.clone())]), -382.66, 1e-2);
+    is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates.clone())]), CellError::Num);
+    is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(gap.clone())]), CellError::Num);
+    is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(gap.clone())]), CellError::Num);
+    is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Num);
+    is_err(ev("XNPV", vec![n(0.09), rf(flows(tv("-"))), rf(dates.clone())]), CellError::Num);
+    // In the first row a blank value or date is #VALUE! for XNPV; XIRR reads a blank date there as day 0.
+    let first_row = |value: Value, date: Value| {
+        let cells = |x: Value, rest: [f64; 4]| arr(std::iter::once(vec![x]).chain(rest.iter().map(|y| vec![nv(*y)])).collect());
+        (rf(cells(value, [2750.0, 4250.0, 3250.0, 500.0])), rf(cells(date, [39508.0, 39751.0, 39859.0, 39904.0])))
+    };
+    let (v0, d0) = first_row(Value::Empty, nv(39448.0));
+    is_err(ev("XNPV", vec![n(0.09), v0, d0]), CellError::Value);
+    let (v0, d0) = first_row(nv(0.0), Value::Empty);
+    is_err(ev("XNPV", vec![n(0.09), v0, d0]), CellError::Value);
+    let (v0, d0) = first_row(nv(-10000.0), Value::Empty);
+    is_err(ev("XNPV", vec![n(0.09), v0.clone(), d0.clone()]), CellError::Value);
+    close_tol(ev("XIRR", vec![v0, d0]), 0.000_664_654_374_122_619_6, 1e-7);
 }
 
 #[test]
@@ -195,6 +399,21 @@ fn number(v: Value) -> f64 {
         Value::Number(x) => x,
         other => panic!("expected a number, got {other:?}"),
     }
+}
+
+/// A negative fractional basis is #NUM!, not truncation toward zero (#4058).
+#[test]
+fn negative_fractional_basis_is_rejected() {
+    let price = |basis: f64| ev("PRICE", vec![d(2024, 1, 15), d(2025, 6, 30), n(0.05), n(0.04), n(100.0), n(2.0), n(basis)]);
+    is_err(price(-0.9), CellError::Num);
+    is_err(ev("COUPDAYS", vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(-0.9)]), CellError::Num);
+    is_err(ev("PRICEMAT", vec![d(2008, 2, 15), d(2008, 4, 13), d(2007, 11, 11), n(0.061), n(0.061), n(-0.9)]), CellError::Num);
+    is_err(ev("ACCRINTM", vec![d(2008, 4, 1), d(2008, 6, 15), n(0.1), n(1000.0), n(-0.5)]), CellError::Num);
+    // Controls: a positive fraction still truncates to basis 0, and -1 is still #NUM!.
+    close_tol(price(0.9), 101.40114791702759, 1e-9);
+    close_tol(price(0.0), 101.40114791702759, 1e-9);
+    close(ev("COUPDAYS", vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(0.9)]), 180.0);
+    is_err(price(-1.0), CellError::Num);
 }
 
 #[test]

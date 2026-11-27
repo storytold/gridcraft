@@ -1,13 +1,15 @@
 //! File content GridCraft does not model, carried through unchanged so that saving a workbook
 //! never silently drops it (XLSX pass-through: custom XML, external links, connections, query
-//! tables, form controls, OLE objects…).
+//! tables, form controls, OLE objects, chart sheets, and the original XML of embedded charts).
 //!
 //! The data is opaque to everything except the file-format crate: the model only holds it, so a
 //! sheet's kept content disappears with the sheet. It is not part of the JSON format.
 
 use std::sync::Arc;
 
+use crate::features::Chart;
 use crate::sheet::Visibility;
+use crate::style::Style;
 
 /// A relationship from an owning part (the package root, the workbook or a sheet, or a kept part)
 /// to a kept part or to an external target.
@@ -32,6 +34,13 @@ pub struct PreservedPart {
     pub data: Arc<[u8]>,
     /// The part's own relationships, ids unchanged (the part's bytes refer to them).
     pub rels: Vec<PreservedRel>,
+    /// Differential formats its XML refers to by `dxfId`, by their id in the source file's styles
+    /// part. GridCraft rewrites the styles part, so the ids are renumbered on save (kept
+    /// PivotTables).
+    pub dxfs: Vec<(u32, Style)>,
+    /// Custom number formats its XML refers to by `numFmtId` (code by id in the source file),
+    /// renumbered on save like [`Self::dxfs`] (kept PivotTables and pivot caches).
+    pub num_fmts: Vec<(u32, String)>,
 }
 
 /// A raw XML element of an owning part that refers to kept parts, re-emitted on save with its
@@ -60,9 +69,25 @@ pub struct PreservedSheet {
     pub sheet_id: u32,
 }
 
+/// An embedded chart (a chart in a sheet's drawing) kept as it was in the source file, so that
+/// what the model doesn't hold (fonts, point colours, axis bounds, line dashes…) survives a save.
+/// It is written in place of GridCraft's own chart part only while the model's chart still equals
+/// [`Self::chart`], apart from its id and position.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreservedChart {
+    /// The id of the model chart read from it.
+    pub id: u32,
+    /// The chart as GridCraft read it from the kept part (id 0, default anchor).
+    pub chart: Chart,
+    /// Part name of the chart part in the source file (no leading `/`).
+    pub part: String,
+    /// The chart part and every part its relationships reach (style, colours, user shapes…).
+    pub parts: Vec<PreservedPart>,
+}
+
 /// Unmodelled content kept for one owner (the workbook, which also holds package-root content,
 /// or one sheet).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Preserved {
     /// Relationships of the package root (`_rels/.rels`) to kept parts (workbook owner only).
     pub package_rels: Vec<PreservedRel>,
@@ -77,6 +102,8 @@ pub struct Preserved {
     pub vml: Option<PreservedPart>,
     /// Chart sheets, in file order (workbook owner only).
     pub sheets: Vec<PreservedSheet>,
+    /// The original parts of the sheet's embedded charts (sheet owner only).
+    pub charts: Vec<PreservedChart>,
 }
 
 impl Preserved {
@@ -87,9 +114,14 @@ impl Preserved {
             && self.elements.is_empty()
             && self.vml.is_none()
             && self.sheets.is_empty()
+            && self.charts.is_empty()
     }
     /// Total bytes held.
     pub fn byte_len(&self) -> usize {
-        self.parts.iter().chain(self.vml.iter()).fold(0usize, |n, p| n.saturating_add(p.data.len()))
+        self.parts
+            .iter()
+            .chain(self.vml.iter())
+            .chain(self.charts.iter().flat_map(|c| c.parts.iter()))
+            .fold(0usize, |n, p| n.saturating_add(p.data.len()))
     }
 }
