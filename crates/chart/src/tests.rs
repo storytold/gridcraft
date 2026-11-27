@@ -8,7 +8,7 @@ use crate::*;
 mod budget;
 mod data_table;
 
-const ALL_KINDS: [ChartKind; 26] = [
+const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -18,6 +18,8 @@ const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::Line,
     ChartKind::LineMarkers,
     ChartKind::LineStacked,
+    ChartKind::LineStacked100,
+    ChartKind::LineStacked100Markers,
     ChartKind::Pie,
     ChartKind::Doughnut,
     ChartKind::Area,
@@ -549,6 +551,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            // References use their cells' format, whatever the series says.
+            number_format: Some("0%".into()),
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -561,6 +566,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: Some("Literal".into()),
@@ -573,6 +580,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: Some("0.0%".into()),
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -592,6 +601,7 @@ fn resolve_from_workbook() {
     assert!(s1.secondary);
     assert_eq!(d.series[2].name, "Literal");
     assert_eq!(d.series[2].values.len(), 4);
+    assert_eq!(d.series[2].number_format, "0.0%");
 
     // Default categories.
     c.series.remove(0);
@@ -612,6 +622,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
         Series {
             name: None,
@@ -624,6 +636,8 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -641,6 +655,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -659,6 +675,8 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -1364,6 +1382,8 @@ fn pie_points_follow_workbook_theme() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        number_format: None,
+        innermost_categories: false,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1417,6 +1437,47 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
         let first_label = on.iter().position(|p| matches!(p, Prim::Text { text, .. } if text == "$12,000"));
         assert!(first_label > last_poly, "{kind:?}: label drawn under a later area");
     }
+}
+
+#[test]
+fn a_multi_level_category_block_draws_its_innermost_level() {
+    // A PivotChart's two levels of row labels in A1:B4, the outer one (country) on the left:
+    // one label per point, from the innermost column.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Graph".into();
+        for (r, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+            if !outer.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*outer));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*inner));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64 + 1.0));
+            s.set_value(CellRef::new(5, r as u32), Value::from(*inner));
+            s.set_value(CellRef::new(6, r as u32), Value::from(*outer));
+        }
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        categories: Some("Graph!$A$1:$B$4".into()),
+        values: "Graph!$C$1:$C$4".into(),
+        innermost_categories: true,
+        ..Series::default()
+    }];
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // A block with a column per point: its last row is the innermost level.
+    c.series[0].categories = Some("Graph!$A$6:$D$7".into());
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Canada", "", "USA", ""]);
+    assert!(data.category_levels.is_empty(), "innermost PivotChart must not expose outer labels");
+    // Without the flag, every cell is a label, as for any other chart.
+    c.series[0].categories = Some("Graph!$A$1:$B$4".into());
+    c.series[0].innermost_categories = false;
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.categories, vec!["Ottawa", "Toronto", "Boston", "NYC"]);
+    assert_eq!(data.category_levels, vec![vec!["Canada", "", "USA", ""]]);
 }
 
 #[test]
@@ -1489,6 +1550,62 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     }
     // A category whose total is zero stays on the baseline.
     assert!(frac(top(south, 2)).abs() < 1e-3, "Q3: South reaches {}", frac(top(south, 2)));
+}
+
+#[test]
+fn hundred_percent_stacked_lines_end_each_category_at_its_total() {
+    let (north_color, south_color) = ([20, 96, 130, 255], [25, 107, 36, 255]);
+    for kind in [ChartKind::LineStacked100, ChartKind::LineStacked100Markers] {
+        let d = ChartData {
+            category_levels: vec![],
+            palette: vec![],
+            categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
+            series: vec![series("North", &[10.0, 30.0, 0.0, 5.0], north_color, kind), series("South", &[30.0, 10.0, 0.0, 15.0], south_color, kind)],
+        };
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let t = texts(&p);
+        assert!(t.contains(&"100%") && t.contains(&"0%"), "{kind:?}: {t:?}");
+        assert!(!t.contains(&"40"), "{kind:?}: {t:?}");
+        // The value axis labels sit on their gridlines.
+        let label_y = |s: &str| {
+            p.iter()
+                .find_map(|p| match p {
+                    Prim::Text { text, y, .. } if text == s => Some(*y),
+                    _ => None,
+                })
+                .unwrap_or(f32::NAN)
+        };
+        let (y0, y100) = (label_y("0%"), label_y("100%"));
+        assert!(y0 > y100, "{kind:?}: {y0} {y100}");
+        let frac = |y: f32| (y0 - y) / (y0 - y100);
+        let line = |color: Rgba| {
+            p.iter()
+                .find_map(|p| match p {
+                    // The series line is 2.25 wide; its legend swatch is 2.0.
+                    Prim::Line { pts, color: c, width, .. } if *c == color && *width > 2.1 => {
+                        Some(pts.iter().map(|q| frac(q[1])).collect::<Vec<f32>>())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let (north, south) = (line(north_color), line(south_color));
+        assert_eq!((north.len(), south.len()), (4, 4), "{kind:?}: {north:?} {south:?}");
+        // A category whose total is zero stays on the baseline.
+        for (j, (n, s)) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.0), (0.25, 1.0)].into_iter().enumerate() {
+            assert!((north[j] - n).abs() < 1e-3 && (south[j] - s).abs() < 1e-3, "{kind:?} Q{}: {} {}", j + 1, north[j], south[j]);
+        }
+        // Point markers have a white outline; the legend's marker swatches have none.
+        let circles = |outlined: bool| {
+            p.iter()
+                .filter(|p| matches!(p, Prim::Circle { fill: Some(f), stroke, .. } if (*f == north_color || *f == south_color) && stroke.is_some() == outlined))
+                .count()
+        };
+        let with_markers = kind == ChartKind::LineStacked100Markers;
+        assert_eq!((circles(true), circles(false)), if with_markers { (8, 2) } else { (0, 0) }, "{kind:?}");
+    }
 }
 
 #[test]
@@ -1566,6 +1683,22 @@ fn two_level_categories_resolve_and_draw() {
 }
 
 #[test]
+fn square_category_blocks_keep_their_declared_orientation_on_ties() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.name = "Data".into();
+    for (i, value) in ["A1", "B1", "A2", "B2", "A3", "B3"].iter().enumerate() {
+        s.set_value(CellRef::parse(value).unwrap(), Value::from(*value));
+        s.set_value(CellRef::new(3, i as u32), Value::Number(i as f64 + 1.0));
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Data!$A$1:$B$2".into()), values: "Data!$A$3:$B$3".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["A2", "B2"]);
+    assert_eq!(d.category_levels, vec![vec!["A1", "B1"]]);
+}
+
+#[test]
 fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let m = ApproxMeasure;
     let tc: Rgba = [1, 2, 3, 255];
@@ -1610,6 +1743,7 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
 }
 
+/// Defined-name series titles on sheets with apostrophes resolve properly.
 #[test]
 fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
     // #2012: `'Bob''s'!Title` kept the doubled quote, so the sheet wasn't found and the series
@@ -1641,11 +1775,13 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        ..Series::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
+/// Defined-name series titles on sheets whose names contain `!` resolve properly.
 #[test]
 fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     // `'a!b'!Title`: the sheet name holds a `!`, so the evaluator must split the parsed name at
@@ -1677,11 +1813,13 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        ..Series::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
+/// Volatile functions in series values or names mark the chart as volatile.
 #[test]
 fn volatile_series_formulas_are_detected() {
     let wb = Workbook::new();
@@ -1698,6 +1836,8 @@ fn volatile_series_formulas_are_detected() {
             smooth: false,
             quartiles: Default::default(),
             trendlines: vec![],
+            innermost_categories: false,
+            number_format: None,
         });
         c
     };
@@ -1712,6 +1852,7 @@ fn volatile_series_formulas_are_detected() {
     assert!(!has_volatile_series(&wb, 0, &chart(ChartKind::Line)));
 }
 
+/// Defined names referenced by series formulas are followed for volatility checks.
 #[test]
 fn volatile_defined_names_are_followed() {
     let with = |values: &str| {
@@ -1727,6 +1868,8 @@ fn volatile_defined_names_are_followed() {
             smooth: false,
             quartiles: Default::default(),
             trendlines: vec![],
+            innermost_categories: false,
+            number_format: None,
         });
         c
     };
@@ -1773,4 +1916,205 @@ fn volatile_defined_names_are_followed() {
     wb.sheets.push(Arc::new(gridcraft_model::Sheet::new("Other")));
     assert!(!has_volatile_series(&wb, 1, &with("=Dice")));
     assert!(has_volatile_series(&wb, 1, &with("=FreshClock")));
+}
+
+/// Explicit Excel chart styles should affect default series colours,
+/// without changing the workbook theme.
+#[test]
+fn explicit_chart_styles_use_distinct_default_colors() {
+    let wb = Workbook::default();
+
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series.push(Series { values: "{10,20,30}".into(), ..Series::default() });
+
+    c.style = 2;
+    let style2 = resolve(&wb, 0, &c).series[0].color;
+    assert_eq!(style2, series_color(&wb.theme, 0));
+
+    c.style = 1;
+    let style1 = resolve(&wb, 0, &c).series[0].color;
+
+    c.style = 9;
+    let style9 = resolve(&wb, 0, &c).series[0].color;
+
+    assert_ne!(style1, style2, "style 1 should differ from style 2");
+    assert_ne!(style9, style2, "style 9 should differ from style 2");
+}
+
+/// Excel chart styles must not override explicitly assigned series colours.
+#[test]
+fn explicit_chart_styles_preserve_custom_series_colors() {
+    let wb = Workbook::default();
+    let mut c = chart(ChartKind::ColumnClustered);
+
+    c.series.push(Series { values: "{10,20,30}".into(), color: Some(Color::rgb(12, 34, 56)), ..Series::default() });
+
+    for style in [1, 2, 9] {
+        c.style = style;
+        let data = resolve(&wb, 0, &c);
+
+        assert_eq!(data.series[0].color, [12, 34, 56, 255], "explicit series colour changed under chart style {style}");
+    }
+}
+
+/// Check the first four point colours measured in Excel for styles 1 and 9.
+#[test]
+fn excel_chart_styles_use_measured_point_palette() {
+    let wb = Workbook::default();
+    let mut c = chart(ChartKind::Pie);
+
+    c.series.push(Series { values: "{10,20,30,40}".into(), ..Series::default() });
+
+    let expected = [[0x61, 0x61, 0x61, 0xFF], [0xB3, 0xB3, 0xB3, 0xFF], [0x81, 0x81, 0x81, 0xFF], [0x50, 0x50, 0x50, 0xFF]];
+
+    for style in [1, 9] {
+        c.style = style;
+        let data = resolve(&wb, 0, &c);
+
+        assert_eq!(&data.palette[..4], &expected);
+        assert_eq!(data.series[0].color, expected[0]);
+    }
+}
+
+/// Excel's default-theme chart colours depend on the total series count.
+#[test]
+fn excel_chart_styles_depend_on_series_count() {
+    let wb = Workbook::default();
+
+    let base_series = Series { values: "{10,20,30,40}".into(), ..Series::default() };
+
+    let cases: &[(usize, [[u8; 4]; 3])] = &[
+        (6, [[0x55, 0x55, 0x55, 0xFF], [0x9E, 0x9E, 0x9E, 0xFF], [0x72, 0x72, 0x72, 0xFF]]),
+        (12, [[0x4F, 0x4F, 0x4F, 0xFF], [0x93, 0x93, 0x93, 0xFF], [0x6A, 0x6A, 0x6A, 0xFF]]),
+    ];
+
+    for (count, expected) in cases {
+        for style in [1, 9] {
+            let mut c = chart(ChartKind::ColumnClustered);
+            c.style = style;
+            c.series = vec![base_series.clone(); *count];
+
+            let data = resolve(&wb, 0, &c);
+
+            assert_eq!(data.series.len(), *count);
+
+            for (i, color) in expected.iter().enumerate() {
+                assert_eq!(data.series[i].color, *color, "style {style}, {count} series, index {i}");
+            }
+        }
+    }
+}
+
+/// Style 9 uses white outlines on column and bar data rectangles.
+#[test]
+fn explicit_style_nine_draws_white_column_outlines() {
+    let wb = Workbook::default();
+
+    for kind in [
+        ChartKind::ColumnClustered,
+        ChartKind::BarClustered,
+        ChartKind::ColumnStacked,
+        ChartKind::BarStacked,
+        ChartKind::ColumnStacked100,
+        ChartKind::BarStacked100,
+    ] {
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.series.push(Series { values: "{10,20,30,40}".into(), ..Series::default() });
+
+        for style in [1, 2, 9] {
+            c.style = style;
+            let data = resolve(&wb, 0, &c);
+            let color = data.series[0].color;
+            let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+
+            let outlines: Vec<_> = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Rect { fill: Some(fill), stroke, .. } if *fill == color => Some(*stroke),
+                    _ => None,
+                })
+                .collect();
+
+            assert!(!outlines.is_empty(), "No data rectangles for {kind:?}, style {style}");
+
+            let expected = if style == 9 { Some(([255, 255, 255, 255], 1.0)) } else { None };
+
+            assert!(outlines.iter().all(|stroke| *stroke == expected), "Unexpected outline for {kind:?}, style {style}: {outlines:?}");
+        }
+    }
+}
+
+/// Excel's default line weights are 3 pt for style 1 and 5 pt for style 9.
+/// Other styles retain GridCraft's existing stroke width.
+#[test]
+fn explicit_excel_styles_set_line_stroke_width() {
+    let color: Rgba = [17, 73, 131, 255];
+
+    for kind in [ChartKind::Line, ChartKind::LineMarkers, ChartKind::LineStacked] {
+        let data = ChartData {
+            categories: ["Jan", "Feb", "Mar", "Apr"].map(String::from).to_vec(),
+            category_levels: vec![],
+            palette: vec![],
+            series: vec![series("North", &[12.0, 19.0, 25.0, 30.0], color, kind)],
+        };
+
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+
+        for (style, expected_width) in [(0, 2.25_f32), (1, 3.0), (2, 2.25), (9, 5.0), (48, 2.25)] {
+            c.style = style;
+
+            let prims = render(&c, &data, 640.0, 400.0, &ApproxMeasure);
+
+            let widths: Vec<f32> = prims
+                .iter()
+                .filter_map(|primitive| match primitive {
+                    Prim::Line { color: line_color, width, .. } if *line_color == color => Some(*width),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(widths, vec![expected_width], "Unexpected stroke width for {kind:?}, style {style}");
+        }
+    }
+}
+
+/// Narrow style 9 bars (at or below the 1 px outline width) omit the white stroke so their gray fill stays visible.
+#[test]
+fn narrow_style_9_bars_retain_visible_fill() {
+    let fill_color: Rgba = [0x61, 0x61, 0x61, 0xFF];
+    // Stay within MAX_LABELS (200) so data labels remain active on the direct unmerged path,
+    // while keeping each single-series slot <= 0.88 px inside the 220 px chart.
+    let count = 100usize;
+    let categories: Vec<String> = (0..count).map(|i| format!("C{i}")).collect();
+    let values = vec![50.0; count];
+
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let data = ChartData {
+            categories: categories.clone(),
+            category_levels: vec![],
+            palette: vec![],
+            series: vec![series("S1", &values, fill_color, kind)],
+        };
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        // Data labels keep bars on the unmerged direct path even when narrower than 1 px.
+        c.data_labels = true;
+        c.gridlines = false;
+        c.style = 9;
+
+        let prims = render(&c, &data, 220.0, 220.0, &ApproxMeasure);
+        let narrow_bars: Vec<_> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { w, h, fill: Some(fill), stroke, .. } if *fill == fill_color && (*w <= 1.0 || *h <= 1.0) => Some(*stroke),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(narrow_bars.len(), count, "Direct unmerged path must emit all {count} bars individually for {kind:?}");
+        assert!(narrow_bars.iter().all(Option::is_none), "Narrow style 9 bars must omit the 1 px white outline: {narrow_bars:?}");
+    }
 }

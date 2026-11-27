@@ -330,6 +330,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Çalışma kitabını başka bir adla veya başka bir klasöre kaydedin.",
         "Print Active Sheets" => "Etkin Sayfaları Yazdır",
         "Print Entire Workbook" => "Tüm Çalışma Kitabını Yazdır",
+        "Print Selection" => "Seçimi Yazdır",
         "Fit Sheet on One Page" => "Sayfayı Bir Sayfaya Sığdır",
         "Page Setup…" => "Sayfa Yapısı…",
         "Page {page} of {pages}" => "Sayfa {page} / {pages}",

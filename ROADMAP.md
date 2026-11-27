@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (XLSX keeps PivotTables on a data connection, the Data Model or another workbook on save; earlier: a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (File › Print › Settings: Print Selection; earlier: XLSX password to modify is kept and enforced; earlier: IRR's Newton solver checks its scaled residual before accepting a small step; earlier: XLSX keeps PivotTables on a data connection, the Data Model or another workbook on save; earlier: a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped; earlier: searchable data validation dropdown) · **Target:** Microsoft Excel (Microsoft 365)
 
 
@@ -154,10 +154,12 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
 | 2026-10-26 | Excel open check (`packaging/windows/excel-open-check`): saves workbooks with `gridcraft-cli`, opens each in real Excel through COM so a repair counts as a failure, and records pass or the failure per file; 0.12.1 over 18 public fixtures and 7 feature scenarios: 24 of 25 open cleanly, the other is the legacy-formula slowness of #410 |
 | 2026-10-26 | Paste Special ▸ Transpose turns a formula's references with the cell that carries it, as Excel does: the row offset becomes the column offset and the other way round, so `=A3+1` copied from A3:A4 and pasted at C3 reads the cell to its left (`=C3+1`) instead of keeping the offset it had in the column; a reference pinned with `$` is left standing, a whole row or column comes back as a cell range open to the sheet's edge, and one off the grid is `#REF!` (#2450) |
+| 2026-10-25 | Charts: 100% Stacked Line and 100% Stacked Line with Markers (`insert.chart` `{type: "line", subtype: "stacked100"}` and `"stacked100Markers"`), drawn as each value's share of its category's total; XLSX `percentStacked` line charts open as 100% stacked instead of stacked |
 | 2026-10-26 | PDF preserves Context/LTR/RTL reading direction through wrapping and drawing; RTL sheet cells, borders, headings, objects and sparklines mirror consistently |
 | 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
 | 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
 | 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
+| 2026-10-26 | `cargo xtask bench`: ten fixed in-code workbooks (100k rows) time edits, formula entry, Calculate Now, sort and XLSX save/open, check their results and compare with a saved baseline. On an M2 Pro a 100k-dependent edit recalculates in 90–106 ms and 300k formulas in 395–455 ms |
 | 2026-10-25 | Fill handle: from numbers, the right-drag menu offers Linear Trend and Growth Trend, which continue the best-fit line or exponential curve of the source (1, 2 gives 3, 4, 5 or 4, 8, 16) |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
 | 2026-10-24 | Macro interface ([macros.md](docs/macros.md#in-the-window)): an Automate › Macros group (Record Macro, which turns into Stop Recording, Use Relative References, Run Macro with recent macros); "Recording · N steps" with Stop in the status bar; a Record Macro dialog (checked name, free Ctrl+Shift shortcut, description); the Macros dialog lists macros beside Automate scripts and a VBA project, with Run, Step Into, Edit, Create, Delete and Options; Ctrl+Shift+letter macro shortcuts; questions that offer Run, Overwrite, Shift Down or Shift Right; a step editor with a breakpoint gutter, drag to reorder, a command picker, reference boxes that switch between relative tokens and absolute references, Inputs and Output tabs, a debug bar (Check, Run, Step, Continue, Run to Here, Stop with keep or undo) and grid overlays for inputs, writes, conflicts and the current step |
@@ -169,6 +171,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-24 | PivotTables: right-clicking a value, subtotal or grand total cell offers Show Details in the cell menu, which lists the cell's source records on a new sheet as double-clicking does |
 | 2026-10-24 | Sheet tabs: dragging the handle between the tabs and the horizontal scrollbar gives the tabs more or less of the bar, as in Excel; each open workbook keeps its own share |
 | 2026-10-24 | Charts: 100% Stacked Area (`insert.chart` `{type: "area", subtype: "stacked100"}`), drawn as each value's share of its category's total; XLSX `percentStacked` area charts open as 100% stacked instead of stacked |
+| 2026-10-24 | XLSX charts keep what GridCraft doesn't model on save: an embedded chart that was not edited (moving or resizing aside) is written back from its original chart part, with its style, colour and user-shape parts, while every sheet its formulas name still exists; an edited chart is written from the model as before (#1668) |
+| 2026-10-24 | XLSX: a password to modify (`fileSharing`) is kept on save, and opening such a file asks for the password or opens it read-only (never checked against Excel) (#921) |
+| 2026-10-23 | File › Print › Settings offers Print Selection next to Print Active Sheets and Print Entire Workbook; several selected areas print one after the other, as in Excel |
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
 | 2026-10-23 | Calc: `INDEX(A1:C3,2)` (one index on a reference of several rows and columns) is `#REF!` as in Excel, instead of the whole row; `INDEX(A1:C3,2,)` still gives the row |
 | 2026-10-22 | Formula hardening: digits too many for a finite number are text, so `"1 <400 digits>/<400 digits>"` no longer coerces to NaN; a NaN column index in VLOOKUP, HLOOKUP and the D-functions is `#VALUE!` instead of an index underflow; REGEXREPLACE stops building a result as soon as it can only be too long (a worst case went from 1 GB to 7 MB) (#2163, #2162) |
@@ -188,6 +193,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | The web app keeps its preferences between visits (#1562): theme (dark mode), interface size, language, editing options and the rest of what the desktop app saves in `ui.json` and `prefs.json` are kept in the browser's `localStorage`, written as soon as they change |
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
 | 2026-10-15 | Function help in Brazilian Portuguese: every description and argument name (479 and 283) |
+| 2026-10-15 | XIRR matches Excel's solver bit for bit on ordinary flows (its bisection answer, about 1e-8 from the exact root, instead of the exact root), with known differences in some `#NUM!` cases; IRR uses Newton on the discount factor like Excel (`#NUM!` where Excel gives up) |
 | 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
@@ -291,6 +297,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
+| 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; the roadmap qualifies XIRR's known `#NUM!` differences |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
@@ -311,9 +318,12 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-26 | minor | Progress log: Arabic PDF text |
 | 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
 | 2026-10-26 | minor | Progress log: Arabic font fallback |
+| 2026-10-26 | minor | Progress log: `cargo xtask bench` |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
+| 2026-10-24 | trivial | Progress log: unedited embedded charts keep their XML on save (#1668) |
+| 2026-10-24 | minor | Progress log: password to modify (#921) |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
 | 2026-10-22 | trivial | Progress log: formula hardening (#2163, #2162) |
@@ -331,6 +341,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
+| 2026-10-15 | trivial | Progress log: XIRR and IRR follow Excel's solvers |
 | 2026-10-15 | trivial | Progress log: XLSX PivotTables on a data connection or the Data Model kept on save |
 | 2026-10-15 | minor | Progress log: F8 and Shift+F8 selection modes |
 | 2026-10-14 | minor | Progress log: sorts order numbers exactly |
