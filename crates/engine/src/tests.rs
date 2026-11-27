@@ -6024,10 +6024,13 @@ fn canonical_filter_values_follow_the_dropdown_labels() {
     assert_eq!(text(&s, "A2"), "1,234");
     assert_eq!(hidden(&s), vec![2]);
     assert_eq!(crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0), vec![("1,234".to_string(), true), ("x".to_string(), false)]);
-    // `ä1` does not match `Ä1` (matching folds ASCII case only), so it doesn't block A3's value.
+    // Under Unicode case folding, `ä1` is a displayed label for `Ä1` and blocks A3's canonical value.
     let s = filtered(json!([["t"], ["ä1"], ["Ä1"], ["x"]]), &[], &[("A3", "\"prefix\"@")], &["Ä1"]);
     assert_eq!(text(&s, "A3"), "prefixÄ1");
-    assert_eq!(hidden(&s), vec![1, 3]);
+    assert_eq!(hidden(&s), vec![2, 3]);
+    let choices = crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0);
+    assert!(choices.contains(&("ä1".to_string(), true)));
+    assert!(choices.contains(&("prefixÄ1".to_string(), false)));
 }
 
 /// The dropdown lists at most a million rows, but a label below them still decides its checkbox.

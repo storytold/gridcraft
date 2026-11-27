@@ -328,7 +328,7 @@ pub struct GridState {
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
     /// Pending popup edits travel with this window and are dropped when its menu or window closes.
-    pub filter_checks: Option<Vec<(String, bool)>>,
+    pub filter_checks: Option<Vec<gridcraft_engine::cmd::data::FilterChoice>>,
     pub filter_search: String,
     pub filter_buttons: Vec<egui::Id>,
     pub context_menu: Option<Pos2>,

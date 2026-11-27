@@ -1315,6 +1315,10 @@ pub enum FilterCriterion {
     Values {
         values: Vec<String>,
         blanks: bool,
+        /// Exact checklist identities from dropdown or selected-cell UI actions so rows whose
+        /// formatted display text collides (for example under Show Formulas) stay distinct.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        identities: Vec<String>,
     },
     /// Custom: one or two comparisons (`op` like `>=`, `=*abc*`), joined by and/or.
     Custom {
