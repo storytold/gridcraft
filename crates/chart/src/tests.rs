@@ -1925,18 +1925,7 @@ fn explicit_chart_styles_use_distinct_default_colors() {
     let wb = Workbook::default();
 
     let mut c = chart(ChartKind::ColumnClustered);
-    c.series.push(Series {
-        name: None,
-        categories: None,
-        values: "{10,20,30}".into(),
-        bubble_sizes: None,
-        color: None,
-        secondary: false,
-        kind: None,
-        quartiles: Default::default(),
-        smooth: false,
-        trendlines: Vec::new(),
-    });
+    c.series.push(Series { values: "{10,20,30}".into(), ..Series::default() });
 
     c.style = 2;
     let style2 = resolve(&wb, 0, &c).series[0].color;
@@ -1958,18 +1947,7 @@ fn explicit_chart_styles_preserve_custom_series_colors() {
     let wb = Workbook::default();
     let mut c = chart(ChartKind::ColumnClustered);
 
-    c.series.push(Series {
-        name: None,
-        categories: None,
-        values: "{10,20,30}".into(),
-        bubble_sizes: None,
-        color: Some(Color::rgb(12, 34, 56)),
-        secondary: false,
-        kind: None,
-        quartiles: Default::default(),
-        smooth: false,
-        trendlines: Vec::new(),
-    });
+    c.series.push(Series { values: "{10,20,30}".into(), color: Some(Color::rgb(12, 34, 56)), ..Series::default() });
 
     for style in [1, 2, 9] {
         c.style = style;
@@ -1985,18 +1963,7 @@ fn excel_chart_styles_use_measured_point_palette() {
     let wb = Workbook::default();
     let mut c = chart(ChartKind::Pie);
 
-    c.series.push(Series {
-        name: None,
-        categories: None,
-        values: "{10,20,30,40}".into(),
-        bubble_sizes: None,
-        color: None,
-        secondary: false,
-        kind: None,
-        quartiles: Default::default(),
-        smooth: false,
-        trendlines: Vec::new(),
-    });
+    c.series.push(Series { values: "{10,20,30,40}".into(), ..Series::default() });
 
     let expected = [[0x61, 0x61, 0x61, 0xFF], [0xB3, 0xB3, 0xB3, 0xFF], [0x81, 0x81, 0x81, 0xFF], [0x50, 0x50, 0x50, 0xFF]];
 
@@ -2014,18 +1981,7 @@ fn excel_chart_styles_use_measured_point_palette() {
 fn excel_chart_styles_depend_on_series_count() {
     let wb = Workbook::default();
 
-    let base_series = Series {
-        name: None,
-        categories: None,
-        values: "{10,20,30,40}".into(),
-        bubble_sizes: None,
-        color: None,
-        secondary: false,
-        kind: None,
-        quartiles: Default::default(),
-        smooth: false,
-        trendlines: Vec::new(),
-    };
+    let base_series = Series { values: "{10,20,30,40}".into(), ..Series::default() };
 
     let cases: &[(usize, [[u8; 4]; 3])] = &[
         (6, [[0x55, 0x55, 0x55, 0xFF], [0x9E, 0x9E, 0x9E, 0xFF], [0x72, 0x72, 0x72, 0xFF]]),
@@ -2064,18 +2020,7 @@ fn explicit_style_nine_draws_white_column_outlines() {
     ] {
         let mut c = chart(kind);
         c.legend = LegendPos::None;
-        c.series.push(Series {
-            name: None,
-            categories: None,
-            values: "{10,20,30,40}".into(),
-            bubble_sizes: None,
-            color: None,
-            secondary: false,
-            kind: None,
-            quartiles: Default::default(),
-            smooth: false,
-            trendlines: Vec::new(),
-        });
+        c.series.push(Series { values: "{10,20,30,40}".into(), ..Series::default() });
 
         for style in [1, 2, 9] {
             c.style = style;
