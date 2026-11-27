@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" or several areas \"A1:B5,D1:E5\", one run of pages each (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),

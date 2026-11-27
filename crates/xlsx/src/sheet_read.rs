@@ -939,6 +939,11 @@ fn read_craft_formula_text(
 
 /// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
+    parse_iso_datetime_with(s, |y, m, d| serial_from_ymd(sys, y, m, d))
+}
+
+/// [`parse_iso_datetime`] with `ymd` turning the date part (year, month 1–12, day 1–31) into a serial.
+pub(crate) fn parse_iso_datetime_with(s: &str, ymd: impl Fn(i64, i64, i64) -> Option<f64>) -> Option<f64> {
     let s = s.trim_end_matches('Z');
     let (date, time) = match s.split_once('T') {
         Some((d, t)) => (d, Some(t)),
@@ -954,7 +959,7 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
         if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
             return None;
         }
-        serial = serial_from_ymd(sys, y, m, d)?;
+        serial = ymd(y, m, d)?;
     }
     if let Some(t) = time {
         // Drop a time-zone offset.
@@ -1115,9 +1120,12 @@ mod tests {
             sheet_exts_dropped: vec![],
             known_function: None,
             python: Default::default(),
+            chart_parts: vec![],
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
+            pivot_charts: vec![],
+            chart_budget: crate::chart::ChartReadBudget::new(),
         }
     }
 

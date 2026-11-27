@@ -56,6 +56,9 @@ fn filter_operator(op: &str) -> &'static str {
     }
 }
 
+const GC_FILTER_EXT_URI: &str = "{D7C4E9A1-2943-4B8E-9A11-6F8B2C4D5E01}";
+const GC_FILTER_NS: &str = "https://gridcraft.app/ns/spreadsheetml/2026/filter";
+
 pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
     if criteria.is_empty() {
@@ -66,7 +69,7 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
     for (col, c) in criteria {
         let _ = write!(s, "<filterColumn colId=\"{col}\">");
         match c {
-            FilterCriterion::Values { values, blanks } => {
+            FilterCriterion::Values { values, blanks, .. } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));
@@ -106,11 +109,56 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
         }
         s.push_str("</filterColumn>");
     }
+    let ext_cols: Vec<(u32, &[String])> = criteria
+        .iter()
+        .filter_map(|(col, c)| match c {
+            FilterCriterion::Values { identities, .. } if !identities.is_empty() => Some((*col, identities.as_slice())),
+            _ => None,
+        })
+        .collect();
+    if !ext_cols.is_empty() {
+        let _ = write!(s, "<extLst><ext uri=\"{GC_FILTER_EXT_URI}\" xmlns:gc=\"{GC_FILTER_NS}\"><gc:identities>");
+        for (col, ids) in ext_cols {
+            let _ = write!(s, "<gc:col colId=\"{col}\">");
+            for id in ids {
+                let _ = write!(s, "<gc:i v=\"{}\"/>", esc_attr(id));
+            }
+            s.push_str("</gc:col>");
+        }
+        s.push_str("</gc:identities></ext></extLst>");
+    }
     s.push_str("</autoFilter>");
     s
 }
 
-pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+/// The criteria saved in a table's `<autoFilter>`: its own, plus those of a sheet AutoFilter
+/// that starts on the table's header row. GridCraft filters a table through the sheet
+/// AutoFilter, but a file can't hold a sheet AutoFilter that overlaps a table (the sheet element
+/// is left out), so without this the criteria would be lost and the rows they hide would reopen
+/// as rows hidden by hand, which SUBTOTAL 1-11 counts.
+pub(super) fn table_filter(sheet: &Sheet, t: &Table) -> Vec<(u32, FilterCriterion)> {
+    let mut criteria = t.filter.clone();
+    let Some(af) = sheet.autofilter.as_ref().filter(|af| {
+        t.header_row
+            && t.filter_button
+            && af.range.start.row == t.range.start.row
+            && af.range.intersects(&t.range)
+            && t.data_range().is_some_and(|d| af.range.end.row >= d.end.row)
+    }) else {
+        return criteria;
+    };
+    for (off, c) in &af.criteria {
+        let Some(col) = af.range.start.col.checked_add(*off).and_then(|abs| abs.checked_sub(t.range.start.col)) else { continue };
+        if col < t.range.width() {
+            criteria.retain(|(o, _)| *o != col);
+            criteria.push((col, c.clone()));
+        }
+    }
+    criteria.sort_by_key(|(o, _)| *o);
+    criteria
+}
+
+pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -131,7 +179,7 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &m
     if t.header_row && t.filter_button {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+        s.push_str(&autofilter_xml(r, filter, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {

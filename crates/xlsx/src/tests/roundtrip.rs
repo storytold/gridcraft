@@ -23,6 +23,11 @@ fn sample() -> Workbook {
     wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
+    wb.write_reservation = Some(gridcraft_model::WriteReservation {
+        user_name: "Ann & <Bob>".into(),
+        read_only_recommended: true,
+        password: Some(gridcraft_model::PasswordHash::new_sha512("modify-me", b"fedcba9876543210")),
+    });
     wb.props = DocProps {
         title: "T & <x>".into(),
         subject: "S".into(),
@@ -272,7 +277,7 @@ fn sample() -> Workbook {
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
         criteria: vec![
-            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true }),
+            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true, identities: vec![] }),
             (1, FilterCriterion::Custom { a: (">=".into(), "5".into()), b: Some(("<".into(), "9".into())), and: true }),
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
@@ -347,7 +352,7 @@ fn sample() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![
-            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }),
+            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] }),
             (1, FilterCriterion::Icon { set: "3TrafficLights1".into(), id: Some(1) }),
         ],
         table_type: None,
@@ -423,6 +428,8 @@ fn sample() -> Workbook {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
@@ -447,6 +454,8 @@ fn sample() -> Workbook {
         ChartKind::Line,
         ChartKind::LineMarkers,
         ChartKind::LineStacked,
+        ChartKind::LineStacked100,
+        ChartKind::LineStacked100Markers,
         ChartKind::Pie,
         ChartKind::Doughnut,
         ChartKind::Area,
@@ -530,6 +539,8 @@ fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert!(back.protected_structure);
     assert_eq!(back.structure_password, wb.structure_password);
     assert!(back.structure_password.as_ref().unwrap().verify("s3cret").unwrap());
+    assert_eq!(back.write_reservation, wb.write_reservation);
+    assert!(back.write_reservation.as_ref().and_then(|r| r.password.as_ref()).unwrap().verify("modify-me").unwrap());
     assert_eq!(back.props, wb.props);
     assert_eq!(back.theme, wb.theme);
     assert_eq!(back.names, wb.names);
@@ -1971,8 +1982,10 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
-    s.autofilter =
-        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
     s.rows.entry(1).or_default().hidden = true;
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1985,9 +1998,9 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     assert!(b.autofilter.is_none(), "a table's filter belongs to the table part, not the sheet");
 }
 
-/// Stored `colId` offsets are relative to the filter range's first column, so criteria of a filter
-/// that starts right of the table's first column must not be folded into the table part, where
-/// they would apply to the wrong column.
+/// Stored `colId` offsets are relative to the table's first column, so criteria of a sheet filter
+/// that starts right of the table's first column are moved to the column they filter (Region), not
+/// kept at the filter's own offset (which would be Id).
 #[test]
 fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let mut wb = Workbook::new();
@@ -2014,15 +2027,35 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         table_type: None,
         connection_id: None,
     });
-    s.autofilter =
-        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("B1:B3"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let b = back.sheet(0).unwrap();
     let t = b.tables.first().expect("the table survived");
-    assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
+    assert!(
+        matches!(t.filter.as_slice(), [(1, FilterCriterion::Values { values, .. })] if values == &["East".to_string()]),
+        "the criteria landed on the wrong table column: {:?}",
+        t.filter
+    );
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn legacy_reservation_password_is_written_with_a_user_name() {
+    let mut wb = sample();
+    wb.write_reservation =
+        Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let r = back.write_reservation.expect("the reservation survived");
+    assert_eq!(r.password, Some(PasswordHash::Legacy(0x83AF)), "a nameless legacy password is kept, under a placeholder name");
+    assert!(!r.user_name.is_empty());
+    wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
 }
 
 #[test]

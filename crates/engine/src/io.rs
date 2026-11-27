@@ -54,6 +54,10 @@ impl FileKind {
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
+/// The error for a workbook with a password to modify, opened with neither that password
+/// (`modifyPassword`) nor `readOnly`, contains this. The interface asks for the password or a
+/// read-only open when it sees it.
+pub const MODIFY_PASSWORD_REQUIRED: &str = "is reserved by its author. Enter the password to modify it, or open it read-only.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
@@ -152,6 +156,7 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool, conversion: &DataConv
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    crate::cmd::data::migrate_loaded_autofilters(&mut wb);
     Ok((wb, warnings))
 }
 
@@ -536,8 +541,8 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
+        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default),
+        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, None)).transpose().map(Option::unwrap_or_default),
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -571,8 +576,14 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| crate::display::value_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
+/// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
+    let text = |c| crate::display::value_text(wb, sh, c);
+    match delimiter {
+        Some(d) => gridcraft_xlsx::write_csv(sh, d, text),
+        None => gridcraft_xlsx::write_tsv(sh, text),
+    }
+    .map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and

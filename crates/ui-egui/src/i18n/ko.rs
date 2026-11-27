@@ -432,6 +432,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "통합 문서를 다른 이름 또는 다른 폴더에 저장합니다.",
         "Print Active Sheets" => "활성 시트 인쇄",
         "Print Entire Workbook" => "전체 통합 문서 인쇄",
+        "Print Selection" => "선택 영역 인쇄",
         "Fit Sheet on One Page" => "한 페이지에 시트 맞추기",
         "Page Setup…" => "페이지 설정…",
         "Page {page} of {pages}" => "{page}/{pages} 페이지",

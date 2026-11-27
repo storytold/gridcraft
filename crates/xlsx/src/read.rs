@@ -35,6 +35,11 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// PivotCharts (by chart id) and their series' cached points, checked against the cells once
+    /// every sheet is read.
+    pub pivot_charts: Vec<(u32, Vec<crate::chart::PivotSeriesCache>)>,
+    /// Shared point-expansion budget across all charts in the workbook.
+    pub chart_budget: crate::chart::ChartReadBudget,
     /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
     pub sheet_exts: Vec<(String, String)>,
     /// URIs of the current sheet's extensions that were dropped.
@@ -50,6 +55,9 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The current sheet's charts read from chart parts: (model chart id, chart part name). Their
+    /// original XML is kept for saving (see `passthrough`).
+    pub chart_parts: Vec<(u32, String)>,
     /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
     pub cells: u64,
 }
@@ -295,6 +303,14 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         wb.protected_structure = p.flag("lockStructure", false);
         wb.structure_password = if wb.protected_structure { crate::sheet_read::read_password(p, "workbook") } else { None };
     }
+    if let Some(f) = xml.child("fileSharing") {
+        // The iterated hash has bare attribute names; the legacy one is `reservationPassword`.
+        wb.write_reservation = Some(gridcraft_model::WriteReservation {
+            user_name: f.attr("userName").unwrap_or("").to_string(),
+            read_only_recommended: f.flag("readOnlyRecommended", false),
+            password: crate::sheet_read::read_password(f, "").or_else(|| crate::sheet_read::read_password(f, "reservation")),
+        });
+    }
 }
 
 /// The single window modelled by GridCraft: prefer the first visible window,
@@ -323,12 +339,15 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        pivot_charts: vec![],
+        chart_budget: crate::chart::ChartReadBudget::new(),
         sheet_exts: vec![],
         sheet_exts_dropped: vec![],
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        chart_parts: vec![],
         cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
@@ -434,6 +453,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &external_pivots, &read_controls);
         sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
+        kept.charts(&mut cx, &mut sheet);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,
@@ -447,6 +467,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
     }
     wb.set_active_sheet(file_to_model.get(active_tab).copied().flatten().unwrap_or(0));
+    // PivotChart series whose references don't hold their cached points plot the cache.
+    crate::chart::plot_pivot_caches(&mut wb, &cx.pivot_charts);
 
     // Defined names. Chartex parts refer to their data through hidden `_xlchart.*` names.
     let mut chart_names: Vec<(String, String)> = vec![];
