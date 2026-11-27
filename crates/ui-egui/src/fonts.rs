@@ -19,6 +19,24 @@ use std::sync::OnceLock;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FONT_FILE: u64 = 64 << 20;
 
+/// Reads a font file of at most [`MAX_FONT_FILE`] bytes, even when it grows after it was found.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_FONT_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FONT_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FONT_FILE).then_some(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
+    None
+}
+
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
@@ -172,7 +190,7 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(data) = read_font(&path) else { continue };
             for (index, family, names, style) in file_faces(&data) {
                 out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
@@ -327,7 +345,10 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
     let mut bound: Vec<String> = Vec::new();
     for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
         let Some(primary) = pick_face(faces, bold, italic) else { continue };
+        let role = role_key(family, bold, italic);
         let mut chain: Vec<String> = Vec::new();
+        // The face the role's text is actually drawn in: the first one whose file could be read.
+        let mut drawn: Option<&Face> = None;
         for face in [Some(primary), pick_face(faces, false, false)] {
             let Some(face) = face else { continue };
             let key = face_key(face);
@@ -335,27 +356,25 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Ok(bytes) = std::fs::read(&face.path) else { continue };
+                let Some(bytes) = read_font(&face.path) else { continue };
                 let mut fd = egui::FontData::from_owned(bytes);
                 fd.index = face.index;
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
             }
             chain.push(key);
+            drawn.get_or_insert(face);
         }
-        if chain.is_empty() {
-            continue;
-        }
+        let Some(drawn) = drawn else { continue };
+        // Imitate what the drawn face lacks: italic when it is upright; bold when it is the family's
+        // plain face (the family has no bold of its own, or the bold file couldn't be read).
+        let own_bold = pick_face(faces, false, italic).is_none_or(|plain| face_key(plain) != face_key(primary));
+        set_synthetic(&role, SLANT, italic && !drawn.italic);
+        set_synthetic(&role, BOLD, bold && (face_key(drawn) != face_key(primary) || !own_bold));
         chain.extend(base.iter().cloned());
-        let role = role_key(family, bold, italic);
         fonts.families.insert(egui::FontFamily::Name(role.clone().into()), chain);
         bound.push(role);
     }
     bound
-}
-
-/// Bind every installed face of `family`, found by any of its names (see [`bind_faces`]).
-pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<String> {
-    bind_faces(fonts, family, &faces_of(family))
 }
 
 /// The role families currently bound to font data. `cell_family` consults this, so it never names a
@@ -374,6 +393,41 @@ pub fn set_bound(keys: impl IntoIterator<Item = String>) {
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
     bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
+}
+
+/// Roles drawn with a face that lacks their slant or weight (Arial Black has one face only), as
+/// `{role}|slant` and `{role}|bold`. Excel imitates the missing style (observed in its PDF: a cell in
+/// Arial Black, bold italic, is slanted by 1/3 and outlined about 1/36 of its size thick).
+static SYNTHETIC: OnceLock<std::sync::RwLock<HashSet<String>>> = OnceLock::new();
+const SLANT: &str = "slant";
+const BOLD: &str = "bold";
+
+fn synthetic() -> &'static std::sync::RwLock<HashSet<String>> {
+    SYNTHETIC.get_or_init(|| std::sync::RwLock::new(HashSet::new()))
+}
+
+fn set_synthetic(role: &str, style: &str, on: bool) {
+    let mut set = synthetic().write().unwrap_or_else(|e| e.into_inner());
+    let key = format!("{role}|{style}");
+    if on {
+        set.insert(key);
+    } else {
+        set.remove(&key);
+    }
+}
+
+fn is_synthetic(role: &str, style: &str) -> bool {
+    is_bound(role) && synthetic().read().unwrap_or_else(|e| e.into_inner()).contains(&format!("{role}|{style}"))
+}
+
+/// Does italic text in this installed family have to be slanted when drawn (no italic face)?
+pub fn is_slanted(family: &str, bold: bool) -> bool {
+    is_synthetic(&role_key(family, bold, true), SLANT)
+}
+
+/// Does bold text in this installed family have to be thickened when drawn (no face of its own)?
+pub fn is_emboldened(family: &str, italic: bool) -> bool {
+    is_synthetic(&role_key(family, true, italic), BOLD)
 }
 
 /// Serializes tests that mutate the process-wide bound-family registry.
@@ -472,6 +526,46 @@ mod tests {
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
+        std::fs::File::create(&face.path).expect("sparse file").set_len(MAX_FONT_FILE + 1).expect("oversized file");
+        assert!(read_font(&face.path).is_none(), "an oversized font is not read");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn styles_a_family_has_no_face_for_are_imitated() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("gridcraft-fonts-synthetic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        // One font file stands in for every face; each face is its own (path, index) by its name.
+        let face = |family: &str, file: &str, weight: f32, italic: bool| {
+            let path = dir.join(file);
+            std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT).expect("write");
+            Face { family: family.into(), names: vec![family.into()], path, index: 0, weight, italic }
+        };
+        let mut fonts = egui::FontDefinitions::default();
+        // Like Arial Black: one face, whatever its weight.
+        let mut bound = bind_faces(&mut fonts, "One Face", &[face("One Face", "one.ttf", 900.0, false)]);
+        let full = [
+            face("Full", "full.ttf", 400.0, false),
+            face("Full", "full-b.ttf", 700.0, false),
+            face("Full", "full-i.ttf", 400.0, true),
+            face("Full", "full-bi.ttf", 700.0, true),
+        ];
+        bound.extend(bind_faces(&mut fonts, "Full", &full));
+        // Bold and italic faces whose files can't be read: the regular face draws them, imitated.
+        let gone = |file: &str, weight: f32, italic: bool| Face { path: dir.join(file), ..face("Gone", "gone.ttf", weight, italic) };
+        let broken = [face("Gone", "gone.ttf", 400.0, false), gone("missing-b.ttf", 700.0, false), gone("missing-i.ttf", 400.0, true)];
+        bound.extend(bind_faces(&mut fonts, "Gone", &broken));
+        set_bound(bound);
+        assert!(is_slanted("One Face", false) && is_slanted("One Face", true));
+        assert!(is_emboldened("One Face", false) && is_emboldened("One Face", true));
+        assert!(is_slanted("Gone", false) && is_emboldened("Gone", false), "the regular face stands in, imitated");
+        assert!(!is_slanted("Full", false) && !is_slanted("Full", true), "its own italic faces are drawn as they are");
+        assert!(!is_emboldened("Full", false) && !is_emboldened("Full", true), "its own bold faces are drawn as they are");
+        assert!(!is_slanted("Not Bound", false) && !is_emboldened("Not Bound", false));
+        set_bound([]);
+        assert!(!is_slanted("One Face", false) && !is_emboldened("One Face", false), "nothing is imitated once unbound");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

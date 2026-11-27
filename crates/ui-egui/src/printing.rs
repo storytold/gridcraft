@@ -1,30 +1,24 @@
-//! Localized print-page wording around the shared, backend-independent controls.
-use craft_ui::printing::Labels;
-pub use craft_ui::printing::{Discover, Duplex, Feedback, Printer, Settings, State, Submit};
+//! The print page's printer controls (craft-print's `PrintPanel` over its `State`) and their
+//! localized feedback. The panel's own words come from the framework host.
+pub use craft_print::ui::{Destination, Discover, Duplex, Feedback, Printer, Settings, State, Submit};
 
-/// Draws the shared print controls.
+/// Draws the shared print controls and the feedback of the last discovery or job.
 ///
-/// `craft_ui::printing::State::show` also calls `poll`, so this path polls a second time on top of
-/// [`crate::SheetApp::poll_printing`] in `logic`. That poll is idempotent (it only drains worker
-/// messages into the same state), and the logic-side poll is what lets a hidden window and a
-/// logic-only frame see completion, so it stays. Splitting poll out of the shared `show` API is a
-/// craft-ui follow-up, not a GridCraft-local change.
+/// `State::run` also polls the workers, on top of [`crate::SheetApp::poll_printing`] in `logic`.
+/// That poll is idempotent (it only drains worker messages into the same state), and the
+/// logic-side poll is what lets a hidden window and a logic-only frame see completion, so it stays.
 pub fn show(state: &mut State, ui: &mut egui::Ui, discover: &Discover, translate: impl Fn(&str) -> String) {
-    let labels = Labels {
-        printer: &translate("Printer"),
-        select_printer: &translate("Select a printer"),
-        refresh: &translate("Refresh printers"),
-        copies: &translate("Copies"),
-        duplex: &translate("Two-sided printing"),
-        printer_default: &translate("Printer default"),
-        one_sided: &translate("One-sided"),
-        long_edge: &translate("Two-sided: long edge"),
-        short_edge: &translate("Two-sided: short edge"),
-        grayscale: &translate("Grayscale"),
-    };
-    state.show(ui, egui::Id::unique("gridcraft_print_settings"), discover, &labels);
+    ui.push_id("gridcraft_print_settings", |ui| state.run(ui, discover));
     if let Some(message) = &state.message {
         ui.label(feedback(message, crate::i18n::current(ui.ctx()), translate));
+    }
+}
+
+/// The printer queue the settings name; empty for none.
+fn printer_name(settings: &Settings) -> &str {
+    match &settings.destination {
+        Destination::Printer(name) => name,
+        _ => "",
     }
 }
 
@@ -45,7 +39,7 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
         if !state.printers.iter().any(|available| available.name == printer) {
             return Err("printer must be a name from the discovered list".into());
         }
-        next.printer = printer.to_owned();
+        next.destination = Destination::Printer(printer.to_owned());
     }
     if let Some(value) = object.get("copies") {
         let copies = value.as_u64().filter(|copies| (1..=999).contains(copies)).ok_or("copies must be an integer from 1 to 999")?;
@@ -81,10 +75,11 @@ pub fn settings(state: &mut State, params: &serde_json::Value, discover: Option<
         Some(Feedback::Submitted(receipt)) => ("submitted", receipt.as_str()),
         Some(Feedback::Failed(error)) => ("failed", error.as_str()),
         Some(Feedback::WorkerStopped) => ("workerStopped", ""),
+        Some(_) => ("unknown", ""),
     };
     Ok(json!({
-        "printer": state.settings.printer, "copies": state.settings.copies,
-        "duplex": match state.settings.duplex { None => "printerDefault", Some(Duplex::Off) => "off", Some(Duplex::LongEdge) => "longEdge", Some(Duplex::ShortEdge) => "shortEdge" },
+        "printer": printer_name(&state.settings), "copies": state.settings.copies,
+        "duplex": match state.settings.duplex { Some(Duplex::Off) => "off", Some(Duplex::LongEdge) => "longEdge", Some(Duplex::ShortEdge) => "shortEdge", _ => "printerDefault" },
         "grayscale": state.settings.grayscale,
         "printers": state.printers.iter().map(|printer| json!({"name": printer.name, "default": printer.default})).collect::<Vec<Value>>(),
         "busy": state.busy(), "discovering": state.discovering(), "ready": state.ready(), "status": status, "detail": detail,
@@ -101,5 +96,6 @@ pub fn feedback(message: &Feedback, language: crate::i18n::Language, translate: 
         Feedback::Submitted(receipt) => translate("Print job submitted: {receipt}").replace("{receipt}", receipt),
         Feedback::Failed(error) => translate("Print failed: {error}").replace("{error}", &language.tr_error(error)),
         Feedback::WorkerStopped => translate("Print failed: the printing worker stopped."),
+        _ => String::new(),
     }
 }

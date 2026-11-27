@@ -25,7 +25,7 @@ fn sheet_with(name: &str, pictures: &[(u32, &[u8])]) -> Arc<Sheet> {
 
 fn names(bytes: &[u8]) -> Vec<String> {
     let z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
-    z.file_names().map(str::to_string).collect()
+    z.file_names().map(|n| n.unwrap().into_owned()).collect()
 }
 
 fn text(bytes: &[u8], name: &str) -> String {
@@ -84,4 +84,22 @@ fn different_pictures_with_the_same_length_stay_separate() {
     assert_eq!(names(&bytes).iter().filter(|n| n.starts_with("xl/media/")).count(), 2);
     let back = read_xlsx(&bytes).unwrap().0;
     assert_eq!(back.sheets[0].images.iter().map(|i| i.data.to_vec()).collect::<Vec<_>>(), vec![a, b]);
+}
+
+/// Many distinct pictures that share a long prefix: each is matched against the earlier ones
+/// through a content hash, not by comparing bytes with every one of them.
+#[test]
+fn many_distinct_pictures_with_a_common_prefix_are_each_written_once() {
+    let pictures: Vec<Vec<u8>> = (0..400u32)
+        .map(|i| {
+            let mut v = b"\x89PNG\r\n\x1a\n".to_vec();
+            v.extend(std::iter::repeat_n(7u8, 65_536));
+            v.extend(i.to_le_bytes());
+            v
+        })
+        .collect();
+    let refs: Vec<(u32, &[u8])> = pictures.iter().enumerate().map(|(i, p)| (i as u32 + 1, p.as_slice())).collect();
+    let wb = Workbook { sheets: vec![sheet_with("One", &refs), sheet_with("Two", &refs)], ..Default::default() };
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(names(&bytes).iter().filter(|n| n.starts_with("xl/media/")).count(), 400);
 }

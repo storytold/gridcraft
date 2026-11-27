@@ -37,18 +37,22 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
-        // `?host=parent`: a same-origin page framing GridCraft (such as a Nextcloud app) opens
-        // workbooks in it and stores what it saves (`host`).
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        // Host modes (`craft-web-host`): `?host=parent`, a same-origin page framing GridCraft (such
+        // as a Nextcloud app), opens workbooks in it and stores what it saves (`host`). Unframed
+        // there is no parent, so that URL on its own stays the normal app with downloads.
+        // `data-host="page"` on the canvas opts a page in instead: it runs GridCraft in its own
+        // document and talks over DOM `CustomEvent`s on the canvas.
+        let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
                 options,
                 Box::new(move |cc| {
+                    gridcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
-                    // In host mode the parent sends the workbook to edit; no sample meanwhile.
+                    // In host mode the host sends the workbook to edit; no sample meanwhile.
                     let q = if app_bridge.is_some() { String::new() } else { query() };
                     if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
@@ -96,6 +100,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
+                    crate::api::install(&mut app, cc.egui_ctx.clone());
                     Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
@@ -154,6 +159,7 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        self.app.close_path(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
@@ -173,6 +179,7 @@ impl eframe::App for WebShell {
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.app.raw_input_hook(ctx, raw);
+        self.app.before_input(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

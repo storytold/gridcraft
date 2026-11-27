@@ -47,6 +47,8 @@ fn series(name: &str, values: &str) -> Series {
         smooth: false,
         trendlines: Vec::new(),
         quartiles: Default::default(),
+        number_format: None,
+        innermost_categories: false,
     }
 }
 
@@ -78,6 +80,8 @@ fn chart_names_are_written_qualified() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -157,6 +161,8 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

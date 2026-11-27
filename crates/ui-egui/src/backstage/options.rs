@@ -63,7 +63,7 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             "dark" => "Dark",
             _ => "Light",
         };
-        craft_ui::ComboBox::from_id_salt("backstage_theme")
+        egui::ComboBox::from_id_salt("backstage_theme")
             .width(160.0)
             .selected_text(lang.tr(current))
             .show_ui(ui, |ui| {
@@ -77,7 +77,7 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
             .labelled_by(label.id);
         ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
-        craft_ui::ComboBox::from_id_salt("backstage_language")
+        egui::ComboBox::from_id_salt("backstage_language")
             .width(160.0)
             .selected_text(lang.name())
             .show_ui(ui, |ui| {
