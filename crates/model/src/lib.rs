@@ -4,11 +4,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod b64;
+pub mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
 pub mod macros;
+pub mod paper;
 pub mod password;
 pub mod preserved;
 pub mod python;
@@ -21,7 +22,7 @@ pub use cell::{Cell, CellPicture, Formula};
 pub use features::*;
 pub use macros::*;
 pub use password::PasswordHash;
-pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
+pub use preserved::{Preserved, PreservedChart, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};
 pub use python::{PyCode, PyOutput};
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetUid, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
@@ -31,7 +32,7 @@ pub use style::{
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun, PhoneticString,
-    RefHost, ShowObjects, Workbook, WorkbookView,
+    RefHost, ShowObjects, Workbook, WorkbookView, WriteReservation,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

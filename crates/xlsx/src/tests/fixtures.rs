@@ -181,7 +181,9 @@ fn assert_sheet_settings(s: &gridcraft_model::Sheet) {
     assert!(s.cols.get(&2).unwrap().hidden);
     assert_eq!(s.cols.get(&2).unwrap().size, Some(145.0));
     assert_eq!(s.cols.get(&2).unwrap().outline, 1);
+    assert!(s.cols.get(&2).unwrap().custom, "customWidth: a width set by hand");
     assert_ne!(s.cols.get(&3).unwrap().style, None);
+    assert!(!s.cols.get(&3).unwrap().custom, "no customWidth: not set by hand");
     assert_eq!(s.rows.get(&0).unwrap().size, Some(40.0));
     let r2 = s.rows.get(&1).unwrap();
     assert!(r2.hidden);
@@ -236,6 +238,38 @@ fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
     assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
 }
 
+/// Differential fonts that turn outlined letters on, or state them off (alone, or after strike),
+/// keep it on save, like strike.
+#[test]
+fn dxf_outline_font_survives_save() {
+    let dxfs = concat!(
+        r#"<dxf><font><outline/></font></dxf>"#,
+        r#"<dxf><font><strike val="0"/><outline val="0"/></font></dxf>"#,
+        r#"<dxf><font><outline val="0"/></font></dxf>"#,
+    );
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+      <dxfs count="3">{dxfs}</dxfs>
+    </styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A2"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A3"><cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let st = String::from_utf8(st).unwrap();
+    let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
+    assert_eq!(written, Some(format!(r#" count="3">{dxfs}"#).as_str()));
+}
+
 /// A dxf writes its parts in schema order: the border comes before the protection.
 #[test]
 fn dxf_border_is_written_before_protection() {
@@ -260,6 +294,27 @@ fn dxf_border_is_written_before_protection() {
     let dx = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d).unwrap_or_default();
     let (b, p) = (dx.find("<border"), dx.find("<protection"));
     assert!(b.is_some() && p.is_some() && b < p, "{dx}");
+}
+
+/// Which stored widths were set by hand, as Excel 16.0 treats them when a number format makes a
+/// number wider (#1077): only customWidth without bestFit keeps its width; the others widen.
+#[test]
+fn column_widths_set_by_hand() {
+    let body = r#"<cols><col min="1" max="1" width="15"/><col min="2" max="2" width="15" customWidth="1"/>
+      <col min="3" max="3" width="15" bestFit="1"/><col min="4" max="4" width="15" bestFit="1" customWidth="1"/>
+      <col min="5" max="5" width="9.140625" customWidth="1"/></cols><sheetData/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let custom: Vec<bool> = (0..5).map(|c| s.cols.get(&c).is_some_and(|i| i.custom)).collect();
+    assert_eq!(custom, [false, true, false, false, true]);
+    assert_eq!(s.col_width(4), s.default_col_width, "E: the default width, but set by hand");
+    // Written back the way Excel writes them.
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let mut pkg = crate::package::Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let flags: Vec<(bool, bool)> =
+        sheet.child("cols").unwrap().kids("col").map(|c| (c.flag("customWidth", false), c.flag("bestFit", false))).collect();
+    assert_eq!(flags, [(true, true), (true, false), (true, true), (true, false)], "C and D are one run");
 }
 
 #[test]
@@ -445,7 +500,7 @@ fn drawing_with_picture_and_chart() {
             let mut f = z.by_index(i).unwrap();
             let mut d = vec![];
             std::io::Read::read_to_end(&mut f, &mut d).unwrap();
-            parts.push((f.name().to_string(), d));
+            parts.push((f.name().unwrap().to_string(), d));
         }
         parts.push(("xl/media/image1.png".into(), png.to_vec()));
         let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();

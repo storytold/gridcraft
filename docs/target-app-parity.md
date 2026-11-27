@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-15 · **Change:** minor (performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-15 · **Change:** minor (`cargo xtask bench`: measured recalc baselines; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -85,7 +85,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
 | Sort, filter, tables, validation, outline | 8 | ~82% | ~70% | 10–16 | Multi-level sort, AutoFilter, Advanced Filter, tables with totals, validation, outline, subtotals, consolidate. Advanced Filter copy-to preserves cells outside its result and rejects worksheet overflow (#1031). Bugs: subtotal header (#131), validation edits (#129), table style panic caught (#130); no slicers on tables |
-| PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, values on rows or columns, date grouping, show-values-as, refresh, calculated fields, GETPIVOTDATA, XLSX round-trip. Missing: slicers, timelines, calculated items, PivotCharts, value/label filters, number grouping, Generate GetPivotData, data-model pivots. Round-trip never checked in Excel |
+| PivotTables | 7 | ~65% | ~45% | 25–40 | Insert/Recommended, field list, three layouts, values on rows or columns, date grouping, show-values-as, refresh, calculated fields, GETPIVOTDATA, sort by a value field, custom captions and item names, XLSX round-trip of the layout settings refreshed file pivots need. Missing: slicers, timelines, calculated items, PivotCharts, value/label filters, number grouping, Generate GetPivotData, data-model pivots. Round-trip never checked in Excel |
 | Charts and sparklines | 8 | ~50% | ~30% | 40–60 | 25 chart kinds, all 2-D. Doughnut charts draw every series as a concentric ring (first series innermost), with editable hole size and first slice angle. The chart model holds title, legend position, a data-labels flag, gridlines flag, axis titles and chart data tables (legend keys, borders, XLSX round-trip and print/PDF); no axis scaling, error bars, per-point formatting, chart sheets, 3-D, surface, map, Pareto. Kinds survive XLSX round trip (#158, #161), except stock charts: only 3–4 series are a stock chart, and any other count is written and reimported as a line chart. [chart-parity.md](chart-parity.md) |
 | Page layout, print, PDF | 5 | ~80% | ~55% | 12–20 | Page setup, print titles, breaks, page order, Page Break Preview, headers/footers, PDF export and printing. Paper sizes match Japanese Excel: B4/B5/B6 are the JIS sizes, ISO B4/B5/B6 stay reachable by name, and Japanese Postcard (はがき), Japanese Double Postcard (往復はがき), the chou/kaku envelopes and A6 are available. No true Page Layout view; the PDF writer uses only the 14 standard fonts without embedding (no CJK or other non-Latin text in PDF); web print only exports (#141, #143) |
 | What-if and analysis | 4 | ~50% | ~40% | 22–35 | Goal Seek, Scenario Manager, data tables, Analysis ToolPak (all 19 tools, no charts), Solver (Simplex LP, a local nonlinear method and Evolutionary; Answer, Sensitivity and Limits reports; Load/Save Model, Reset All and Solver Options; no Population report), Forecast Sheet. Missing: Analyze Data |
@@ -203,14 +203,26 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
 | Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
-| Edit → recalc, 100k dependents | ~0.4 s (2026-10-07), target < 100 ms | tens of ms | measured on the owner's machine; #66 since made range-formula recalc linear, not re-timed |
+| Edit → recalc, 100k-deep chain | 90–106 ms (target < 100 ms) | tens of ms | measured (`cargo xtask bench`, `edit.chain`) |
+| Edit → recalc, 100k formulas reading one cell | 71–87 ms | tens of ms | measured (`edit.fanout`) |
+| Edit → 100 whole-column SUMIFS / XLOOKUP over 100k rows | 420–590 ms / 160–250 ms | not measured | measured (`edit.sumifs`, `edit.lookup`) |
+| Calculate Now, 300k formulas | 395–455 ms | not measured | measured (`recalc.full`) |
+| Save the 100k-row model (300k formulas) as XLSX | ~530 ms | not measured | measured (`xlsx.save`) |
+| Reopen that file | drops the last ~9,000 rows (element cap from #2413; fix in PR #2527, then ~1.3 s with full recalc) | opens | measured (`xlsx.open`) |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
 Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
 independent chains (native only; WASM stays single-threaded), whole-column reference
-clamping, a `cargo xtask bench` with fixed workbooks so the numbers become measured.
+clamping, and faster whole-column SUMIFS and lookups (each formula rescans the column on every
+edit).
+
+Benchmarks: `cargo xtask bench` builds ten fixed workbooks in code, times each operation through
+`Session::execute` (median of 7 after a warm-up, results checked) and compares with a baseline
+saved by `--save`. The numbers above are ranges over several runs on an Apple M2 Pro, release
+build, 100,000 rows, 2026-10-26; recalculation is single-threaded, so core count doesn't change
+them.
 
 ## Platforms
 
@@ -295,7 +307,8 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
   the fill handle explains how to fill versus select cells.
 - Formatting: fonts, fills, all border styles, alignment (wrap, indent, rotation, merge), number
   formats, 47 cell styles, 60 table styles, conditional formatting (cell rules, text, dates,
-  duplicates, top/bottom, averages, data bars, colour scales, icon sets, formulas), automatic
+  duplicates, top/bottom, averages, data bars, colour scales with per-stop type/value/colour
+  editors, icon sets, formulas), automatic
   row heights, autofit, hide/unhide, freeze panes.
   Border presets include visual diagrams; Format Cells previews draft borders before applying.
 - Data: sort (multi-level, by colour, custom lists), AutoFilter (values, custom, top 10,
@@ -327,7 +340,6 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 - Pixel comparison against Excel screenshots (planned; screenshots stay in `plan/excel/`).
 - Function results against Excel-computed oracles (a corpus repo is the planned home).
-- Recalc and open-time benchmarks on fixed workbooks (no `cargo xtask bench` yet).
 - Whether Excel opens our XLSX output without repair, across features.
 
 ## Revision history
@@ -345,6 +357,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-31 | minor | The Insert Function dialog is named as in Excel (it was called Formula Builder); no score change |
 | 2026-10-31 | minor | What-if and analysis: Solver Options (no score change) |
 | 2026-10-31 | minor | What-if and analysis: Solver Load/Save Model and Reset All; Forecast Sheet moved from Missing to the list of tools, as gaps.md §13 records (no score change) |
+| 2026-10-26 | minor | Performance: `cargo xtask bench` measures recalc, entry, sort and XLSX save/open on fixed in-code workbooks; the 100k-dependent edit is 90–106 ms (was ~0.4 s, an old timing), around the 100 ms target for simple formulas; a 100k-row model doesn't reopen whole until PR #2527 lands (no score change) |
 | 2026-10-25 | minor | Automation: macro interface (Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts) (no score change) |
 | 2026-10-25 | trivial | Catalog count 276 / 292 in the summary table and the method, as `cargo xtask parity` measures (no score change) |
 | 2026-10-22 | minor | Several windows on the desktop: a native window per workbook window, New Window on the same workbook, Switch Windows and Arrange All; "one window" removed from UI/UX fidelity, Hardware and the interaction-fidelity discount; no score change |
@@ -354,6 +367,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
 | 2026-10-12 | minor | Worksheet functions 514 / 523 (98.3%; 505 working): GETPIVOTDATA |
 | 2026-10-21 | minor | Automation: typed macros in the engine and `macro.*` commands, no interface yet (no score change); catalog 274 / 290 → 275 / 291 (View › Macros › Record Macro) |
+| 2026-10-13 | minor | PivotTables: sort by a value field (`pivot.sort by:`), row/column/data/grand-total/empty-cell captions, field and item custom names, manual item order, per-field subtotals and number formats, Repeat Item Labels, Values row, classic layout. Refreshing 26 PivotTables from 11 real workbooks: 7,271 cell differences against Excel's saved output on main (6e984bb) → 3,446, the rest filters (#498) and Excel's order among tied values |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
 | 2026-10-12 | minor | PivotTables: values on rows (Σ Values in Rows at any position, all three layouts; `pivot.moveField` and the field pane move it; `dataOnRows` round-trips) (no score change) |
