@@ -69,6 +69,7 @@ fn subtotal_that_fails_part_way_changes_nothing() {
     assert_eq!(s.journal.len(), journal);
 }
 
+#[test]
 fn filter_list_orders_arabic_like_sort() {
     let mut s = Session::new();
     s.new_workbook();
