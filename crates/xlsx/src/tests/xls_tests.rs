@@ -794,6 +794,19 @@ fn xls_window2_right_to_left_sheet_opens_right_to_left() {
     assert_eq!(view(&one_sheet_with(&window2(0x0001 | 0x0002 | 0x0010))), (false, true, false, true, true));
 }
 
+/// COLINFO's fUserSet marks a width set by hand, which a wider number format leaves alone (#1077).
+/// craft-xls does not report fBestFit, so fUserSet with fBestFit also reads as set by hand.
+#[test]
+fn xls_column_widths_set_by_hand() {
+    let colinfo = |col: u16, flags: u16| rec(0x007D, &u16s(&[col, col, 20 * 256, 0, flags, 0]));
+    let file = one_sheet_with(&cat(&[&colinfo(0, 0x0002), &colinfo(1, 0), &colinfo(2, 0x0006)]));
+    let (wb, _) = read_xls(&file).unwrap();
+    let sh = &wb.sheets[0];
+    let custom: Vec<bool> = (0..3).map(|c| sh.cols.get(&c).is_some_and(|i| i.custom)).collect();
+    assert_eq!(custom, [true, false, true]);
+    assert!((0..3).all(|c| sh.col_width(c) > sh.default_col_width), "all three keep their stored width");
+}
+
 #[test]
 fn xls_short_window2_is_ignored() {
     for payload in [&[][..], &[0x40][..], &[0x40, 0][..], &[0x40, 0, 0, 0, 0, 0, 0, 0, 0][..]] {

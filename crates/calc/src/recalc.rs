@@ -718,7 +718,7 @@ impl Calc {
                 } else {
                     Vec::new()
                 };
-                let blocked = spill_is_blocked(sheet, (*key, old), range, end, standing);
+                let blocked = spill_is_blocked(sheet, (*key, old), range, end, standing, array.data.len());
                 if !blocked {
                     for (o, r) in outranked {
                         for c in r.iter() {
@@ -785,6 +785,7 @@ fn spill_is_blocked(
     range: RangeRef,
     end: CellRef,
     standing: &Standing,
+    array_len: usize,
 ) -> bool {
     let outranked = |cell: CellRef| {
         sheet
@@ -796,7 +797,7 @@ fn spill_is_blocked(
         || end.col >= gridcraft_core::MAX_COLS
         || range.iter().any(|cell| cell != anchor.1 && (sheet.cells.has(cell) || (sheet.spill.contains_key(&cell) && !outranked(cell))))
         || sheet.merges.iter().any(|merge| merge.intersects(&range))
-        || sheet.tables.iter().any(|table| table.range.contains(anchor.1))
+        || (array_len > 1 && sheet.tables.iter().any(|table| table.range.contains(anchor.1)))
 }
 
 fn fill_spill(sheet: &mut gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, array: &Array) {

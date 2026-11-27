@@ -25,7 +25,7 @@ fn kinds(first: &str, second: &str) -> Vec<Option<ChartKind>> {
          <c:chart><c:plotArea>{first}{second}</c:plotArea></c:chart></c:chartSpace>"
     );
     let root = parse(xml.as_bytes()).unwrap();
-    let ch = read_chart(&root).unwrap();
+    let (ch, _) = read_chart(&root).unwrap();
     assert_eq!(ch.kind, ChartKind::Combo);
     ch.series.iter().map(|s| s.kind).collect()
 }
@@ -55,7 +55,7 @@ fn series_keep_their_own_markers_and_lines() {
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
         line(&(no_marker.to_string() + &ser(1)))
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!((ch.kind, ch.series.iter().map(|s| s.kind).collect::<Vec<_>>()), (ChartKind::Line, vec![None, Some(ChartKind::LineMarkers)]));
     let series = |kind| Series { values: "Sheet1!$A$1:$A$3".into(), kind, ..Series::default() };
     for (kind, kinds) in
@@ -63,7 +63,7 @@ fn series_keep_their_own_markers_and_lines() {
     {
         let chart = Chart { kind, series: kinds.iter().map(|k| series(*k)).collect(), ..ch.clone() };
         let written = crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1");
-        let back = read_chart(&parse(written.as_bytes()).unwrap()).unwrap();
+        let back = read_chart(&parse(written.as_bytes()).unwrap()).unwrap().0;
         // XLSX has no chart-wide kind besides its series': each series is drawn as it was.
         let drawn = |c: &Chart| (0..c.series.len()).map(|i| c.series_kind(i)).collect::<Vec<_>>();
         assert_eq!(drawn(&back), drawn(&chart), "{kind:?}");
@@ -80,7 +80,7 @@ fn combo_series_keep_their_kinds_and_order() {
         bar(&ser(0)),
         line(&ser(1))
     );
-    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     for kinds in [
         vec![ChartKind::ColumnClustered, ChartKind::Area],
         vec![ChartKind::ColumnStacked, ChartKind::LineMarkers],
@@ -92,7 +92,7 @@ fn combo_series_keep_their_kinds_and_order() {
             .map(|(i, k)| Series { values: format!("Sheet1!${}$1:${}$3", ["B", "C"][i], ["B", "C"][i]), kind: Some(*k), ..Series::default() })
             .collect();
         let chart = Chart { kind: ChartKind::Combo, series, ..base.clone() };
-        let back = read_chart(&parse(crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1").as_bytes()).unwrap()).unwrap();
+        let back = read_chart(&parse(crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1").as_bytes()).unwrap()).unwrap().0;
         let drawn = |c: &Chart| (0..c.series.len()).map(|i| (c.series_kind(i), c.series[i].values.clone())).collect::<Vec<_>>();
         assert_eq!(drawn(&back), drawn(&chart), "{kinds:?}");
     }
@@ -103,7 +103,7 @@ fn combo_series_keep_their_kinds_and_order() {
         let series: Vec<Series> = kinds.iter().map(|k| Series { values: "Sheet1!$B$1:$B$3".into(), kind: Some(*k), ..Series::default() }).collect();
         let chart = Chart { kind: ChartKind::Combo, series, ..base.clone() };
         let xml = crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1");
-        let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+        let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
         assert!((0..2).all(|i| back.series_kind(i) == want), "{kinds:?}: {xml}");
         assert!(back.series.iter().all(|s| !s.secondary), "{kinds:?}");
         assert!(xml.contains("<c:valAx>"), "{kinds:?}: {xml}");
@@ -119,13 +119,13 @@ fn one_kind_on_two_axes_stays_one_kind() {
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
         bar(&ser(0))
     );
-    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     let series = vec![
         Series { values: "Sheet1!$B$1:$B$3".into(), ..Series::default() },
         Series { values: "Sheet1!$C$1:$C$3".into(), secondary: true, ..Series::default() },
     ];
     let chart = Chart { kind: ChartKind::ColumnClustered, series, ..base };
-    let back = read_chart(&parse(crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1").as_bytes()).unwrap()).unwrap();
+    let back = read_chart(&parse(crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1").as_bytes()).unwrap()).unwrap().0;
     assert_eq!(back.kind, ChartKind::ColumnClustered);
     assert_eq!(back.series.iter().map(|s| (s.kind, s.secondary)).collect::<Vec<_>>(), vec![(None, false), (None, true)]);
 }
@@ -139,13 +139,13 @@ fn stock_with_volume_keeps_its_stock_group() {
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
         bar(&ser(0))
     );
-    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     let mut series = vec![Series { values: "Sheet1!$B$1:$B$3".into(), kind: Some(ChartKind::ColumnClustered), ..Series::default() }];
     series.extend((0..4).map(|_| Series { values: "Sheet1!$C$1:$C$3".into(), kind: Some(ChartKind::Stock), secondary: true, ..Series::default() }));
     let chart = Chart { kind: ChartKind::Combo, series, ..base };
     let written = crate::chart::write_chart(&Workbook::new(), 0, &chart, "Book1");
     assert!(written.contains("<c:stockChart>"), "{written}");
-    let back = read_chart(&parse(written.as_bytes()).unwrap()).unwrap();
+    let back = read_chart(&parse(written.as_bytes()).unwrap()).unwrap().0;
     assert_eq!((1..5).map(|i| back.series_kind(i)).collect::<Vec<_>>(), vec![ChartKind::Stock; 4]);
 }
 
@@ -179,7 +179,7 @@ fn a_secondary_scatter_listed_first_stays_secondary() {
         ax(30, 40, "b"),
         ax(40, 30, "r")
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.series.iter().map(|s| s.secondary).collect::<Vec<_>>(), vec![true, false]);
 }
 
@@ -190,7 +190,7 @@ fn chart_of(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> gridcraft_m
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
         bar(&ser(0))
     );
-    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let base = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     let series = kinds
         .iter()
         .enumerate()
@@ -202,7 +202,7 @@ fn chart_of(kind: ChartKind, kinds: &[(Option<ChartKind>, bool)]) -> gridcraft_m
 /// The chart written to XLSX, and read back.
 fn round_trip(chart: &gridcraft_model::Chart) -> (String, gridcraft_model::Chart) {
     let xml = crate::chart::write_chart(&gridcraft_model::Workbook::new(), 0, chart, "Book1");
-    let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let back = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     (xml, back)
 }
 
@@ -338,6 +338,8 @@ fn a_chart_without_series_survives_a_round_trip() {
         Line,
         LineMarkers,
         LineStacked,
+        LineStacked100,
+        LineStacked100Markers,
         Pie,
         Doughnut,
         Area,
@@ -383,7 +385,7 @@ fn many_groups_are_read_in_linear_time() {
         );
         let doc = parse(xml.as_bytes()).unwrap();
         crate::chart::VAL_AXIS_VISITS.with(|v| v.set(0));
-        let ch = read_chart(&doc).unwrap();
+        let ch = read_chart(&doc).unwrap().0;
         assert_eq!(ch.series.len(), n);
         crate::chart::VAL_AXIS_VISITS.with(|v| v.get())
     };
@@ -412,7 +414,7 @@ fn an_empty_group_sets_neither_axes_nor_secondary() {
         ax("valAx", 3, 4, "b", "SCX"),
         ax("valAx", 4, 3, "l", "SCY"),
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     assert_eq!(ch.kind, ChartKind::ScatterLines);
     assert!(!ch.series[0].secondary);
     assert_eq!((ch.x_title.as_deref(), ch.y_title.as_deref()), (Some("SCX"), Some("SCY")));
@@ -431,7 +433,7 @@ fn titles_of(plot: &str) -> (Option<String>, Option<String>) {
     let xml = format!(
         "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>{plot}</c:plotArea></c:chart></c:chartSpace>"
     );
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
     (ch.x_title, ch.y_title)
 }
 

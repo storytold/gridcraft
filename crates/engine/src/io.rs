@@ -53,6 +53,10 @@ impl FileKind {
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
+/// The error for a workbook with a password to modify, opened with neither that password
+/// (`modifyPassword`) nor `readOnly`, contains this. The interface asks for the password or a
+/// read-only open when it sees it.
+pub const MODIFY_PASSWORD_REQUIRED: &str = "is reserved by its author. Enter the password to modify it, or open it read-only.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
@@ -528,8 +532,8 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
+        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default),
+        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, None)).transpose().map(Option::unwrap_or_default),
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -563,8 +567,14 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| crate::display::value_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
+/// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
+    let text = |c| crate::display::value_text(wb, sh, c);
+    match delimiter {
+        Some(d) => gridcraft_xlsx::write_csv(sh, d, text),
+        None => gridcraft_xlsx::write_tsv(sh, text),
+    }
+    .map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
@@ -1180,43 +1190,14 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    gridcraft_model::b64::encode(data)
 }
 
+/// Base64, or a `data:` URL's base64 payload.
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.split_once(',').filter(|(h, _)| h.starts_with("data:")).map(|(_, b)| b).unwrap_or(s);
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for c in s.bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        let v = B64.iter().position(|&x| x == c)? as u32;
-        buf = (buf << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    gridcraft_model::b64::decode(s)
 }
 
 /// Pixel size of a PNG or JPEG from its header.

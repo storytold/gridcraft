@@ -1,5 +1,15 @@
 use super::{Key, Modifiers, SheetApp, json};
 
+/// Ctrl+Q (Control+Q in Excel for Mac): Quick Analysis. A single cell has nothing to analyse,
+/// which is not worth an alert, but several areas deserve to be told why nothing opened.
+pub(crate) fn quick_analysis(app: &mut SheetApp) {
+    if let Err(e) = crate::quick_analysis::toggle(app, None)
+        && app.session.active().is_some_and(|d| d.selection.ranges.len() > 1)
+    {
+        app.alert(e);
+    }
+}
+
 /// Command-key shortcuts when the grid has focus.
 pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
     let shift = m.shift;
@@ -42,6 +52,12 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         Key::T if shift => Some(("formulas.autoSum", json!({}))),
         Key::T => Some(("insert.table", json!({}))),
         Key::E => Some(("edit.flashFill", json!({}))),
+        // Plain Ctrl+Q only: Ctrl+Shift+Q and Ctrl+Alt+Q (AltGr+Q) are not Quick Analysis.
+        // Command+Q on a Mac is the native Quit item; Control+Q there goes through the keymap.
+        Key::Q if !shift && !m.alt && !m.mac_cmd => {
+            quick_analysis(app);
+            None
+        }
         Key::Num1 => {
             app.open_dialog("formatCells", json!({}));
             None

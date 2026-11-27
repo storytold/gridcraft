@@ -19,7 +19,7 @@
 
 use std::sync::mpsc::Sender;
 
-use craft_ui::capture::CaptureSlot;
+use crate::capture::CaptureSlot;
 use gridcraft_engine::core::CellRef;
 use serde_json::{Value as Json, json};
 
@@ -280,6 +280,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("ui.window.close", "Close Window", ""),
                 ("ui.window.beginResize", "Resize Window", "{direction: north|south|east|west|northeast|northwest|southeast|southwest}"),
                 ("ui.dialog", "Open Dialog", ""),
+                (
+                    "ui.selectionMode",
+                    "Extend or Add to Selection",
+                    "{mode?: \"extend\" (F8) | \"add\" (Shift+F8) | \"off\"} → {mode}; {} reports the mode",
+                ),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
                 (
                     "ui.printSettings",
