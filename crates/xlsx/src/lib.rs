@@ -76,7 +76,8 @@ pub struct ReadReport {
     /// included, which a paste covers. The sheet's used range holds only the non-empty cells.
     pub records: u32,
     pub fields: u32,
-    /// A CSV read: the text has records past a sheet's last row, which were left out.
+    /// A CSV read: the text has records past a sheet's last row, or fields past its last column,
+    /// which were left out.
     pub truncated: bool,
 }
 

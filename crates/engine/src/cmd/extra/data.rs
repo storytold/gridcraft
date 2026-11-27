@@ -189,10 +189,10 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
         e => EngineError::Other(e.to_string()),
     })?;
     // Pasted at a cell, the text covers every field it has, blank ones included (all of them, for
-    // text like `,`), so they clear what is under them; it must not lose records past a sheet's
-    // last row. Imported into a sheet of its own, it is its cells with data.
+    // text like `,`), so they clear what is under them; it must not lose records or fields past a
+    // sheet's last row or column. Imported into a sheet of its own, it is its cells with data.
     let src = match (at, wb.sheet(0).and_then(|sh| sh.used_range())) {
-        (Some(_), _) if report.truncated => return Err(EngineError::Other("The text has more rows than a sheet has.".into())),
+        (Some(_), _) if report.truncated => return Err(EngineError::Other("The text has more rows or columns than a sheet has.".into())),
         (Some(_), _) if report.records > 0 => RangeRef::new(CellRef::new(0, 0), CellRef::new(report.records - 1, report.fields.saturating_sub(1))),
         (None, Some(used)) => used,
         _ => return Err(EngineError::Other("The file is empty.".into())),
@@ -444,16 +444,24 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_with_more_records_than_a_sheet_has_rows_is_refused() {
-        use gridcraft_core::{CellRef, MAX_ROWS, Value};
+    fn a_paste_with_more_records_or_fields_than_a_sheet_has_is_refused() {
+        use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, Value};
         let mut s = s();
         s.execute("cell.set", json!({"cell": "A1", "input": "old"})).unwrap();
-        // One record per line break: a record past the last row.
-        let text = format!("new{}", "\n".repeat(MAX_ROWS as usize + 1));
-        let err = s.execute("data.fromTextCsv", json!({"text": text, "delimiter": ",", "at": "A1"})).expect_err("too many rows");
-        assert!(err.to_string().contains("more rows"), "{err}");
+        // One record per line break, so a record past the last row; then a field past the last column.
+        let long = format!("new{}", "\n".repeat(MAX_ROWS as usize + 1));
+        let wide = format!("new{}", ",".repeat(MAX_COLS as usize));
+        for text in [long, wide] {
+            let err = s.execute("data.fromTextCsv", json!({"text": text, "delimiter": ",", "at": "A1"})).expect_err("too large");
+            assert!(err.to_string().contains("more rows or columns"), "{err}");
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("old"), "nothing is written");
+        }
+        // A record exactly as wide as the sheet fits.
+        let fits = format!("new{}x", ",".repeat(MAX_COLS as usize - 1));
+        s.execute("data.fromTextCsv", json!({"text": fits, "delimiter": ",", "at": "A1"})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
-        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("old"), "nothing is written");
+        assert_eq!(sh.value(CellRef::new(0, MAX_COLS - 1)), Value::text("x"));
     }
 
     #[test]

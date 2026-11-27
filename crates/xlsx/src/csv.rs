@@ -40,9 +40,10 @@ pub(crate) fn sep_line(text: &str, quote: char) -> Option<(Option<char>, usize)>
     }
 }
 
-/// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
+/// [`craft_csv::parse_records`] with a record kept to one field past the grid's [`MAX_COLS`], so a
+/// wider record can be told from one that fits; readers use the first `MAX_COLS`.
 fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
-    craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
+    craft_csv::parse_records(text, delim, quote, MAX_COLS as usize + 1, on_record);
 }
 
 /// The delimiter and quote character to read `text` with. craft-csv always splits and unquotes, so
@@ -356,6 +357,9 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
         if row >= MAX_ROWS {
             report.truncated = true;
             return false;
+        }
+        if rec.len() > MAX_COLS as usize {
+            report.truncated = true;
         }
         widest = widest.max(rec.len().min(MAX_COLS as usize));
         // A blank line is an empty row.
