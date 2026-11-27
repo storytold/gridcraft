@@ -219,6 +219,12 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"hiddenRows": hidden}))
 }
 
+/// Character-wise Unicode lowercase key matching `gridcraft_core::compare_text`'s final tie-breaker
+/// (avoiding `str::to_lowercase`'s context-sensitive Greek final sigma).
+fn filter_case_key(s: &str) -> String {
+    s.chars().flat_map(char::to_lowercase).collect()
+}
+
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
@@ -278,16 +284,44 @@ fn pct_encode(s: &str) -> String {
     out
 }
 
+/// Decodes `pct_encode` output; `None` when it is not valid UTF-8.
+fn pct_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            out.push(u8::from_str_radix(s.get(i + 1..i + 3)?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Splits a stored identity remainder `<kind>:<val>:<eff>[:<tail>]` into its base key and tail, re-folding the
+/// value parts with the Unicode case key. Identities saved with ASCII-only folding (#2912) then compare equal to
+/// the current base of every row the dropdown groups under that entry; already-folded identities are unchanged.
+fn normalized_identity_base(rest: &str) -> Option<(String, Option<&str>)> {
+    let fold = |enc: &str| pct_decode(enc).map_or_else(|| enc.to_string(), |t| pct_encode(&filter_case_key(&t)));
+    let mut parts = rest.splitn(4, ':');
+    let (kind, val, eff) = (parts.next()?, parts.next()?, parts.next()?);
+    Some((format!("{kind}:{}:{}", fold(val), fold(eff)), parts.next()))
+}
+
 /// Format-independent, mode-independent `<kind>:<encoded_value>` key of a non-blank cell.
 fn typed_value_token(v: &Value) -> String {
+    let fold = filter_case_key;
     let (kind, norm) = match v {
         Value::Number(n) => {
-            let s = if *n == 0.0 { "0".to_string() } else { v.display().trim().to_ascii_lowercase() };
+            let s = if *n == 0.0 { "0".to_string() } else { fold(v.display().trim()) };
             ("n", s)
         }
-        Value::Text(t) => ("t", t.trim().to_ascii_lowercase()),
+        Value::Text(t) => ("t", fold(t.trim())),
         Value::Bool(b) => ("b", if *b { "true".to_string() } else { "false".to_string() }),
-        _ => ("e", v.display().trim().to_ascii_lowercase()),
+        _ => ("e", fold(v.display().trim())),
     };
     format!("{kind}:{}", pct_encode(&norm))
 }
@@ -306,7 +340,7 @@ fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<
 fn cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
     let typed = typed_value_token(v);
     let vtext = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    let eff = if vtext.trim().is_empty() { v.display().trim().to_ascii_lowercase() } else { vtext.trim().to_ascii_lowercase() };
+    let eff = filter_case_key(if vtext.trim().is_empty() { v.display() } else { vtext }.trim());
     format!("{typed}:{}", pct_encode(&eff))
 }
 
@@ -346,30 +380,34 @@ fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, shown: 
 
 /// Whether stored checklist identity `id` distinguishes formula vs constant rows for `base`.
 fn id_splits_base(id: &str, base: &str) -> bool {
-    id.strip_prefix("c:") == Some(base) || id.strip_prefix("f:").and_then(|rest| rest.strip_prefix(base)).is_some_and(|rest| rest.starts_with(':'))
+    let stored = |rest| normalized_identity_base(rest).filter(|(b, _)| b == base);
+    id.strip_prefix("c:").and_then(stored).is_some_and(|(_, tail)| tail.is_none())
+        || id.strip_prefix("f:").and_then(stored).is_some_and(|(_, tail)| tail.is_some())
 }
 
 /// Checks whether a non-blank cell matches any primary stored identity (`d:`, `c:`, `f:`, `w:`, `s:`).
 fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, identities: &[String]) -> bool {
     let base = cell_base_token(wb, sh, c, v);
+    // Stored bases are re-folded, so identities saved with ASCII-only folding match every row of their merged entry.
+    let stored = |rest| normalized_identity_base(rest).filter(|(b, _)| *b == base).map(|(_, tail)| tail);
     let mut formula_enc: Option<Option<String>> = None;
     let mut slicer_enc: Option<Option<String>> = None;
     identities.iter().any(|id| {
         if let Some(rest) = id.strip_prefix("d:") {
-            rest == base
+            stored(rest) == Some(None)
         } else if let Some(rest) = id.strip_prefix("c:") {
-            if rest != base {
+            if stored(rest) != Some(None) {
                 return false;
             }
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).is_none()
         } else if let Some(rest) = id.strip_prefix("f:") {
-            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
+            let Some(Some(tail)) = stored(rest) else {
                 return false;
             };
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).as_deref()
                 == Some(tail)
         } else if let Some(rest) = id.strip_prefix("w:") {
-            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
+            let Some(Some(tail)) = stored(rest) else {
                 return false;
             };
             let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
@@ -415,7 +453,7 @@ impl<'a> PreparedFilter<'a> {
             .iter()
             .enumerate()
             .filter_map(|(i, (_, c))| match c {
-                FilterCriterion::Values { values, .. } => Some((i, values.iter().map(|v| v.trim().to_ascii_lowercase()).collect())),
+                FilterCriterion::Values { values, .. } => Some((i, values.iter().map(|v| filter_case_key(v.trim())).collect())),
                 _ => None,
             })
             .collect();
@@ -477,9 +515,9 @@ impl<'a> PreparedFilter<'a> {
                     if has_primary {
                         row_matches_primary_identities(wb, sh, c, &v, identities)
                     } else {
-                        self.criterion_values.get(&i).is_some_and(|set| {
-                            set.contains(&text.trim().to_ascii_lowercase()) || set.contains(&v.display().trim().to_ascii_lowercase())
-                        })
+                        self.criterion_values
+                            .get(&i)
+                            .is_some_and(|set| set.contains(&filter_case_key(text.trim())) || set.contains(&filter_case_key(v.display().trim())))
                     }
                 };
                 if pre_migration {
@@ -781,11 +819,11 @@ pub fn filter_choices_selection(wb: &Workbook, sheet: usize, col: u32, choices: 
 pub fn filter_selection(wb: &Workbook, sheet: usize, col: u32, choices: &[(String, bool)]) -> Vec<(String, bool)> {
     let mut edited = std::collections::BTreeMap::new();
     for (value, on) in choices {
-        *edited.entry(value.to_ascii_lowercase()).or_insert(false) |= *on;
+        *edited.entry(filter_case_key(value)).or_insert(false) |= *on;
     }
     let mut selection: Vec<(String, bool)> = column_filter_choices(wb, sheet, col, false).into_iter().map(|c| (c.label, c.checked)).collect();
     for (value, on) in &mut selection {
-        if let Some(checked) = edited.get(&value.to_ascii_lowercase()) {
+        if let Some(checked) = edited.get(&filter_case_key(value)) {
             *on = *checked;
         }
     }
@@ -905,4 +943,220 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
 /// Distinct display values of a filter column (for the dropdown list).
 pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
     filter_choices(wb, sheet, col).into_iter().map(|c| (c.label, c.checked)).collect()
+}
+
+#[cfg(test)]
+mod unicode_filter_tests {
+    use super::*;
+
+    fn is_hidden(s: &Session, row: u32) -> bool {
+        s.doc().unwrap().wb.active().unwrap().rows.get(&row).is_some_and(|info| info.hidden)
+    }
+
+    /// Unicode-equivalent labels stay visible and checked in value-list filters.
+    #[test]
+    fn unicode_value_filter_keeps_rows_and_dropdown_in_sync() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        s.execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["Name"],
+                    ["ÁRBOL"],
+                    ["árbol"],
+                    ["ÉCOLE"],
+                    ["école"],
+                    ["Pino"]
+                ]
+            }),
+        )
+        .unwrap();
+
+        s.execute("data.filter", json!({"range": "A1:A6"})).unwrap();
+
+        s.execute("data.filterBy", json!({"column": "A", "values": ["árbol"]})).unwrap();
+
+        // Both uppercase and lowercase forms must match.
+        for row in [1, 2] {
+            assert!(!is_hidden(&s, row), "row {row} must remain visible");
+        }
+        for row in [3, 4, 5] {
+            assert!(is_hidden(&s, row), "row {row} must be hidden");
+        }
+
+        // Case variants share one dropdown entry (as in Excel), and it shows as selected.
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(options.len(), 3, "{options:?}");
+        for (label, expected) in [("ÁRBOL", true), ("ÉCOLE", false), ("Pino", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+
+            assert_eq!(selected, Some(expected), "{label}: {options:?}");
+        }
+
+        // Another accented word uses the same comparison.
+        s.execute("data.filterBy", json!({"column": "A", "values": ["école"]})).unwrap();
+
+        for row in [1, 2, 5] {
+            assert!(is_hidden(&s, row), "row {row} must be hidden");
+        }
+        for row in [3, 4] {
+            assert!(!is_hidden(&s, row), "row {row} must remain visible");
+        }
+
+        // Custom filters and value-list filters must agree.
+        s.execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "custom": {"op": "=", "value": "árbol"}
+            }),
+        )
+        .unwrap();
+
+        for row in [1, 2] {
+            assert!(!is_hidden(&s, row));
+        }
+        for row in [3, 4, 5] {
+            assert!(is_hidden(&s, row));
+        }
+    }
+
+    /// Numeric values and the special Blanks group keep their existing behavior.
+    #[test]
+    fn unicode_value_filter_preserves_numbers_and_blanks() {
+        let mut s = Session::new();
+        s.new_workbook();
+
+        s.execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["Value"],
+                    [42],
+                    [""],
+                    ["Other"]
+                ]
+            }),
+        )
+        .unwrap();
+
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+
+        s.execute(
+            "data.filterBy",
+            json!({
+                "column": "A",
+                "values": ["42"],
+                "blanks": true
+            }),
+        )
+        .unwrap();
+
+        assert!(!is_hidden(&s, 1), "numeric value must match");
+        assert!(!is_hidden(&s, 2), "blank must remain visible");
+        assert!(is_hidden(&s, 3), "unselected text must be hidden");
+
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+
+        for (label, expected) in [("42", true), ("(Blanks)", true), ("Other", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+
+            assert_eq!(selected, Some(expected), "{label}");
+        }
+    }
+
+    /// Value keys use character-wise lowercase just like `compare_text`: `"ΟΣ"` matches `"οσ"`
+    /// while remaining distinct from final-sigma `"ος"`.
+    #[test]
+    fn unicode_value_filter_matches_greek_sigma_consistently_with_compare_text() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["ΟΣ"], ["οσ"], ["ος"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+
+        s.execute("data.filterBy", json!({"column": "A", "values": ["ΟΣ"]})).unwrap();
+        assert!(!is_hidden(&s, 1), "ΟΣ must remain visible");
+        assert!(!is_hidden(&s, 2), "οσ must match ΟΣ under compare_text");
+        assert!(is_hidden(&s, 3), "final-sigma ος is distinct under compare_text");
+
+        // `ΟΣ`/`οσ` share one entry; final-sigma `ος` stays separate.
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(options.len(), 2, "{options:?}");
+        for (label, expected) in [("ΟΣ", true), ("ος", false)] {
+            let selected = options.iter().find(|(text, _)| text == label).map(|(_, on)| *on);
+            assert_eq!(selected, Some(expected), "{label}: {options:?}");
+        }
+    }
+
+    /// `filter_selection` keeps comparator-distinct labels (`"ΟΣ"` vs `"ος"`) separate when
+    /// round-tripping an unchanged selection.
+    #[test]
+    fn filter_selection_keeps_greek_final_sigma_distinct() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["ΟΣ"], ["ος"]]})).unwrap();
+        s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": ["ΟΣ"]})).unwrap();
+
+        let choices = filter_values(&s.doc().unwrap().wb, 0, 0);
+        let merged = filter_selection(&s.doc().unwrap().wb, 0, 0, &choices);
+        assert_eq!(merged.iter().find(|(t, _)| t == "ΟΣ").map(|(_, on)| *on), Some(true), "{merged:?}");
+        assert_eq!(merged.iter().find(|(t, _)| t == "ος").map(|(_, on)| *on), Some(false), "{merged:?}");
+
+        let values: Vec<String> = merged.into_iter().filter_map(|(v, on)| on.then_some(v)).collect();
+        s.execute("data.filterBy", json!({"column": "A", "values": values})).unwrap();
+        assert!(!is_hidden(&s, 1), "ΟΣ stays visible after unchanged apply");
+        assert!(is_hidden(&s, 2), "ος stays excluded after unchanged apply");
+    }
+
+    /// A checklist identity saved with ASCII-only folding (`Ä` as `d:t:%C3%84:%C3%84`) still matches its row,
+    /// and the dropdown still shows that entry as checked.
+    #[test]
+    fn legacy_ascii_folded_identity_keeps_matching_its_row() {
+        use gridcraft_core::{CellRef, RangeRef};
+        use gridcraft_model::AutoFilter;
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["Ä"], ["Other"]]})).unwrap();
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.autofilter = Some(AutoFilter {
+            range: RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 0)),
+            criteria: vec![(0, FilterCriterion::Values { values: vec!["Ä".into()], blanks: false, identities: vec!["d:t:%C3%84:%C3%84".into()] })],
+        });
+        s.execute("data.reapply", json!({})).unwrap();
+        assert!(!is_hidden(&s, 1), "legacy identity must keep its row visible");
+        assert!(is_hidden(&s, 2));
+        let options = filter_values(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(options.iter().find(|(t, _)| t == "Ä").map(|(_, on)| *on), Some(true), "{options:?}");
+        assert_eq!(options.iter().find(|(t, _)| t == "Other").map(|(_, on)| *on), Some(false), "{options:?}");
+    }
+
+    /// A legacy identity for one case variant selects every row of the merged entry, as reapplying the unchanged checklist does.
+    #[test]
+    fn legacy_ascii_folded_identity_matches_all_case_variants_of_its_entry() {
+        use gridcraft_core::{CellRef, RangeRef};
+        use gridcraft_model::AutoFilter;
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["Ä"], ["ä"], ["Other"]]})).unwrap();
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.autofilter = Some(AutoFilter {
+            range: RangeRef::new(CellRef::new(0, 0), CellRef::new(3, 0)),
+            criteria: vec![(0, FilterCriterion::Values { values: vec!["Ä".into()], blanks: false, identities: vec!["d:t:%C3%84:%C3%84".into()] })],
+        });
+        s.execute("data.reapply", json!({})).unwrap();
+        assert!(!is_hidden(&s, 1) && !is_hidden(&s, 2), "both case variants share the checked entry");
+        assert!(is_hidden(&s, 3));
+        let choices = filter_choices(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(choices.len(), 2, "{choices:?}");
+        let again: Vec<String> = choices.iter().filter(|c| c.checked).filter_map(|c| c.identity.clone()).collect();
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.autofilter.as_mut().unwrap().criteria = vec![(0, FilterCriterion::Values { values: vec!["Ä".into()], blanks: false, identities: again })];
+        s.execute("data.reapply", json!({})).unwrap();
+        assert!(!is_hidden(&s, 1) && !is_hidden(&s, 2) && is_hidden(&s, 3), "reapplying the unchanged checklist keeps the same rows");
+    }
 }

@@ -397,7 +397,7 @@ fn merging_hidden_choices_preserves_the_active_criterion() {
 }
 
 #[test]
-fn large_values_criteria_preserve_ascii_case_and_blank_matching() {
+fn large_values_criteria_preserve_unicode_case_and_blank_matching() {
     use gridcraft_engine::core::RangeRef;
     use gridcraft_engine::model::AutoFilter;
     let mut s = Session::new();
@@ -411,8 +411,8 @@ fn large_values_criteria_preserve_ascii_case_and_blank_matching() {
     }
     selected.extend(["ITEM-1".into(), "Ä".into()]);
     for (row, value, label) in [
-        (5_001, Value::Text("Ä".into()), "unicode selected"),
-        (5_002, Value::Text("ä".into()), "unicode excluded"),
+        (5_001, Value::Text("Ä".into()), "unicode exact"),
+        (5_002, Value::Text("ä".into()), "unicode case folded"),
         (5_003, Value::Empty, "blank row"),
     ] {
         sh.set_cell(CellRef::new(row, 0), Cell { value, ..Default::default() });
@@ -424,6 +424,6 @@ fn large_values_criteria_preserve_ascii_case_and_blank_matching() {
     });
     let choices = filter_values(&s.doc().unwrap().wb, 0, 1);
     let mut expected: Vec<_> = (1..=5_000).map(|n| (n.to_string(), true)).collect();
-    expected.extend([("blank row".into(), true), ("unicode selected".into(), true)]);
+    expected.extend([("blank row".into(), true), ("unicode case folded".into(), true), ("unicode exact".into(), true)]);
     assert_eq!(choices, expected);
 }
