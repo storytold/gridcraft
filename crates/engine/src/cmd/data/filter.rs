@@ -1,8 +1,9 @@
 use super::sort::sort_key;
 use super::{
     AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
-    current_region, data_target, edit, json,
+    data_target, edit, json,
 };
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------- filter
 
@@ -15,13 +16,62 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let has = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.is_some());
     let in_table = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(at).map(|t| t.name.clone()));
     if let Some(name) = in_table {
+        // An explicit range over part of the table is refused, as when installing a filter on it.
+        if p.get("range").is_some()
+            && let Some(sh) = s.doc()?.wb.sheet(sheet)
+            && let Some(t) = sh.tables.iter().find(|t| t.name == name)
+            && t.range.intersects(&r)
+            && !(t.header_row
+                && t.range.start.row == r.start.row
+                && t.range.contains(r.start)
+                && t.range.contains(r.end)
+                && r.start.col == t.range.start.col
+                && r.end.col == t.range.end.col
+                && t.data_range().is_none_or(|data| r.end.row >= data.end.row))
+        {
+            return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
+        }
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
+            let filtered: Vec<u32> = sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect();
+            let mut cleared = false;
             if let Some(t) = sh.tables.iter_mut().find(|t| t.name == name) {
                 t.filter_button = !t.filter_button;
                 if !t.filter_button {
                     t.filter.clear();
+                    // The sheet AutoFilter hosted on this table's header row is the table's filter too.
+                    cleared = sh.autofilter.as_ref().is_some_and(|af| af.range.start.row == t.range.start.row && af.range.intersects(&t.range));
                 }
+            }
+            if cleared {
+                sh.autofilter = None;
+                for r in filtered {
+                    if let Some(info) = sh.rows.get_mut(&r) {
+                        info.hidden = false;
+                    }
+                }
+                // Rows another table's criteria hide stay hidden: evaluate each such table's saved
+                // criteria through the live filter, then hide the union once (a later table would
+                // unhide what an earlier one excluded) and take the filter off again.
+                let others: Vec<(RangeRef, Vec<(u32, FilterCriterion)>)> =
+                    sh.tables.iter().filter(|t| !t.filter.is_empty()).map(|t| (t.range, t.filter.clone())).collect();
+                let mut excluded: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                for (range, criteria) in others {
+                    if let Some(sh) = cx.wb.sheet_mut(sheet) {
+                        sh.autofilter = Some(AutoFilter { range, criteria });
+                    }
+                    apply_filter(&mut cx.wb, sheet);
+                    if let Some(sh) = cx.wb.sheet(sheet) {
+                        excluded.extend((range.start.row.saturating_add(1)..=range.end.row).filter(|r| sh.is_row_hidden(*r)));
+                    }
+                }
+                if let Some(sh) = cx.wb.sheet_mut(sheet) {
+                    sh.autofilter = None;
+                    for r in excluded {
+                        sh.rows.entry(r).or_default().hidden = true;
+                    }
+                }
+                cx.structural = true;
             }
             Ok(Json::Null)
         });
@@ -45,19 +95,58 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Turn a sheet AutoFilter on over `p.range`, or over the data range of the selection.
+///
+/// A sheet AutoFilter never overlaps a table, because a file can't hold one (Excel refuses
+/// `Range("A1:C8").AutoFilter` over part of a table, and from a cell outside a table it leaves the
+/// table's cells out of the region). Inside a table the filter covers the table from its header
+/// row, which is saved as the table's own filter, and takes over the criteria the table already
+/// had so there is one filter to save.
 fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, mut r) = data_target(s, p, "data.filter")?;
-    // A selected header row filters the data below it (#201).
-    if p.get("range").is_none() && r.height() == 1 {
+    {
         let d = s.doc()?;
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
-        let below = current_region(sh, r.start).end.row;
-        if below > r.end.row {
-            r = RangeRef::new(r.start, CellRef::new(below, r.end.col));
+        if p.get("range").is_none() && sh.table_at(d.selection.active).is_none() && d.selection.current().is_single() {
+            r = crate::selection::current_region_outside_tables(sh, d.selection.active);
+        }
+        // A selected header row filters the data below it (#201).
+        if p.get("range").is_none() && r.height() == 1 {
+            let region = match sh.table_at(r.start) {
+                Some(t) => t.data_range().map(|dr| RangeRef::new(t.range.start, dr.end)).unwrap_or(t.range),
+                None => crate::selection::current_region_outside_tables(sh, r.start),
+            };
+            if region.end.row > r.end.row {
+                r = RangeRef::new(r.start, CellRef::new(region.end.row, r.end.col));
+            }
+        }
+    }
+    let Some(sh) = s.doc()?.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
+    // The table whose header row the filter starts on, when it lies inside that table.
+    let host =
+        sh.tables.iter().position(|t| t.header_row && t.range.start.row == r.start.row && t.range.contains(r.start) && t.range.contains(r.end));
+    if host.is_none() && sh.tables.iter().any(|t| t.range.intersects(&r)) {
+        return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
+    }
+    // A narrower range would leave out the table's criteria on the columns it doesn't cover, and saving would drop them.
+    if let Some(t) = host.and_then(|i| sh.tables.get(i)) {
+        if t.data_range().is_some_and(|data| r.end.row < data.end.row) {
+            return Err(bad("data.filter", "filter the table's full data range"));
+        }
+        let shift = r.start.col.saturating_sub(t.range.start.col);
+        if t.filter.iter().any(|(o, _)| o.checked_sub(shift).is_none_or(|c| c >= r.width())) {
+            return Err(bad("data.filter", "the table is filtered on a column this range leaves out; filter the table's full width"));
         }
     }
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![] });
+        let sh = cx.sheet_mut(sheet)?;
+        let mut criteria = vec![];
+        if let Some(t) = host.and_then(|i| sh.tables.get_mut(i)) {
+            // The criteria are saved with the table only while its filter buttons are on.
+            t.filter_button = true;
+            let shift = r.start.col.saturating_sub(t.range.start.col);
+            criteria = std::mem::take(&mut t.filter).into_iter().filter_map(|(o, c)| Some((o.checked_sub(shift)?, c))).collect();
+        }
+        sh.autofilter = Some(AutoFilter { range: r, criteria });
         Ok(json!({"filter": true, "range": r.a1()}))
     })
 }
@@ -170,19 +259,9 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     }
 }
 
-/// Compare AutoFilter text values, ignoring surrounding spaces.
-fn filter_value_eq(a: &str, b: &str) -> bool {
-    a.trim().eq_ignore_ascii_case(b.trim())
-}
-
 /// Whether a `Values` criterion includes blank and whitespace-only cells, including legacy saved criteria.
 fn values_include_blanks(values: &[String], blanks: bool) -> bool {
     blanks || values.iter().any(|x| x.trim().is_empty())
-}
-
-/// Checks whether a non-blank cell matches any selected value criterion via displayed or underlying text.
-fn row_matches_values(values: &[String], text: &str, v: &Value) -> bool {
-    values.iter().any(|x| filter_value_eq(x, text) || filter_value_eq(x, &v.display()))
 }
 
 /// Percent-encodes arbitrary text into ASCII `[A-Za-z0-9_.-%]` so composite checklist identity
@@ -303,21 +382,6 @@ fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Val
     })
 }
 
-/// Checks whether a non-blank cell matches a `Values` criterion: legacy `fmtws:` formatted-space
-/// tokens, exact checklist/slicer identities when present, or string matching for `data.filterBy`.
-fn row_matches_criterion(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, values: &[String], identities: &[String]) -> bool {
-    let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    if identities
-        .iter()
-        .filter_map(|id| id.strip_prefix("fmtws:"))
-        .any(|ws_enc| shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == ws_enc)
-    {
-        return true;
-    }
-    let has_primary = identities.iter().any(|id| !id.starts_with("fmtws:"));
-    if has_primary { row_matches_primary_identities(wb, sh, c, v, identities) } else { row_matches_values(values, text, v) }
-}
-
 /// Header-and-data range covered by a table's own AutoFilter (excluding any totals row).
 fn table_filter_range(t: &gridcraft_model::Table) -> Option<RangeRef> {
     if !t.header_row {
@@ -327,16 +391,17 @@ fn table_filter_range(t: &gridcraft_model::Table) -> Option<RangeRef> {
     (end_row >= t.range.start.row).then(|| RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col)))
 }
 
-/// Precomputed per-criterion stats and blank flags for evaluating a sheet or table filter over rows.
+/// Precomputed per-criterion stats, blank flags, and lowercased value sets for evaluating a filter over rows.
 struct PreparedFilter<'a> {
     range: RangeRef,
     criteria: &'a [(u32, FilterCriterion)],
     criterion_blanks: Vec<bool>,
-    col_stats: std::collections::HashMap<usize, (Option<f64>, f64)>,
+    criterion_values: HashMap<usize, HashSet<String>>,
+    col_stats: HashMap<usize, (Option<f64>, f64)>,
 }
 
 impl<'a> PreparedFilter<'a> {
-    /// Precomputes blank flags, Top10 thresholds, and column averages once before evaluating rows.
+    /// Precomputes blank flags, value lookup sets, Top10 thresholds, and column averages once before evaluating rows.
     fn new(sh: &Sheet, af_range: RangeRef, criteria: &'a [(u32, FilterCriterion)]) -> Self {
         let range = RangeRef::new(af_range.start, CellRef::new(af_range.end.row.min(gridcraft_core::MAX_ROWS - 1), af_range.end.col));
         let criterion_blanks = criteria
@@ -346,13 +411,22 @@ impl<'a> PreparedFilter<'a> {
                 _ => false,
             })
             .collect();
-        let mut col_stats = std::collections::HashMap::new();
+        let criterion_values = criteria
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (_, c))| match c {
+                FilterCriterion::Values { values, .. } => Some((i, values.iter().map(|v| v.trim().to_ascii_lowercase()).collect())),
+                _ => None,
+            })
+            .collect();
+        let mut col_stats = HashMap::new();
         for (i, (off, c)) in criteria.iter().enumerate() {
             if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
-                let Some(col) = range.start.col.checked_add(*off).filter(|&col| col <= range.end.col) else {
+                let Some(col) = range.start.col.checked_add(*off) else {
                     continue;
                 };
-                let mut nums: Vec<f64> = (range.start.row + 1..=range.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
+                let mut nums: Vec<f64> =
+                    (range.start.row.saturating_add(1)..=range.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
                 let avg = if nums.is_empty() { 0.0 } else { nums.iter().sum::<f64>() / nums.len() as f64 };
                 let thr = match c {
                     FilterCriterion::Top10 { bottom, percent, count } => {
@@ -366,7 +440,94 @@ impl<'a> PreparedFilter<'a> {
                 col_stats.insert(i, (thr, avg));
             }
         }
-        Self { range, criteria, criterion_blanks, col_stats }
+        Self { range, criteria, criterion_blanks, criterion_values, col_stats }
+    }
+
+    /// Evaluates a single criterion `(i, off, crit)` on `row`.
+    #[allow(clippy::too_many_arguments)]
+    fn criterion_matches(
+        &self,
+        wb: &Workbook,
+        sh: &Sheet,
+        row: u32,
+        i: usize,
+        off: u32,
+        crit: &FilterCriterion,
+        pre_migration: bool,
+        icon_uses_hidden: bool,
+    ) -> bool {
+        let Some(col) = self.range.start.col.checked_add(off) else {
+            return true;
+        };
+        let c = CellRef::new(row, col);
+        let v = sh.value(c);
+        let text = crate::display::cell_text(wb, sh, c);
+        match crit {
+            FilterCriterion::Values { values, blanks, identities } => {
+                let matches_non_blank = || {
+                    let shown = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+                    if identities
+                        .iter()
+                        .filter_map(|id| id.strip_prefix("fmtws:"))
+                        .any(|ws_enc| shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == ws_enc)
+                    {
+                        return true;
+                    }
+                    let has_primary = identities.iter().any(|id| !id.starts_with("fmtws:"));
+                    if has_primary {
+                        row_matches_primary_identities(wb, sh, c, &v, identities)
+                    } else {
+                        self.criterion_values.get(&i).is_some_and(|set| {
+                            set.contains(&text.trim().to_ascii_lowercase()) || set.contains(&v.display().trim().to_ascii_lowercase())
+                        })
+                    }
+                };
+                if pre_migration {
+                    if filter_blank(&v) {
+                        *blanks
+                    } else if filter_dropdown_blank(&v) {
+                        *blanks || values.iter().any(|x| x.eq_ignore_ascii_case(&text))
+                    } else {
+                        matches_non_blank()
+                    }
+                } else if filter_dropdown_blank(&v) {
+                    self.criterion_blanks[i]
+                } else {
+                    matches_non_blank()
+                }
+            }
+            FilterCriterion::Custom { a, b, and } => {
+                let x = custom_ok(&v, &text, &a.0, &a.1);
+                match b {
+                    Some(b) => {
+                        let y = custom_ok(&v, &text, &b.0, &b.1);
+                        if *and { x && y } else { x || y }
+                    }
+                    None => x,
+                }
+            }
+            FilterCriterion::Top10 { bottom, .. } => match (v.as_f64(), self.col_stats.get(&i)) {
+                (Some(n), Some((thr, _))) => {
+                    let thr = thr.unwrap_or(n);
+                    if *bottom { n <= thr } else { n >= thr }
+                }
+                _ => false,
+            },
+            FilterCriterion::AboveAverage(above) => match (v.as_f64(), self.col_stats.get(&i)) {
+                (Some(n), Some((_, avg))) => {
+                    if *above {
+                        n > *avg
+                    } else {
+                        n < *avg
+                    }
+                }
+                _ => false,
+            },
+            FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.fg == *col,
+            FilterCriterion::FontColor(col) => wb.styles.get(sh.style_id(c)).font.color == *col,
+            // Icon criteria are retained from files but cannot be evaluated yet.
+            FilterCriterion::Icon { .. } => !icon_uses_hidden || !sh.is_row_hidden(row),
+        }
     }
 
     /// Whether `row` passes all criteria of this filter (rows outside `range` are unaffected).
@@ -374,66 +535,15 @@ impl<'a> PreparedFilter<'a> {
         if self.criteria.is_empty() || row <= self.range.start.row || row > self.range.end.row {
             return true;
         }
-        for (i, (off, crit)) in self.criteria.iter().enumerate() {
-            let Some(col) = self.range.start.col.checked_add(*off).filter(|&col| col <= self.range.end.col) else {
-                continue;
-            };
-            let c = CellRef::new(row, col);
-            let v = sh.value(c);
-            let text = crate::display::cell_text(wb, sh, c);
-            let ok = match crit {
-                FilterCriterion::Values { values, blanks, identities } => {
-                    if pre_migration {
-                        if filter_blank(&v) {
-                            *blanks
-                        } else if filter_dropdown_blank(&v) {
-                            *blanks || values.iter().any(|x| x.eq_ignore_ascii_case(&text))
-                        } else {
-                            row_matches_criterion(wb, sh, c, &v, &text, values, identities)
-                        }
-                    } else if filter_dropdown_blank(&v) {
-                        self.criterion_blanks[i]
-                    } else {
-                        row_matches_criterion(wb, sh, c, &v, &text, values, identities)
-                    }
-                }
-                FilterCriterion::Custom { a, b, and } => {
-                    let x = custom_ok(&v, &text, &a.0, &a.1);
-                    match b {
-                        Some(b) => {
-                            let y = custom_ok(&v, &text, &b.0, &b.1);
-                            if *and { x && y } else { x || y }
-                        }
-                        None => x,
-                    }
-                }
-                FilterCriterion::Top10 { bottom, .. } => match (v.as_f64(), self.col_stats.get(&i)) {
-                    (Some(n), Some((thr, _))) => {
-                        let thr = thr.unwrap_or(n);
-                        if *bottom { n <= thr } else { n >= thr }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::AboveAverage(above) => match (v.as_f64(), self.col_stats.get(&i)) {
-                    (Some(n), Some((_, avg))) => {
-                        if *above {
-                            n > *avg
-                        } else {
-                            n < *avg
-                        }
-                    }
-                    _ => false,
-                },
-                FilterCriterion::FillColor(col) => wb.styles.get(sh.style_id(c)).fill.fg == *col,
-                FilterCriterion::FontColor(col) => wb.styles.get(sh.style_id(c)).font.color == *col,
-                // Icons are not evaluated here: the row keeps its current visibility.
-                FilterCriterion::Icon { .. } => !sh.is_row_hidden(row),
-            };
-            if !ok {
-                return false;
-            }
-        }
-        true
+        self.criteria.iter().enumerate().all(|(i, (off, crit))| self.criterion_matches(wb, sh, row, i, *off, crit, pre_migration, true))
+    }
+
+    /// Whether `row` passes every active criterion except `excluded_offset`.
+    fn row_matches_other_columns(&self, wb: &Workbook, sh: &Sheet, row: u32, excluded_offset: u32) -> bool {
+        self.criteria
+            .iter()
+            .enumerate()
+            .all(|(i, (off, crit))| *off == excluded_offset || self.criterion_matches(wb, sh, row, i, *off, crit, false, false))
     }
 }
 
@@ -561,7 +671,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
 fn apply_criteria_range(wb: &mut Workbook, sheet: usize, af_range: RangeRef, criteria: &[(u32, FilterCriterion)]) {
     let hide: Vec<(u32, bool)> = if let Some(sh) = wb.sheet(sheet) {
         let prepared = PreparedFilter::new(sh, af_range, criteria);
-        (prepared.range.start.row + 1..=prepared.range.end.row).map(|row| (row, !prepared.row_passes(wb, sh, row, false))).collect()
+        (prepared.range.start.row.saturating_add(1)..=prepared.range.end.row).map(|row| (row, !prepared.row_passes(wb, sh, row, false))).collect()
     } else {
         return;
     };
@@ -646,35 +756,69 @@ fn escape_reserved_blanks_label(trimmed: &str) -> String {
     if inner.eq_ignore_ascii_case("(Blanks)") { format!("'{trimmed}'") } else { trimmed.to_string() }
 }
 
-/// Distinct checklist entries of a filter column, keeping display labels separate from filter identities.
+/// Distinct checklist entries from rows matching the other columns' criteria.
+/// The current criterion only determines checkboxes, so its unchecked alternatives stay available.
 pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice> {
+    column_filter_choices(wb, sheet, col, true)
+}
+
+/// Applies edited eligible checklist choices to the whole column's checkbox state, retaining choices hidden by other filters.
+pub fn filter_choices_selection(wb: &Workbook, sheet: usize, col: u32, choices: &[FilterChoice]) -> Vec<FilterChoice> {
+    let mut edited: std::collections::BTreeMap<Option<String>, bool> = std::collections::BTreeMap::new();
+    for c in choices {
+        *edited.entry(c.identity.clone()).or_insert(false) |= c.checked;
+    }
+    let mut selection = column_filter_choices(wb, sheet, col, false);
+    for c in &mut selection {
+        if let Some(&checked) = edited.get(&c.identity) {
+            c.checked = checked;
+        }
+    }
+    selection
+}
+
+/// Applies edited eligible label choices to the whole column's checkbox state, retaining choices hidden by other filters.
+pub fn filter_selection(wb: &Workbook, sheet: usize, col: u32, choices: &[(String, bool)]) -> Vec<(String, bool)> {
+    let mut edited = std::collections::BTreeMap::new();
+    for (value, on) in choices {
+        *edited.entry(value.to_ascii_lowercase()).or_insert(false) |= *on;
+    }
+    let mut selection: Vec<(String, bool)> = column_filter_choices(wb, sheet, col, false).into_iter().map(|c| (c.label, c.checked)).collect();
+    for (value, on) in &mut selection {
+        if let Some(checked) = edited.get(&value.to_ascii_lowercase()) {
+            *on = *checked;
+        }
+    }
+    selection
+}
+
+fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: bool) -> Vec<FilterChoice> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
-    let off = col.saturating_sub(af.range.start.col);
-    let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
-    let (selected_blanks, selected_identities) = match selected {
-        Some(FilterCriterion::Values { values, blanks, identities }) => {
-            (values_include_blanks(values, *blanks), (!identities.is_empty()).then_some(identities.as_slice()))
-        }
-        _ => (false, None),
+    if col < af.range.start.col || col > af.range.end.col {
+        return vec![];
+    }
+    let off = col - af.range.start.col;
+    let selected = af.criteria.iter().enumerate().find(|(_, (o, _))| *o == off);
+    let selected_identities = match selected {
+        Some((_, (_, FilterCriterion::Values { identities, .. }))) if !identities.is_empty() => Some(identities.as_slice()),
+        _ => None,
     };
+    let prepared = PreparedFilter::new(sh, af.range, &af.criteria);
     type ChoiceBucket = ((u8, i64, String), FilterChoice, (String, &'static str));
     let mut seen: std::collections::BTreeMap<Option<String>, ChoiceBucket> = std::collections::BTreeMap::new();
-    for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
+    // Imported end rows cannot add choices beyond the grid either.
+    for row in
+        af.range.start.row.saturating_add(1)..=af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)).min(gridcraft_core::MAX_ROWS - 1)
+    {
+        if eligible_only && !prepared.row_matches_other_columns(wb, sh, row, off) {
+            continue;
+        }
         let c = CellRef::new(row, col);
         let v = sh.value(c);
         let blank = filter_dropdown_blank(&v);
         let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = match selected {
-            Some(FilterCriterion::Values { values, identities, .. }) => {
-                if blank {
-                    selected_blanks
-                } else {
-                    row_matches_criterion(wb, sh, c, &v, &t, values, identities)
-                }
-            }
-            _ => true,
-        };
+        let on = selected.is_none_or(|(i, (crit_off, crit))| prepared.criterion_matches(wb, sh, row, i, *crit_off, crit, false, false));
         if blank {
             seen.entry(None).and_modify(|(_, entry, _)| entry.checked |= on).or_insert((
                 sort_key(&Value::Empty),

@@ -12,7 +12,7 @@ mod trimrange;
 
 pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
 pub use precision::DisplayedPrecision;
-pub use recalc::{Calc, Key, evaluate, now_serial};
+pub use recalc::{Bounded, Calc, Key, evaluate, evaluate_bounded, evaluate_expr, now_serial};
 
 #[cfg(test)]
 mod tests;

@@ -91,6 +91,7 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 v["range"] = json!(pick.applies_to);
             }
         }
+        "newFormattingRule" => v = super::cond_format_rules::rule_params(d),
         "series" => {
             if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| s.parse::<f64>().ok()) {
                 v["stop"] = json!(s);
@@ -121,6 +122,27 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+fn command_error(app: &mut SheetApp, d: &mut Dialog, e: String) {
+    if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) {
+        // Data Analysis asks before replacing data in its output range.
+        d.values.insert("askOverwrite".into(), json!(true));
+    } else if d.name == "openPassword" && e.contains(gridcraft_engine::io::MODIFY_PASSWORD_REQUIRED) {
+        // The decryption password opened an encrypted, reserved workbook; ask for the modify password.
+        let mut params = Json::Object(d.values.clone());
+        params["modify"] = json!(true);
+        if let Some(next) = Dialog::open(app, "openPassword", params) {
+            *d = Dialog { back: d.back.take(), ..next };
+        }
+    } else if d.name == "openPassword" {
+        // A wrong password: say so, clear the field and stay open for another try.
+        let field = if d.values.contains_key("modifyPassword") { "modifyPassword" } else { "password" };
+        d.values.insert(field.into(), json!(""));
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    } else {
+        app.message = Some((d.title.clone(), crate::clean_error(&e)));
+    }
+}
+
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
@@ -149,7 +171,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 820.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "newFormattingRule" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -195,6 +217,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
                 "pasteName" => paste_name(app, ui, &mut d, &mut confirm, &mut open),
                 "manageRules" => manage_rules(app, ui),
+                "newFormattingRule" => super::cond_format_rules::new_formatting_rule(ui, &mut d, &mut confirm, &mut open),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
                 "commandSearch" => command_search(app, ui, &mut d, &mut confirm),
@@ -400,7 +423,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
+    if crate::framework::escape_pressed(ctx) || !win_open {
         // In Solver Options, Escape (or closing the window) cancels the options only.
         if in_solver_options(&d) {
             cancel_solver_options(&mut d);
@@ -442,16 +465,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     app.after_open(path.as_deref(), &r);
                 }
             }
-            // Data Analysis asks before replacing data in its output range.
-            Err(e) if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
-                d.values.insert("askOverwrite".into(), json!(true));
-            }
-            // A wrong password: say so, clear the field and stay open for another try.
-            Err(e) if d.name == "openPassword" => {
-                d.values.insert("password".into(), json!(""));
-                app.message = Some((d.title.clone(), crate::clean_error(&e)));
-            }
-            Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
+            Err(e) => command_error(app, &mut d, e),
         }
     } else if confirm {
         open = false;
@@ -524,6 +538,11 @@ pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), 
 }
 
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_enabled(ui, confirm, open, true);
+}
+
+/// Like [`ok_cancel`], but OK (and Enter) do nothing while `enabled` is false.
+pub(super) fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enabled: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -531,14 +550,15 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
-            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            let ok =
+                ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
+            if enabled && (ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
                 *open = false;
             }
-        })
+        });
     });
 }
 
@@ -571,7 +591,7 @@ pub(super) fn take_first_focus(d: &mut Dialog, r: &egui::Response) {
 
 /// Keeps a picking formula box's caret, and gives it the keyboard back after a grid click put a
 /// reference in it (the click took the focus), its caret after the reference.
-fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
+pub(super) fn track_pick(pick: &mut RefPick, r: &egui::Response, typed: bool) {
     if typed {
         pick.point = None;
     }
@@ -655,7 +675,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
-                            craft_ui::ComboBox::from_id_salt(("dataValidation", key))
+                            egui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)
                                 .width(300.0)
                                 .show_ui(ui, |ui| {
