@@ -2221,6 +2221,32 @@ fn an_older_source_field_does_not_take_a_calculated_fields_name() {
     assert_eq!(areas("Margin2", true), Some(json!(["values"])));
 }
 
+/// A value saved as a calculated field's name stays that field when only the other layout has a
+/// header of that name: under Show Formulas the sheet showed `="Margin"`, so the older report
+/// read `Margin` as the calculated field, not as the Units column it now names.
+#[test]
+fn an_older_calculated_value_keeps_its_field_when_only_the_other_layout_has_its_name() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=\"Margin\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    reopen_as_older(&mut s, |pt| {
+        let sales = pt.values[0].clone();
+        pt.calculated_fields.push(gridcraft_model::PivotCalcField { name: "Margin".into(), formula: "=Sales*0.1".into() });
+        pt.calculated_fields.push(gridcraft_model::PivotCalcField { name: "Twice".into(), formula: "=Margin*2".into() });
+        pt.values.push(gridcraft_model::PivotValue { source_col: "Margin".into(), name: "Sum of Margin".into(), ..sales.clone() });
+        pt.values.push(gridcraft_model::PivotValue { source_col: "Twice".into(), name: "Sum of Twice".into(), ..sales });
+    });
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    let names: Vec<&str> = p.values.iter().map(|v| v.source_col.as_str()).collect();
+    assert_eq!(names, ["Sales", "Margin2", "Twice"]);
+    assert_eq!(p.calculated_fields[1].formula.replace(' ', ""), "=Margin2*2");
+    // A tenth of Sales and twice that, not the Units column (72).
+    assert_eq!(grand_total(&s, 2), Value::Number(83.5));
+    assert_eq!(grand_total(&s, 3), Value::Number(167.0));
+}
+
 /// A calculated field's formula names a column as the sheet showed it: in an older PivotTable
 /// with a formula header `="Amount"` (A) beside a text header `Amount` (B), `=Amount*2` read B.
 /// Now A reads `Amount` and B `Amount2`: the value field takes `Amount` and the formula
@@ -2452,6 +2478,24 @@ fn a_formatted_header_keeps_its_field_through_xlsx() {
     s.execute("insert.pivotTable", json!({"rows": ["2026.0"], "values": ["Sales"]})).unwrap();
     assert_eq!(pt(&s).rows[0].source_col, "2026.0");
     let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+    let p = back.sheets.iter().flat_map(|sh| sh.pivots.iter()).next().unwrap();
+    let rows: Vec<&str> = p.rows.iter().map(|f| f.source_col.as_str()).collect();
+    assert_eq!(rows, ["2026.0"]);
+}
+
+/// A file an older GridCraft wrote named a formatted header's field by the raw value (`2026` for
+/// a header shown as `2026.0`): saving it again keeps the field on its axis.
+#[test]
+fn a_field_named_by_its_headers_raw_value_keeps_its_place_through_xlsx() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2026"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.0"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["2026.0"], "values": ["Sales"]})).unwrap();
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let si = wb.active_sheet();
+    wb.sheet_mut(si).unwrap().pivots[0].rows[0].source_col = "2026".into();
+    let bytes = crate::io::save_bytes(&wb, "book.xlsx").unwrap();
     let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
     let p = back.sheets.iter().flat_map(|sh| sh.pivots.iter()).next().unwrap();
     let rows: Vec<&str> = p.rows.iter().map(|f| f.source_col.as_str()).collect();
@@ -2753,6 +2797,58 @@ fn getpivotdata_is_recalculated_when_calculate_now_renames_an_older_pivottable()
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert!(pt(&s).names_from_values);
     assert_eq!((k2(&s), shown(&s)), (Value::Number(415.0), 415));
+}
+
+/// Two older PivotTables, the second's header reading the first's report through GETPIVOTDATA,
+/// which finds `Region` only once the first is renamed. The rename recalculates what reads the
+/// report, and the second then takes its name from its header's final value: as the book opens,
+/// where the header read `Pending` before, and in the edit that lets the first be renamed, where
+/// the header was blank (the second's source unreadable) until then.
+#[test]
+fn an_older_pivottable_reading_another_takes_its_header_after_the_other_is_renamed() {
+    for (before, wait) in [("Pending", false), ("", true)] {
+        let mut s = sales();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+        s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+        let a = json!({"source": "Sheet1!$A$1:$E$13", "destination": "Sheet1!P1", "rows": ["Region"], "values": ["Sales"]});
+        s.execute("insert.pivotTable", a).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K2", "input": format!("=GETPIVOTDATA(\"Sales\",{at},\"Region\",\"East\")")})).unwrap();
+        let header = format!("=IF(ISERROR(K2),\"{before}\",\"Item\")");
+        s.execute("range.setValues", json!({"range": "G1", "values": [[null, "Qty"], ["x", 1], ["y", 2]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": header})).unwrap();
+        let b = json!({"source": "Sheet1!$G$1:$H$3", "destination": "Sheet1!T1", "rows": ["Item"], "values": ["Qty"]});
+        s.execute("insert.pivotTable", b).unwrap();
+        if wait {
+            // The first can't be renamed until its blank header is filled in.
+            s.execute("cell.set", json!({"cell": "D1", "input": ""})).unwrap();
+        }
+        let mut wb = (*s.doc().unwrap().wb).clone();
+        let si = wb.sheet_index("Sheet1").unwrap();
+        let pivots = &mut wb.sheet_mut(si).unwrap().pivots;
+        let [a, b] = pivots.as_mut_slice() else { panic!("two PivotTables") };
+        a.rows[0].source_col = "=\"Region\"".into();
+        let mut cells = a.data_index.cells().unwrap().to_vec();
+        cells.iter_mut().flat_map(|c| &mut c.items).for_each(|i| i.field = "=\"Region\"".into());
+        a.data_index = gridcraft_model::PivotLookup::default();
+        a.data_index.set_cells(cells);
+        // Saved under Show Formulas, the second's field is its header's formula text.
+        b.rows[0].source_col = header.clone();
+        a.names_from_values = false;
+        b.names_from_values = false;
+        let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+        let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        if wait {
+            assert!(!pt(&s).names_from_values, "the second waits for its header");
+            s.execute("cell.set", json!({"cell": "D1", "input": "Units"})).unwrap();
+        }
+        assert_eq!(k2(&s), Value::Number(415.0), "{before:?}");
+        let b = pt(&s);
+        assert!(b.names_from_values, "{before:?}");
+        assert_eq!(b.rows[0].source_col, "Item", "{before:?}");
+    }
 }
 
 /// GETPIVOTDATA knows a field by its current name only: a formula that spells the name an older

@@ -174,28 +174,82 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
 /// that read it: they were calculated with the old names, since headers need their values first.
 #[must_use]
 pub fn migrate_older_names(wb: &mut Workbook) -> Vec<(usize, CellRef)> {
-    let mut updates: Vec<(usize, usize, PivotTable)> = Vec::new();
+    reports(&migrate_staged(wb))
+}
+
+/// A PivotTable [`migrate_staged`] renamed: where it is, the definition it had, and the header
+/// readings its new names came from.
+pub(crate) struct Renamed {
+    sheet: usize,
+    idx: usize,
+    before: PivotTable,
+    read: Readings,
+}
+
+/// The header readings a rename reads: each column's current name, the headers as the sheet
+/// showed them without (`[0]`) and with (`[1]`) Show Formulas, and the sheet's own setting.
+#[derive(PartialEq)]
+struct Readings {
+    current: Vec<String>,
+    shown: [Option<Vec<String>>; 2],
+    show_formulas: bool,
+}
+
+/// As [`migrate_older_names`], keeping what each rename needs to be put back.
+pub(crate) fn migrate_staged(wb: &mut Workbook) -> Vec<Renamed> {
+    let mut updates: Vec<(Renamed, PivotTable)> = Vec::new();
     for (si, sh) in wb.sheets.iter().enumerate() {
         for (pi, pt) in sh.pivots.iter().enumerate() {
             if !pt.names_from_values
-                && let Some(new) = migrated(wb, pt, si)
+                && let Some(read) = readings(wb, pt, si)
             {
-                updates.push((si, pi, new));
+                let new = migrated(pt, &read);
+                updates.push((Renamed { sheet: si, idx: pi, before: pt.clone(), read }, new));
             }
         }
     }
-    let mut reports = Vec::new();
-    for (si, pi, new) in updates {
-        if let Some(slot) = wb.sheet_mut(si).and_then(|sh| sh.pivots.get_mut(pi)) {
-            reports.extend(new.last_range.map(|r| (si, r.start)));
+    let mut done = Vec::new();
+    for (r, new) in updates {
+        if let Some(slot) = wb.sheet_mut(r.sheet).and_then(|sh| sh.pivots.get_mut(r.idx)) {
             *slot = new;
+            done.push(r);
         }
     }
-    reports
+    done
 }
 
-/// A PivotTable saved by an older GridCraft, with its fields named by header value; `None` when
-/// its source can't be read.
+/// A cell of each renamed PivotTable's report.
+pub(crate) fn reports(renamed: &[Renamed]) -> Vec<(usize, CellRef)> {
+    renamed.iter().filter_map(|r| r.before.last_range.map(|a| (r.sheet, a.start))).collect()
+}
+
+/// Puts back each renamed PivotTable whose headers read differently now: the recalculation that
+/// followed the renames changed them (a header reading another report), so its names came from
+/// stale values. It is renamed again by the next [`migrate_staged`].
+pub(crate) fn undo_stale(wb: &mut Workbook, renamed: Vec<Renamed>) {
+    for r in renamed {
+        if readings(wb, &r.before, r.sheet).is_none_or(|now| now != r.read)
+            && let Some(slot) = wb.sheet_mut(r.sheet).and_then(|sh| sh.pivots.get_mut(r.idx))
+        {
+            *slot = r.before;
+        }
+    }
+}
+
+/// The header readings of a PivotTable's source; `None` when the source can't be read.
+fn readings(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Readings> {
+    use gridcraft_model::pivot_source::{headers, unique_names};
+    let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
+    let sh = wb.sheet(si)?;
+    let current = headers(wb, si, r).ok()?;
+    let shown = |formulas: bool| {
+        unique_names((r.start.col..=r.end.col).map(|c| crate::display::cell_text_with(wb, sh, CellRef::new(r.start.row, c), formulas))).ok()
+    };
+    Some(Readings { current, shown: [shown(false), shown(true)], show_formulas: sh.show_formulas })
+}
+
+/// A PivotTable saved by an older GridCraft, with its fields named by header value as `read`
+/// reads its source.
 ///
 /// Older GridCraft named a column by its header as the cell showed it: the formula under Show
 /// Formulas (`="Region"`), a long General number narrowed to the cell width. Now a header is its
@@ -212,14 +266,8 @@ pub fn migrate_older_names(wb: &mut Workbook) -> Vec<(usize, CellRef)> {
 /// formula, a sort by value's scope or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header
 /// is renamed (`Margin2`), with the values that show it, as Excel doesn't allow the two to share a
 /// name. Worksheet formulas are not rewritten: GETPIVOTDATA knows a field by its current name only.
-fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotTable> {
-    use gridcraft_model::pivot_source::{headers, unique_names};
-    let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
-    let sh = wb.sheet(si)?;
-    let current = headers(wb, si, r).ok()?;
-    let shown = |formulas: bool| {
-        unique_names((r.start.col..=r.end.col).map(|c| crate::display::cell_text_with(wb, sh, CellRef::new(r.start.row, c), formulas))).ok()
-    };
+fn migrated(pt: &PivotTable, read: &Readings) -> PivotTable {
+    let current = &read.current;
     let calc_name = |n: &str| pt.calculated_fields.iter().any(|c| c.name.trim().eq_ignore_ascii_case(n.trim()));
     let axes = pt.rows.iter().chain(&pt.columns).map(|f| f.source_col.clone());
     let filters = pt.filters.iter().map(|f| f.source_col.clone());
@@ -229,8 +277,8 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
     let mut seen = HashSet::new();
     let fields: Vec<String> =
         axes.chain(filters).chain(values.chain(formulas).filter(|n| !calc_name(n))).filter(|n| seen.insert(n.trim().to_ascii_lowercase())).collect();
-    let saved_way = sh.show_formulas;
-    let lists = [shown(saved_way), shown(!saved_way)];
+    let saved_way = read.show_formulas;
+    let lists = [read.shown[usize::from(saved_way)].clone(), read.shown[usize::from(!saved_way)].clone()];
     let pos = |l: &Option<Vec<String>>, n: &str| l.as_ref()?.iter().position(|h| h.trim().eq_ignore_ascii_case(n.trim()));
     let placed = |l: &Option<Vec<String>>| fields.iter().filter(|n| pos(l, n).is_some()).count();
     let [saved_list, other_list] = &lists;
@@ -276,14 +324,20 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
             f.source_col = n;
         }
     }
+    // A value or a calculated formula named a column first, then a calculated field, as the
+    // older report read them: by the headers as the sheet showed them when it was saved. So a
+    // calculated field's name that only the other layout places is still the calculated field.
+    let value_ref = |n: &str| -> Option<String> {
+        if calc_name(n) && pos(saved_list, n).is_none() { calculated(n) } else { column(n).or_else(|| calculated(n)) }
+    };
     for v in &mut new.values {
-        if let Some(n) = column(&v.source_col).or_else(|| calculated(&v.source_col)) {
+        if let Some(n) = value_ref(&v.source_col) {
             v.source_col = n;
         }
     }
     let rename = |n: &str| column(n).or_else(|| calculated(n));
     for (c, name) in new.calculated_fields.iter_mut().zip(&calc_names) {
-        if let Some(f) = crate::pivot_calc::rename_fields(&c.formula, &rename) {
+        if let Some(f) = crate::pivot_calc::rename_fields(&c.formula, &value_ref) {
             c.formula = f;
         }
         c.name = name.clone();
@@ -292,8 +346,10 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
     if let Some(cells) = pt.data_index.cells() {
         let mut cells = cells.to_vec();
         for c in &mut cells {
-            let named = std::iter::once(&mut c.source_col).chain(c.items.iter_mut().map(|i| &mut i.field));
-            for n in named {
+            if let Some(to) = value_ref(&c.source_col) {
+                c.source_col = to;
+            }
+            for n in c.items.iter_mut().map(|i| &mut i.field) {
                 if let Some(to) = rename(n) {
                     *n = to;
                 }
@@ -303,7 +359,7 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
         new.data_index.set_cells(cells);
     }
     new.names_from_values = true;
-    Some(new)
+    new
 }
 
 /// Recomputes a pivot and writes its report. With `replace` false, refuses when the target area

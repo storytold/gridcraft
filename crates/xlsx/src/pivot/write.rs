@@ -65,6 +65,9 @@ struct Group {
 
 struct CField {
     name: String,
+    /// A database field's header as its raw value (`2026` for one shown as `2026.0`), which a
+    /// field read from a file may name it by; empty for other fields.
+    raw: String,
     /// Column offset in the source (database fields only).
     col: Option<u32>,
     stats: Stats,
@@ -264,6 +267,13 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
     format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
 }
 
+/// The cache's database field a pivot field names: by its name, else by its header's raw value,
+/// as an older GridCraft named a formatted header in the files it wrote.
+fn db_field(fields: &[CField], name: &str) -> Option<usize> {
+    let db = || fields.iter().enumerate().filter(|(_, f)| f.col.is_some());
+    db().find(|(_, f)| same(&f.name, name)).or_else(|| db().find(|(_, f)| !f.raw.is_empty() && same(&f.raw, name.trim()))).map(|(i, _)| i)
+}
+
 /// The cache's fields: the source's columns, named as the engine names them
 /// ([`gridcraft_model::pivot_source::headers`]); an empty header, which the engine refuses, is
 /// written as `ColumnN`.
@@ -272,10 +282,16 @@ fn cache_fields(wb: &Workbook, si: usize, r: RangeRef) -> Vec<CField> {
     let texts = header_texts(wb, si, r).unwrap_or_default();
     let texts = texts.into_iter().enumerate().map(|(k, t)| if t.trim().is_empty() { format!("Column{}", k + 1) } else { t });
     let names = unique_names(texts).unwrap_or_default();
+    let sh = wb.sheet(si);
     let mut fields: Vec<CField> = Vec::new();
     for (k, n) in names.into_iter().enumerate() {
+        let raw = match sh.map(|sh| sh.value(CellRef::new(r.start.row, r.start.col + k as u32)).scalar()) {
+            None | Some(Value::Empty) => String::new(),
+            Some(v) => label(&v).trim().to_string(),
+        };
         fields.push(CField {
             name: n,
+            raw,
             col: Some(k as u32),
             stats: Stats::default(),
             items: vec![],
@@ -289,7 +305,7 @@ fn cache_fields(wb: &Workbook, si: usize, r: RangeRef) -> Vec<CField> {
 }
 
 fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_system: DateSystem) {
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = db_field;
     let groupable = |f: &CField| {
         let s = &f.stats;
         s.number
@@ -348,6 +364,7 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
             }
             fields.push(CField {
                 name: n,
+                raw: String::new(),
                 col: None,
                 stats: Stats::default(),
                 items: vec![],
@@ -368,7 +385,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     let sh = wb.sheet(si)?;
     let mut fields = cache_fields(wb, si, r);
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = db_field;
 
     // Records (rows that aren't entirely blank), read once.
     let mut rows: Vec<u32> = Vec::new();
@@ -475,6 +492,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         }
         fields.push(CField {
             name: cf.name.clone(),
+            raw: String::new(),
             col: None,
             stats: Stats::default(),
             items: vec![],
@@ -644,7 +662,7 @@ struct PivotTableLayout<'a> {
 }
 
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
-    let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find_db = |name: &str| db_field(&c.fields, name);
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let column_fields: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.

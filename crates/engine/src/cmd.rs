@@ -402,10 +402,25 @@ fn wall_clock() -> std::time::Duration {
 /// opening a book). PivotTables an older GridCraft saved take today's field names once their
 /// source can be read, and `again` recalculates what reads a report renamed (given a cell of
 /// each). Last, each linked control takes its cell's final value.
-pub(crate) fn finish_recalc(wb: &mut Workbook, again: impl FnOnce(&mut Workbook, &[Key])) {
-    let renamed = crate::pivot::migrate_older_names(wb);
-    if !renamed.is_empty() {
-        again(wb, &renamed);
+///
+/// That recalculation can reach another older PivotTable's headers: one whose source it made
+/// readable, or one renamed from values it has since changed, which is put back. So renaming
+/// repeats until a pass renames nothing, at most once more than there are PivotTables, which
+/// a chain of reports reading each other needs; a header that reads its own report could
+/// otherwise go on changing.
+pub(crate) fn finish_recalc(wb: &mut Workbook, mut again: impl FnMut(&mut Workbook, &[Key])) {
+    let mut passes = wb.sheets.iter().map(|sh| sh.pivots.len()).sum::<usize>() + 1;
+    loop {
+        let renamed = crate::pivot::migrate_staged(wb);
+        if renamed.is_empty() {
+            break;
+        }
+        again(wb, &crate::pivot::reports(&renamed));
+        passes -= 1;
+        if passes == 0 {
+            break;
+        }
+        crate::pivot::undo_stale(wb, renamed);
     }
     controls::sync_linked_values(wb);
 }
