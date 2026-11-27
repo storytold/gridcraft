@@ -208,11 +208,14 @@ fn number(n: f64) -> String {
     if !n.is_finite() || text.parse::<f64>().is_ok_and(|parsed| parsed == n) {
         return text;
     }
-    let exact = format!("{:E}", n);
-    match exact.split_once('E') {
-        Some((m, e)) if !e.starts_with('-') => format!("{m}E+{e}"),
-        _ => exact,
-    }
+    let scientific = format!("{n:E}");
+    let scientific = match scientific.split_once('E') {
+        Some((mantissa, exponent)) if !exponent.starts_with('-') => format!("{mantissa}E+{exponent}"),
+        _ => scientific,
+    };
+    // Prefer the shorter exact spelling so scientific notation does not needlessly grow formulas.
+    let decimal = n.to_string();
+    if decimal.len() <= scientific.len() { decimal } else { scientific }
 }
 
 /// Prints an expression in A1 notation.

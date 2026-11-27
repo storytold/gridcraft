@@ -19,9 +19,14 @@ fn rr(a: &str) -> RangeRef {
 
 #[test]
 fn long_numeric_literal_survives_xlsx_import_and_export() {
+    // Scientific notation for every literal used to push this past the formula length limit.
+    let long_formula = format!("SUM({{{}}})", ["1234567890123456"; 380].join(","));
     let bytes = super::minimal(
-        r#"<sheetData><row r="1"><c r="A1"><f>1234567890123456</f></c>
-        <c r="B1"><f>_xlfn.SINGLE(_xlfn.SEQUENCE(1,1,0.6666666666666666))</f></c></row></sheetData>"#,
+        &format!(
+            r#"<sheetData><row r="1"><c r="A1"><f>1234567890123456</f></c>
+            <c r="B1"><f>_xlfn.SINGLE(_xlfn.SEQUENCE(1,1,0.6666666666666666))</f></c>
+            <c r="C1"><f>{long_formula}</f></c></row></sheetData>"#
+        ),
         &[],
         "",
         "",
@@ -29,11 +34,12 @@ fn long_numeric_literal_survives_xlsx_import_and_export() {
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let written = write_xlsx(&wb).unwrap();
     let (reopened, _) = read_xlsx(&written).unwrap();
-    for workbook in [&wb, &reopened] {
+    for (phase, workbook) in [("import", &wb), ("reopen", &reopened)] {
         let sheet = workbook.sheet(0).unwrap();
-        for (address, input) in [("A1", "1234567890123456"), ("B1", "@SEQUENCE(1,1,0.6666666666666666)")] {
+        for (address, input) in [("A1", "1234567890123456"), ("B1", "@SEQUENCE(1,1,0.6666666666666666)"), ("C1", long_formula.as_str())] {
             let formula = sheet.cells.get(at(address)).unwrap().formula.as_ref().unwrap();
-            assert_eq!(formula.expr(), Some(gridcraft_formula::parse(input).unwrap()), "{address}");
+            let expected = gridcraft_formula::parse(input).unwrap();
+            assert!(formula.expr().is_some_and(|expr| expr == expected), "{address} changed on XLSX {phase}");
         }
     }
 }
