@@ -264,7 +264,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 Waterfall => waterfall(ctx, chart, data, area),
                 BoxWhisker => box_whisker(ctx, chart, data, area),
                 Stock => stock(ctx, chart, data, area),
-                _ => cartesian(ctx, chart, data, area, false),
+                _ => cartesian(ctx, chart, data, area, chart.horizontal_xy_combo()),
             }
         }
     }

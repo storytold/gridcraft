@@ -83,6 +83,7 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
                 trendlines: Vec::new(),
                 number_format: None,
                 innermost_categories: false,
+                ..Default::default()
             })
         })
         .collect()

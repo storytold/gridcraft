@@ -430,6 +430,7 @@ fn sample() -> Workbook {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         }],
         legend: LegendPos::Bottom,
         data_labels: true,

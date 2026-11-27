@@ -489,16 +489,20 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let limit = points_per_series(chart.series.len());
     let mut trend_left = MAX_TRENDLINES;
     let mut category_levels = Vec::new();
+    let kinds = chart.series_kinds();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values, limit);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let color = s
+        let mut color = s
             .color
             .as_ref()
             .and_then(|c| c.resolve(&wb.theme))
             .map(|[r, g, b]| [r, g, b, 0xFF])
             .unwrap_or_else(|| chart_style_series_color(&wb.theme, chart.style, i, chart.series.len().min(MAX_SERIES)));
-        let kind = chart.series_kind(i);
+        if s.no_fill {
+            color[3] = 0;
+        }
+        let kind = kinds.get(i).copied().unwrap_or(chart.kind);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {

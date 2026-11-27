@@ -441,6 +441,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 trendlines: Vec::new(),
                 number_format: None,
                 innermost_categories: false,
+                ..Default::default()
             })
             .collect();
         sheet.charts.push(Chart {

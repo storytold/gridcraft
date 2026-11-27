@@ -253,7 +253,14 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     spans
 }
 
-fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option<(f64, f64)>>]) -> Vec<(Scale, Fmt)> {
+fn axis_scales(
+    chart: &Chart,
+    data: &ChartData,
+    fams: &[Fam],
+    sec: &[bool],
+    spans: &[Vec<Option<(f64, f64)>>],
+    horizontal: bool,
+) -> Vec<(Scale, Fmt)> {
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
@@ -273,7 +280,9 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
             (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
-            (nice_scale(lo, hi, force_zero), Fmt::new(code))
+            let axes = members.iter().find_map(|i| chart.series.get(*i).and_then(|s| s.axes.as_ref()));
+            let spec = axes.map(|a| if horizontal { &a.x } else { &a.y });
+            (crate::axis::chart_scale(lo, hi, force_zero, spec), Fmt::new(code))
         };
         axes.push((scale, fmt));
         if !axis && sec.iter().all(|s| !s) {
@@ -307,6 +316,62 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
     (slot_of, slot_keys.len().max(1) as f32)
 }
 
+fn xy_overlay(ctx: &mut Ctx, s: &SeriesData, axes: Option<&gridcraft_model::SeriesAxes>, default_x: Scale, plot: Bx, style: u32) {
+    let xs = default_x.with_bounds(axes.map(|a| &a.x));
+    let (lo, hi) = value_range(s.values.iter().flatten().copied()).unwrap_or((0.0, 1.0));
+    let ys = nice_scale(lo, hi, false).with_bounds(axes.map(|a| &a.y));
+    let pts: Vec<_> = s
+        .values
+        .iter()
+        .enumerate()
+        .map(|(j, y)| {
+            let x = s.x.as_ref().map_or(Some((j + 1) as f64), |x| x.get(j).copied().flatten())?;
+            let mut fx = xs.frac(x);
+            let mut fy = ys.frac((*y)?);
+            if axes.is_some_and(|a| a.x.reversed) {
+                fx = 1.0 - fx;
+            }
+            if axes.is_some_and(|a| a.y.reversed) {
+                fy = 1.0 - fy;
+            }
+            Some([plot.x + fx * plot.w, plot.bottom() - fy * plot.h])
+        })
+        .collect();
+    if s.kind == ChartKind::ScatterLines {
+        draw_runs(ctx, &pts, s.color, line_style_width(style), s.smooth.then_some(plot));
+    } else {
+        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+    }
+}
+
+fn draw_line_series(ctx: &mut Ctx, s: &SeriesData, pts: &[Option<[f32; 2]>], plot: Bx, style: u32, markers: bool, labels: bool) {
+    draw_runs(ctx, pts, s.color, line_style_width(style), s.smooth.then_some(plot));
+    if markers {
+        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
+    }
+    if labels {
+        let fmt = Fmt::new(&s.number_format);
+        for (j, p) in pts.iter().enumerate() {
+            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
+                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
+            }
+        }
+    }
+}
+
+fn reverse_categories(labels: &mut [String], outer: &mut [Vec<String>]) {
+    labels.reverse();
+    for level in outer {
+        let mut flipped = vec![String::new(); labels.len()];
+        for (first, end) in super::frame::level_groups(level, labels.len()) {
+            if let (Some(name), Some(slot)) = (level.get(first), flipped.get_mut(labels.len() - end)) {
+                *slot = name.clone();
+            }
+        }
+        *level = flipped;
+    }
+}
+
 /// Renders Cartesian column, bar, line, area, and combination charts.
 ///
 /// Resolves series families and their axes, calculates stacking and
@@ -318,14 +383,15 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if ncat == 0 {
         return;
     }
-    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { s.kind }).collect();
+    let xy_combo = chart.horizontal_xy_combo();
+    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal && !xy_combo { chart.kind } else { s.kind }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
-    let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
+    let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && (!horizontal || xy_combo)).collect();
 
     let spans = series_spans(data, &fams, &sec, ncat);
 
-    let axes = axis_scales(data, &fams, &sec, &spans);
+    let axes = axis_scales(chart, data, &fams, &sec, &spans, horizontal);
     let Some((s1, f1)) = axes.first() else { return };
     let y1 = ValAxis { scale: *s1, fmt: f1 };
     let y2 = axes.get(1).map(|(s, f)| ValAxis { scale: *s, fmt: f });
@@ -338,10 +404,14 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         .map(|(_, s)| max_forward(s))
         .fold(0.0, f64::max);
     let ncat_slots = ncat.saturating_add(fwd.min(max_forward_slots(ncat)).ceil() as usize).min(MAX_CATS.max(ncat));
-    let labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
+    let reversed = horizontal && chart.series.iter().find(|s| !s.secondary).and_then(|s| s.axes.as_ref()).is_some_and(|a| a.y.reversed);
+    let mut labels: Vec<String> = (0..ncat_slots).map(|j| if j < ncat { cat_label(data, j) } else { String::new() }).collect();
     // Outer levels padded to the slots (forecast slots stay in the last group).
-    let outer: Vec<Vec<String>> =
+    let mut outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
+    if reversed {
+        reverse_categories(&mut labels, &mut outer);
+    }
     let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots);
     let category_axis = super::table::category_axis(&table, &labels, &outer);
     let plot = frame(ctx, area, category_axis, &y1, y2.as_ref(), horizontal, chart.gridlines);
@@ -351,7 +421,10 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     let scale_of = |i: usize| -> Scale { if sec.get(i).copied().unwrap_or(false) { y2.as_ref().map(|a| a.scale).unwrap_or(*s1) } else { *s1 } };
     let cat_len = if horizontal { plot.h } else { plot.w };
     let cw = cat_len / ncat_slots as f32;
-    let center = |j: usize| if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw };
+    let center = |j: usize| {
+        let j = if reversed { ncat_slots - 1 - j } else { j };
+        if horizontal { plot.bottom() - (j as f32 + 0.5) * cw } else { plot.x + (j as f32 + 0.5) * cw }
+    };
     let vpos = |v: f64, sc: &Scale| if horizontal { plot.x + sc.frac(v) * plot.w } else { plot.bottom() - sc.frac(v) * plot.h };
 
     let (slot_of, nslots) = column_slots(&fams, &sec);
@@ -370,6 +443,14 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 _ => is_line(fam),
             };
             if !want {
+                continue;
+            }
+            // Invisible offsets still take part in stacking and scale calculation.
+            if s.color[3] == 0 {
+                continue;
+            }
+            if xy_combo && matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines) {
+                xy_overlay(ctx, s, chart.series.get(i).and_then(|s| s.axes.as_ref()), *s1, plot, chart.style);
                 continue;
             }
             let sc = scale_of(i);
@@ -449,18 +530,8 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
-                    draw_runs(ctx, &pts, s.color, line_style_width(chart.style), s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
-                    if has_markers(k) && cw >= 3.0 {
-                        draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
-                    }
-                    if labels_on {
-                        for (j, p) in pts.iter().enumerate() {
-                            if let (Some(p), Some(v)) = (p, s.values.get(j).copied().flatten()) {
-                                ctx.text(p[0], p[1] - 5.0, &fmt.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
-                            }
-                        }
-                    }
+                    draw_line_series(ctx, s, &pts, plot, chart.style, has_markers(k) && cw >= 3.0, labels_on);
                 }
             }
         }

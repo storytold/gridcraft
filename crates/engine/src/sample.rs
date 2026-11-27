@@ -113,6 +113,7 @@ fn sales(s: &mut Session) -> bool {
                 trendlines: Vec::new(),
                 number_format: None,
                 innermost_categories: false,
+                ..Default::default()
             }];
         }
     }

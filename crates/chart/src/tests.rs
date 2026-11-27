@@ -8,6 +8,73 @@ use crate::*;
 mod budget;
 mod data_table;
 
+#[test]
+fn floating_bar_ranges_keep_offsets_and_numeric_price_overlay() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    let axes = SeriesAxes { x: ChartAxis { min: Some(200.0), ..Default::default() }, y: ChartAxis { reversed: true, ..Default::default() } };
+    c.series = vec![
+        Series {
+            categories: Some("{\"Approach A\",\"Approach B\"}".into()),
+            values: "{300,550}".into(),
+            kind: Some(ChartKind::BarStacked),
+            no_fill: true,
+            axes: Some(axes.clone()),
+            ..Default::default()
+        },
+        Series {
+            values: "{300,230}".into(),
+            kind: Some(ChartKind::BarStacked),
+            color: Some(Color::Rgb(0x008040)),
+            axes: Some(axes),
+            ..Default::default()
+        },
+        Series {
+            categories: Some("{494,494}".into()),
+            values: "{0,1}".into(),
+            kind: Some(ChartKind::ScatterLines),
+            color: Some(Color::Rgb(0xf07020)),
+            secondary: true,
+            axes: Some(SeriesAxes {
+                x: ChartAxis { min: Some(200.0), max: Some(900.0), hidden: true, ..Default::default() },
+                y: ChartAxis { min: Some(0.0), max: Some(1.0), hidden: true, ..Default::default() },
+            }),
+            ..Default::default()
+        },
+    ];
+    let wb = Workbook::default();
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.series[0].color[3], 0);
+    assert_eq!(data.series[2].x, Some(vec![Some(494.0), Some(494.0)]));
+    let primitives = render(&c, &data, 900.0, 500.0, &ApproxMeasure);
+    let ranges: Vec<_> = primitives
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, w, h, fill: Some([0, 128, 64, 255]), .. } => Some((*x, *y, *w, *h)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ranges.len(), 2, "only the floating range series paints bars");
+    assert!(ranges.iter().all(|(_, _, w, h)| w > h), "ranges run horizontally");
+    assert!(ranges[0].1 < ranges[1].1, "the reversed category axis puts the first approach on top");
+    let price = primitives
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert!(price.len() >= 2);
+    assert!((price[0][0] - price[1][0]).abs() < 0.01, "equal numeric X values draw a vertical line");
+    assert!(price[0][1] > ranges[1].1 && price[1][1] < ranges[0].1, "the line spans the plot");
+    assert!(ranges[0].0 < price[0][0] && price[0][0] < ranges[0].0 + ranges[0].2, "price is inside the first range");
+    assert!(price[0][0] < ranges[1].0, "price is below the second range's low");
+    let price_fraction = (price[0][0] - ranges[0].0) / ranges[0].2;
+    assert!((price_fraction - (494.0 - 300.0) / 300.0).abs() < 0.001, "primary automatic bounds align with the saved overlay scale");
+}
+
 const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
@@ -554,6 +621,7 @@ fn resolve_from_workbook() {
             // References use their cells' format, whatever the series says.
             number_format: Some("0%".into()),
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: None,
@@ -568,6 +636,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: Some("Literal".into()),
@@ -582,6 +651,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: Some("0.0%".into()),
             innermost_categories: false,
+            ..Default::default()
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -624,6 +694,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: None,
@@ -638,6 +709,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -657,6 +729,7 @@ fn resolve_from_workbook() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -677,6 +750,7 @@ fn resolve_from_workbook() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -1384,6 +1458,7 @@ fn pie_points_follow_workbook_theme() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1838,6 +1913,7 @@ fn volatile_series_formulas_are_detected() {
             trendlines: vec![],
             innermost_categories: false,
             number_format: None,
+            ..Default::default()
         });
         c
     };
@@ -1870,6 +1946,7 @@ fn volatile_defined_names_are_followed() {
             trendlines: vec![],
             innermost_categories: false,
             number_format: None,
+            ..Default::default()
         });
         c
     };

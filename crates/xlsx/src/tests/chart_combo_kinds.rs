@@ -11,6 +11,50 @@ fn ser(i: usize) -> String {
 
 const AX: &str = "<c:axId val=\"1\"/><c:axId val=\"2\"/>";
 
+/// Authored XML fixture: a transparent stack offset with an XY reference line on hidden axes.
+#[test]
+fn horizontal_range_and_xy_overlay_survive_chart_roundtrip() {
+    let xml = format!(
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <c:chart><c:plotArea>
+        <c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/>
+          {}{}{AX}</c:barChart>
+        <c:scatterChart><c:scatterStyle val="lineMarker"/>
+          <c:ser><c:idx val="2"/><c:order val="2"/>
+            <c:xVal><c:numRef><c:f>Data!$D$1:$D$2</c:f></c:numRef></c:xVal>
+            <c:yVal><c:numRef><c:f>Data!$E$1:$E$2</c:f></c:numRef></c:yVal>
+          </c:ser><c:axId val="3"/><c:axId val="4"/>
+        </c:scatterChart>
+        <c:catAx><c:axId val="1"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:axPos val="l"/></c:catAx>
+        <c:valAx><c:axId val="2"/><c:scaling><c:min val="200"/></c:scaling><c:axPos val="b"/></c:valAx>
+        <c:valAx><c:axId val="3"/><c:scaling><c:min val="200"/><c:max val="900"/></c:scaling><c:axPos val="b"/><c:tickLblPos val="none"/></c:valAx>
+        <c:valAx><c:axId val="4"/><c:scaling><c:min val="0"/><c:max val="1"/></c:scaling><c:axPos val="r"/><c:tickLblPos val="none"/></c:valAx>
+      </c:plotArea></c:chart></c:chartSpace>"#,
+        ser(0).replace("<c:val>", "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:val>"),
+        ser(1)
+    );
+    let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+    let expected = vec![ChartKind::BarStacked, ChartKind::BarStacked, ChartKind::ScatterLines];
+    assert_eq!(original.series_kinds(), expected);
+    assert!(original.series[0].no_fill);
+    assert!(!original.series[1].no_fill);
+    assert!(original.series[2].secondary);
+    let axes = original.series[0].axes.as_ref().unwrap();
+    assert!(axes.y.reversed);
+    assert!(axes.x.min.is_some());
+    let wb = gridcraft_model::Workbook::default();
+    let saved = crate::chart::write_chart(&wb, 0, &original, "Book.xlsx");
+    let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(restored.series_kinds(), expected);
+    for (a, b) in original.series.iter().zip(&restored.series) {
+        assert_eq!(a.no_fill, b.no_fill);
+        assert_eq!(a.axes, b.axes);
+        assert_eq!(a.categories, b.categories);
+        assert_eq!(a.values, b.values);
+        assert_eq!(a.secondary, b.secondary);
+    }
+}
+
 fn bar(sers: &str) -> String {
     format!("<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{sers}{AX}</c:barChart>")
 }

@@ -40,6 +40,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
             quartiles: Default::default(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         }],
         legend: LegendPos::Bottom,
         data_labels: false,

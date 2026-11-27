@@ -9,7 +9,9 @@ use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{CellRef, RangeRef, Value, category_levels};
 use gridcraft_formula::{BinOp, Expr, Reference, SheetSel};
-use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartAxis, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, SeriesAxes, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -607,6 +609,35 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
         })
         .collect();
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
+    let axes_by_id: HashMap<&str, ChartAxis> = plot
+        .into_iter()
+        .flat_map(|p| &p.children)
+        .filter(|a| matches!(a.name.as_str(), "catAx" | "dateAx" | "valAx"))
+        .filter_map(|el| {
+            Some((
+                el.child_val("axId")?,
+                ChartAxis {
+                    min: el.path(&["scaling", "min"]).and_then(|e| e.attr_f64("val")).filter(|v| v.is_finite()),
+                    max: el.path(&["scaling", "max"]).and_then(|e| e.attr_f64("val")).filter(|v| v.is_finite()),
+                    reversed: el.path(&["scaling", "orientation"]).and_then(|e| e.attr("val")) == Some("maxMin"),
+                    hidden: el.child("delete").is_some_and(|e| e.flag("val", true)) || el.child_val("tickLblPos") == Some("none"),
+                },
+            ))
+        })
+        .collect();
+    let mut series_axes = HashMap::new();
+    for (g, kind) in &kinded {
+        let ids = ax_ids(g);
+        let Some((a, b)) = ids.first().and_then(|id| axes_by_id.get(id)).zip(ids.get(1).and_then(|id| axes_by_id.get(id))) else { continue };
+        let axes = if matches!(kind, ChartKind::BarClustered | ChartKind::BarStacked | ChartKind::BarStacked100) {
+            SeriesAxes { x: b.clone(), y: a.clone() }
+        } else {
+            SeriesAxes { x: a.clone(), y: b.clone() }
+        };
+        for el in g.kids("ser") {
+            series_axes.insert(std::ptr::from_ref(el), axes.clone());
+        }
+    }
     let pivot = dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string);
     let series = dc
         .series
@@ -652,6 +683,20 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
                     .map(chart_ref_from_file)
                     .or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")), budget)),
                 color,
+                // A line's shape may have no fill while its stroke remains visible.
+                no_fill: !matches!(
+                    drawn,
+                    ChartKind::Line
+                        | ChartKind::LineMarkers
+                        | ChartKind::LineStacked
+                        | ChartKind::LineStacked100
+                        | ChartKind::LineStacked100Markers
+                        | ChartKind::Scatter
+                        | ChartKind::ScatterLines
+                        | ChartKind::Radar
+                        | ChartKind::Stock
+                ) && sel.and_then(|s| s.path(&["spPr", "noFill"])).is_some(),
+                axes: sel.and_then(|el| series_axes.get(&std::ptr::from_ref(el))).cloned(),
                 secondary: sec,
                 kind: None,
                 quartiles: Default::default(),
@@ -1090,6 +1135,7 @@ fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: u
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
     match (&color, line_like) {
+        _ if s.no_fill => x.push_str("<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>"),
         (Some(c), true) => {
             let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
         }
@@ -1266,14 +1312,23 @@ struct Ax<'a> {
     grid: bool,
     title: Option<&'a str>,
     crosses_max: bool,
+    spec: Option<&'a ChartAxis>,
 }
 
 fn axis_xml(a: &Ax<'_>) -> String {
+    let mut scaling = format!("<c:orientation val=\"{}\"/>", if a.spec.is_some_and(|s| s.reversed) { "maxMin" } else { "minMax" });
+    if let Some(spec) = a.spec {
+        for (name, bound) in [("max", spec.max), ("min", spec.min)] {
+            if let Some(v) = bound.filter(|v| v.is_finite()) {
+                let _ = write!(scaling, "<c:{name} val=\"{v}\"/>");
+            }
+        }
+    }
     let mut s = format!(
-        "<c:{0}><c:axId val=\"{1}\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
+        "<c:{0}><c:axId val=\"{1}\"/><c:scaling>{scaling}</c:scaling><c:delete val=\"{2}\"/><c:axPos val=\"{3}\"/>",
         if a.cat { "catAx" } else { "valAx" },
         a.id,
-        a.delete as u8,
+        a.spec.map_or(a.delete, |s| s.hidden) as u8,
         a.pos
     );
     if a.grid {
@@ -1352,7 +1407,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         // The groups on one pair of axes share its kind of axes; one that can't (a pie beside
         // columns, a scatter beside lines) is drawn in the nearest group that can.
         // A combination chart is drawn on category axes (its series' kinds say how).
-        let family = if ch.kind == ChartKind::Combo {
+        let family = if ch.kind == ChartKind::Combo && !ch.horizontal_xy_combo() {
             Axes::Category
         } else {
             out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None)
@@ -1401,6 +1456,15 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     }
     let family = |gs: &[(G, Vec<(usize, &Series)>)]| gs.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
     let primary_axes = family(&primary);
+    let specs = |groups: &[(G, Vec<(usize, &Series)>)]| {
+        groups
+            .iter()
+            .flat_map(|(_, s)| s.iter())
+            .find_map(|(_, s)| s.axes.as_ref())
+            .map(|axes| if family(groups) == Axes::Horizontal { (axes.y.clone(), axes.x.clone()) } else { (axes.x.clone(), axes.y.clone()) })
+    };
+    let primary_specs = specs(&primary);
+    let secondary_specs = specs(&sec);
     // The primary axes, placed by their kind.
     let (cat, cat_pos, val_pos) = match primary_axes {
         Axes::None => (true, "", ""),
@@ -1418,6 +1482,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             grid: false,
             title: ch.x_title.as_deref(),
             crosses_max: false,
+            spec: primary_specs.as_ref().map(|(a, _)| a),
         }));
         s.push_str(&axis_xml(&Ax {
             cat: false,
@@ -1427,7 +1492,8 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             delete: false,
             grid: ch.gridlines,
             title: ch.y_title.as_deref(),
-            crosses_max: false,
+            crosses_max: primary_specs.as_ref().is_some_and(|(a, _)| a.reversed),
+            spec: primary_specs.as_ref().map(|(_, b)| b),
         }));
     }
     // The secondary axes: their categories (or x values) hidden, their values on the far side.
@@ -1438,8 +1504,28 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         Axes::Category => (true, "b", "r"),
     };
     if !cat_pos.is_empty() {
-        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: val_pos, delete: false, grid: false, title: None, crosses_max: true }));
+        s.push_str(&axis_xml(&Ax {
+            cat,
+            id: 3,
+            cross: 4,
+            pos: cat_pos,
+            delete: true,
+            grid: false,
+            title: None,
+            crosses_max: false,
+            spec: secondary_specs.as_ref().map(|(a, _)| a),
+        }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 4,
+            cross: 3,
+            pos: val_pos,
+            delete: false,
+            grid: false,
+            title: None,
+            crosses_max: true,
+            spec: secondary_specs.as_ref().map(|(_, b)| b),
+        }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(

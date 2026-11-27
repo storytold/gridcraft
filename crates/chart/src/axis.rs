@@ -15,6 +15,14 @@ pub struct Scale {
 }
 
 impl Scale {
+    /// Apply valid saved bounds without allowing a degenerate or non-finite plotting range.
+    pub(crate) fn with_bounds(self, axis: Option<&gridcraft_model::ChartAxis>) -> Self {
+        let Some(axis) = axis else { return self };
+        let min = axis.min.filter(|v| v.is_finite() && v.abs() <= MAX_ABS).unwrap_or(self.min);
+        let max = axis.max.filter(|v| v.is_finite() && v.abs() <= MAX_ABS).unwrap_or(self.max);
+        if max > min && (max - min).is_finite() { Self { min, max, ..self } } else { self }
+    }
+
     /// Tick values from `min` to `max` (at most 51).
     pub fn ticks(&self) -> Vec<f64> {
         let span = self.max - self.min;
@@ -107,6 +115,24 @@ pub fn nice_scale(lo: f64, hi: f64, force_zero: bool) -> Scale {
         return Scale { min: lo, max: hi, step: range };
     }
     Scale { min, max, step }
+}
+
+/// Auto bounds are chosen relative to a fixed endpoint, so a saved nonzero minimum does
+/// not retain the headroom calculated for a zero baseline.
+pub(crate) fn chart_scale(lo: f64, hi: f64, force_zero: bool, axis: Option<&gridcraft_model::ChartAxis>) -> Scale {
+    let base = nice_scale(lo, hi, force_zero);
+    let Some(axis) = axis else { return base };
+    match (axis.min, axis.max) {
+        (Some(min), None) if min.is_finite() && min.abs() <= MAX_ABS && hi > min => {
+            let relative = nice_scale(0.0, hi - min, true);
+            Scale { min, max: min + relative.max, step: relative.step }.with_bounds(Some(axis))
+        }
+        (None, Some(max)) if max.is_finite() && max.abs() <= MAX_ABS && lo < max => {
+            let relative = nice_scale(lo - max, 0.0, true);
+            Scale { min: max + relative.min, max, step: relative.step }.with_bounds(Some(axis))
+        }
+        _ => base.with_bounds(Some(axis)),
+    }
 }
 
 /// A number format prepared once and reused for many labels.
