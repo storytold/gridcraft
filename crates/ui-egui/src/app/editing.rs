@@ -18,6 +18,8 @@ impl SheetApp {
             self.message = Some(("Text Box".into(), clean_error(&e)));
             return;
         }
+        // Editing a cell ends Extend and Add mode, as in Excel.
+        self.grid.set_selection_mode(crate::grid::SelectionMode::Off);
         let Some(d) = self.session.active() else { return };
         let Some(sh) = d.wb.active() else { return };
         let at = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
@@ -50,6 +52,11 @@ impl SheetApp {
             self.session.mode = gridcraft_engine::Mode::Edit;
             return;
         }
+        // A hidden formula's source isn't loaded into an edit (a blank edit would also write over
+        // it on commit): no edit starts. Typing still replaces the cell.
+        if text.is_none() && gridcraft_engine::display::formula_hidden(&d.wb, sh, at) {
+            return;
+        }
         let locale = self.ui.language.formula_locale();
         let current = if sh.cell_pictures.contains_key(&at) {
             String::new()
@@ -66,9 +73,23 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
-        if replace && self.ui.autocomplete && !ed.is_formula() {
+        // A list validation with an in-cell dropdown is searched as the user types; its list
+        // replaces column AutoComplete.
+        let list = sh
+            .validations
+            .iter()
+            .find(|v| v.kind == gridcraft_engine::model::ValidationKind::List && v.in_cell_dropdown && v.ranges.iter().any(|r| r.contains(at)));
+        if let Some(dv) = list {
+            // Read within a budget: a list from a huge range must not stall the edit it opens.
+            let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+            ed.set_list_source(gridcraft_engine::cmd::data::list_search_source(&d.wb, d.wb.active_sheet(), at, dv, budget), replace);
+        } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
+        // Typing over an open dropdown list hands over to the searched list the edit shows; the
+        // entries it read (and the workbook version they pin) go with it.
+        self.grid.list_picker = None;
+        self.grid.list_picker_items = None;
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
@@ -132,9 +153,13 @@ impl SheetApp {
         if !self.follow_draft_sheet(&mut ed) {
             return true;
         }
-        let text = match &ed.completion {
+        // Only an explicit acceptance takes the list's entry; a failed commit asks again.
+        let accepted = std::mem::take(&mut ed.list_accept);
+        let text = match (ed.list_choice().filter(|_| accepted), &ed.completion) {
+            // The searched validation list's highlighted entry, as the list spells it.
+            (Some(choice), _) => choice.to_string(),
             // A code edit commits the code as typed, whatever a completion holds.
-            Some(full) if !ed.python && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+            (None, Some(full)) if !ed.python && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
@@ -404,7 +429,11 @@ impl SheetApp {
 
     /// Enter/Tab move inside a multi-cell selection, otherwise to the next cell.
     pub fn move_after_enter(&mut self, dr: i64, dc: i64) {
-        let multi = self.session.active().is_some_and(|d| !d.selection.is_single_cell());
+        // A selection that is just one merged cell moves like one cell (Enter leaves it).
+        let multi = self
+            .session
+            .active()
+            .is_some_and(|d| !d.selection.is_single_cell() && !d.wb.active().is_some_and(|sh| d.selection.is_one_merged_cell(sh)));
         // Any other move (arrows, clicks, another sheet) leaves the selection off the cell the
         // last Tab landed on, which ends the run.
         let here = self.session.active().map(|d| (d.uid, d.wb.active_sheet(), d.selection.active));
@@ -501,5 +530,63 @@ mod protected_cell_tests {
         assert!(protected_message(&app).is_some_and(|m| m.contains("protected sheet")));
         assert_eq!(value(&app, "C2"), Value::text("keep"));
         assert!(app.run("file.saveBytes", json!({"format": "xlsx"})).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod merged_cell_enter_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+
+    #[test]
+    fn enter_and_tab_leave_a_selected_merged_cell_and_keep_the_tab_run() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("selection.set", json!({"range": "B2:C3"})).unwrap();
+        app.run("home.mergeCells", json!({})).unwrap();
+        let sel = |app: &SheetApp| app.session.active().map(|d| d.selection.a1()).unwrap_or_default();
+        for ((dr, dc), want) in [((1, 0), "B4"), ((-1, 0), "B1"), ((0, 1), "D2"), ((0, -1), "A2")] {
+            app.run("selection.set", json!({"cell": "B2"})).unwrap();
+            assert_eq!(sel(&app), "B2:C3");
+            app.move_after_enter(dr, dc);
+            assert_eq!(sel(&app), want, "Enter/Tab ({dr},{dc}) from the merged cell B2:C3");
+        }
+        // A Tab run through the merged cell goes on past it: Enter then goes back to the column
+        // the run started in, on the next row.
+        app.tab_run = None; // the Shift+Tab above ended on A2 and started a run there
+        app.run("selection.set", json!({"cell": "A2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "B2:C3");
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "D2");
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "A3");
+        // Enter straight from the merged cell in a Tab run leaves it below its bottom edge and
+        // still goes back to the run's start column.
+        app.tab_run = None;
+        app.run("selection.set", json!({"cell": "A2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "B2:C3");
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "A4");
+    }
+
+    #[test]
+    fn enter_from_a_merged_cell_in_a_tab_run_skips_a_hidden_row_and_keeps_the_column() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("selection.set", json!({"range": "D2:E3"})).unwrap();
+        app.run("home.mergeCells", json!({})).unwrap();
+        app.run("selection.set", json!({"range": "A4"})).unwrap();
+        app.run("home.hideRows", json!({})).unwrap();
+        let sel = |app: &SheetApp| app.session.active().map(|d| d.selection.a1()).unwrap_or_default();
+        app.run("selection.set", json!({"cell": "C2"})).unwrap();
+        app.move_after_enter(0, 1);
+        assert_eq!(sel(&app), "D2:E3");
+        // Row 4 is hidden: Enter lands on C5, the run's column, not B5.
+        app.move_after_enter(1, 0);
+        assert_eq!(sel(&app), "C5");
     }
 }

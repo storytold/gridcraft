@@ -31,6 +31,8 @@ fn literal_category_with_separators_survives_save() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         })
         .collect();
     s.charts.push(Chart {
@@ -44,6 +46,8 @@ fn literal_category_with_separators_survives_save() {
         data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,

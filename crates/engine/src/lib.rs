@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod chart_data;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
@@ -205,6 +206,9 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The file a read-only open came from (`readOnly` on a workbook with a password to modify).
+    /// Save never writes over it, so the reservation holds; Save As to another file still works.
+    pub read_only_source: Option<String>,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -224,6 +228,9 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// The Distinct Count PivotTable value fields (sheet, pivot, value) an .xlsx save has already
+    /// told the user about (#3336), so only a field not yet disclosed raises the notice again.
+    pub distinct_disclosed: Vec<(usize, usize, usize)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -237,6 +244,22 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
 const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
+/// Comment and hyperlink text of a sheet: a changed sheet's snapshot keeps its own copy of these
+/// strings (an edit deep-copies them), so they count against the history budget with the cells.
+fn sheet_text_bytes(sheet: &gridcraft_model::Sheet) -> usize {
+    let comments = sheet.comments.values().fold(0usize, |sum, c| {
+        // The vectors' own storage counts too: an empty reply still takes an element.
+        let replies = c.replies.iter().fold(0usize, |n, (a, t)| n.saturating_add(a.len()).saturating_add(t.len()));
+        let replies = replies.saturating_add(c.replies.capacity().saturating_mul(std::mem::size_of::<(String, String)>()));
+        let dates = c.dates.iter().fold(0usize, |n, d| n.saturating_add(d.len()));
+        let dates = dates.saturating_add(c.dates.capacity().saturating_mul(std::mem::size_of::<String>()));
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Comment>() + c.author.len() + c.text.len() + replies + dates)
+    });
+    sheet.hyperlinks.values().fold(comments, |sum, h| {
+        sum.saturating_add(std::mem::size_of::<gridcraft_model::Hyperlink>() + h.target.len() + h.tooltip.as_ref().map_or(0, String::len))
+    })
+}
+
 fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
     let mut bytes = std::mem::size_of::<Workbook>();
     for (index, sheet) in older.sheets.iter().enumerate() {
@@ -248,6 +271,7 @@ fn history_retained_bytes(older: &Workbook, newer: &Workbook) -> usize {
         let empty = gridcraft_model::CellStore::new();
         let next = newer.sheets.get(index).map_or(&empty, |next| &next.cells);
         bytes = bytes.saturating_add(sheet.cells.retained_bytes_against(next));
+        bytes = bytes.saturating_add(sheet_text_bytes(sheet));
     }
     // Snapshots share the macro list until a change to it; a snapshot with its own list keeps it.
     if !older.macros.shares(&newer.macros) {
@@ -288,11 +312,25 @@ fn trim_to_budget(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
     }
 }
 
+/// A writer that only counts the bytes written to it.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 impl DocState {
     /// A document for `wb`, which came from where `trust` says: [`Trust::FromFile`] for anything
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
     /// made in this session.
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
@@ -310,7 +348,11 @@ impl DocState {
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
-        let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let mut sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        // A merged active cell is selected whole, as a click on it selects it (#1348).
+        if let Some(sh) = wb.active() {
+            sel.expand_merges(sh);
+        }
         DocState {
             saved: wb.clone(),
             wb,
@@ -325,11 +367,13 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            read_only_source: None,
             scripts_trusted,
             trust,
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            distinct_disclosed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -621,7 +665,11 @@ impl Session {
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress
     /// keeps pointing at the same entry (the steps the trim dropped are lost).
     fn push_journal(&mut self, id: &str, params: Json) {
-        let size = |e: &(String, Json)| serde_json::to_vec(e).map_or(0, |v| v.len());
+        // Counted as it is written, without building the text: a paste's params can be MBs.
+        let size = |e: &(String, Json)| {
+            let mut counter = ByteCounter(0);
+            serde_json::to_writer(&mut counter, e).map_or(0, |()| counter.0)
+        };
         // `journal` is public: if it was changed from outside, measure it again.
         if self.journal_sizes.len() != self.journal.len() {
             self.journal_sizes = self.journal.iter().map(size).collect();

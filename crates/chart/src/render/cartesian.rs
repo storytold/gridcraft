@@ -1,10 +1,10 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
-use super::legend::{cat_label, plot_kind};
+use super::legend::cat_label;
 use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
-    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT,
-    VAlign, WHITE, clean, fixed_scale, nice_scale,
+    Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
+    SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
 };
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
@@ -16,6 +16,7 @@ enum Fam {
     Col100,
     Line,
     LineStack,
+    Line100,
     Area,
     AreaStack,
     Area100,
@@ -31,6 +32,7 @@ fn family(k: ChartKind) -> Fam {
         ColumnStacked100 | BarStacked100 => Fam::Col100,
         Line | LineMarkers | Scatter | ScatterLines | Radar | Stock => Fam::Line,
         LineStacked => Fam::LineStack,
+        LineStacked100 | LineStacked100Markers => Fam::Line100,
         Area => Fam::Area,
         AreaStacked => Fam::AreaStack,
         AreaStacked100 => Fam::Area100,
@@ -40,7 +42,7 @@ fn family(k: ChartKind) -> Fam {
 
 /// Families stacked to 100%: each category's values are shares of its total.
 fn is_100(f: Fam) -> bool {
-    matches!(f, Fam::Col100 | Fam::Area100)
+    matches!(f, Fam::Col100 | Fam::Line100 | Fam::Area100)
 }
 
 fn is_col(f: Fam) -> bool {
@@ -48,11 +50,120 @@ fn is_col(f: Fam) -> bool {
 }
 
 fn is_line(f: Fam) -> bool {
-    matches!(f, Fam::Line | Fam::LineStack)
+    matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
+}
+
+/// Line kinds that draw a marker at each point.
+fn has_markers(k: ChartKind) -> bool {
+    matches!(k, ChartKind::LineMarkers | ChartKind::LineStacked100Markers)
+}
+
+/// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
+/// bars' start positions) and along the value axis (`lo..hi`).
+struct BarRun {
+    bucket: f32,
+    a0: f32,
+    a1: f32,
+    lo: f32,
+    hi: f32,
+    /// More than one bar was merged.
+    merged: bool,
+}
+
+impl BarRun {
+    fn new(pos: f32, lo: f32, hi: f32) -> Self {
+        BarRun { bucket: pos.floor(), a0: pos, a1: pos, lo, hi, merged: false }
+    }
+    /// Whether `lo..hi` touches the run's value span; a disjoint bar would be joined by a filled gap.
+    fn touches(&self, lo: f32, hi: f32) -> bool {
+        lo <= self.hi && hi >= self.lo
+    }
+    fn add(&mut self, pos: f32, lo: f32, hi: f32) {
+        self.merged = true;
+        self.a0 = self.a0.min(pos);
+        self.a1 = self.a1.max(pos);
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+    }
+    /// `band` is the part of the pixel column reserved for this series (`start`, `len`): in a
+    /// clustered chart a merged run stays inside it, so the other series keep a visible strip.
+    fn draw(&self, ctx: &mut Ctx, bw: f32, horizontal: bool, color: Rgba, band: Option<(f32, f32)>) {
+        let (a0, along) = match band {
+            Some((start, len)) if self.merged => (self.bucket + start, len),
+            _ => (self.a0, self.a1 - self.a0 + bw),
+        };
+        if horizontal {
+            ctx.rect(self.lo, a0, self.hi - self.lo, along, color, None);
+        } else {
+            ctx.rect(a0, self.lo, along, self.hi - self.lo, color, None);
+        }
+    }
+}
+
+/// Whether bars of width `bw` are merged per pixel column (never when they carry data labels).
+fn merge_hairlines(bw: f32, labels_on: bool) -> bool {
+    bw < MIN_BAR_PX && !labels_on
+}
+
+/// Draws the bars of one series: a rectangle each, or, for hairline bars, one merged [`BarRun`]
+/// per pixel column.
+struct BarSink {
+    run: Option<BarRun>,
+    bw: f32,
+    horizontal: bool,
+    color: Rgba,
+    nslots: f32,
+    k: f32,
+}
+
+impl BarSink {
+    fn new(bw: f32, horizontal: bool, color: Rgba, nslots: f32, k: f32) -> Self {
+        BarSink { run: None, bw, horizontal, color, nslots, k }
+    }
+    /// Start of this series' slot along the category axis, for the category centered at `c`.
+    fn pos(&self, c: f32) -> f32 {
+        if self.horizontal { c + self.nslots * self.bw / 2.0 - (self.k + 1.0) * self.bw } else { c - self.nslots * self.bw / 2.0 + self.k * self.bw }
+    }
+    /// This series' strip of a pixel column (offset, length) when the columns hold several
+    /// clustered series, in the direction the slots run.
+    fn band(&self) -> Option<(f32, f32)> {
+        (self.nslots > 1.0).then(|| {
+            let idx = if self.horizontal { self.nslots - 1.0 - self.k } else { self.k };
+            (idx / self.nslots, 1.0 / self.nslots)
+        })
+    }
+    /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when
+    /// `merge` is set, adds it to the current run.
+    fn bar(&mut self, ctx: &mut Ctx, merge: bool, c: f32, lo: f32, len: f32) {
+        let pos = self.pos(c);
+        let band = self.band();
+        if !merge {
+            if self.horizontal {
+                ctx.rect(lo, pos, len, self.bw, self.color, None);
+            } else {
+                ctx.rect(pos, lo, self.bw, len, self.color, None);
+            }
+            return;
+        }
+        match &mut self.run {
+            Some(m) if m.bucket == pos.floor() && m.touches(lo, lo + len) => m.add(pos, lo, lo + len),
+            run => {
+                if let Some(m) = run.replace(BarRun::new(pos, lo, lo + len)) {
+                    m.draw(ctx, self.bw, self.horizontal, self.color, band);
+                }
+            }
+        }
+    }
+    fn finish(self, ctx: &mut Ctx) {
+        let band = self.band();
+        if let Some(m) = self.run {
+            m.draw(ctx, self.bw, self.horizontal, self.color, band);
+        }
+    }
 }
 
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
-    // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
+    // Totals for 100% stacking, per axis and family (100% columns, lines and areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
@@ -83,7 +194,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack | Fam::Area100);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -112,7 +223,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
                 }),
                 (Some((_, pos, _)), _) => {
                     let v = v.unwrap_or(0.0);
-                    let v = if fam == Fam::Area100 { share(key, j, v) } else { v };
+                    let v = if is_100(fam) { share(key, j, v) } else { v };
                     pos.get_mut(j).map(|acc| {
                         let base = *acc;
                         *acc = clean(*acc + v);
@@ -141,11 +252,12 @@ fn axis_scales(data: &ChartData, fams: &[Fam], sec: &[bool], spans: &[Vec<Option
         let all100 = members.iter().all(|i| fams.get(*i).is_some_and(|f| is_100(*f)));
         let range = value_range(members.iter().flat_map(|i| {
             let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
+            // Lines contribute only their top value, bars both ends (no per-point `Vec`).
+            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| [*b, *t].into_iter().skip(usize::from(line)))
         }));
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
-            (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
+            (Scale { min: if lo < -1e-9 { -1.0 } else { 0.0 }, max: if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, step: 0.2 }, Fmt::new("0%"))
         } else {
             let code = members.first().and_then(|i| data.series.get(*i)).map(|s| s.number_format.as_str()).unwrap_or("General");
             (nice_scale(lo, hi, force_zero), Fmt::new(code))
@@ -187,7 +299,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if ncat == 0 {
         return;
     }
-    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { plot_kind(chart, s) }).collect();
+    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { s.kind }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
@@ -278,19 +390,16 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 1 => {
                     let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+                    // Hairline bars are merged per pixel column (their envelope is what shows).
+                    let cull = merge_hairlines(bw, labels_on);
+                    let mut sink = BarSink::new(bw, horizontal, s.color, nslots, k);
                     for (j, sp) in row.iter().enumerate() {
                         let Some((b, t)) = sp else { continue };
                         let (pb, pt) = (vpos(*b, &sc), vpos(*t, &sc));
                         let c = center(j);
                         let lo = pb.min(pt);
                         let len = (pb - pt).abs();
-                        if horizontal {
-                            let y = c + nslots * bw / 2.0 - (k + 1.0) * bw;
-                            ctx.rect(lo, y, len, bw, s.color, None);
-                        } else {
-                            let x = c - nslots * bw / 2.0 + k * bw;
-                            ctx.rect(x, lo, bw, len, s.color, None);
-                        }
+                        sink.bar(ctx, cull, c, lo, len);
                         if labels_on && let Some(v) = s.values.get(j).copied().flatten() {
                             let t = fmt.format(v, None);
                             let stacked = fam != Fam::Col;
@@ -316,12 +425,13 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                             }
                         }
                     }
+                    sink.finish(ctx);
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
-                    if k == ChartKind::LineMarkers && cw >= 3.0 {
+                    if has_markers(k) && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
                     }
                     if labels_on {
@@ -425,7 +535,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
                 ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some((WHITE, 0.75)) });
             }
         } else {
-            let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
+            let lines = s.kind == ChartKind::ScatterLines;
             if lines {
                 draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
             }

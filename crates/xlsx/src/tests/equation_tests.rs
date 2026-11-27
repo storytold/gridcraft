@@ -20,6 +20,7 @@ fn equation(id: u32, cell: &str, latex: &str, ink: Color) -> Shape {
         text: latex.into(),
         format: Default::default(),
         math: Default::default(),
+        rotation: 0.0,
     }
 }
 
@@ -41,7 +42,7 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        m.insert(f.name().to_string(), b);
+        m.insert(f.name().unwrap().to_string(), b);
     }
     m
 }
@@ -161,6 +162,7 @@ fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
         text: "plain".into(),
         format: Default::default(),
         math: Default::default(),
+        rotation: 0.0,
     });
     wb.sheets[0] = Arc::new(sh);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -210,7 +212,7 @@ fn a_marker_over_garbage_office_math_falls_back_without_panicking() {
     let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
     let mut d = drawing(&parts);
     let (m0, m1) = (d.find("<m:oMath>").unwrap(), d.find("</m:oMath>").unwrap());
-    d.replace_range(m0..m1 + "</m:oMath>".len(), "<m:oMath><m:sPre/><m:f><m:num/></m:f><m:r/><m:t>junk</m:t><m:oMath/><m:e/></m:oMath>");
+    d.replace_range(m0..m1 + "</m:oMath>".len(), "<m:oMath><m:unknown/><m:r/><m:t>junk</m:t><m:oMath/><m:e/></m:oMath>");
     parts.insert(name.clone(), d.into_bytes());
     let (back, _) = read_xlsx(&rezip(&parts)).unwrap();
     let s = shapes(&back);
@@ -233,17 +235,14 @@ fn office_math_outside_the_subset_reads_the_fallback() {
     let mut parts = unzip(&write_xlsx(&wb).unwrap());
     let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
     let mut d = drawing(&parts);
-    // Another writer: no GridCraft source, Office Math the reader does not convert (a
-    // pre-subscript), and a fallback text box with its own text.
+    // Another writer: no GridCraft source, Office Math the reader does not convert,
+    // and a fallback text box with its own text.
     while let Some(a) = d.find(" descr=\"gridcraft:latex:") {
         let b = d[a + 8..].find('"').unwrap() + a + 9;
         d.replace_range(a..b, "");
     }
     let (m0, m1) = (d.find("<m:oMath>").unwrap(), d.find("</m:oMath>").unwrap());
-    d.replace_range(
-        m0..m1 + "</m:oMath>".len(),
-        "<m:oMath><m:sPre><m:sub><m:r><m:t>1</m:t></m:r></m:sub><m:sup><m:r><m:t>2</m:t></m:r></m:sup><m:e><m:r><m:t>y</m:t></m:r></m:e></m:sPre></m:oMath>",
-    );
+    d.replace_range(m0..m1 + "</m:oMath>".len(), "<m:oMath><m:unknown><m:e><m:r><m:t>y</m:t></m:r></m:e></m:unknown></m:oMath>");
     let fb = d.find("<mc:Fallback>").unwrap();
     let t = d[fb..].find("<a:t>x^2</a:t>").unwrap() + fb;
     d.replace_range(t..t + "<a:t>x^2</a:t>".len(), "<a:t>the writer's fallback</a:t>");
@@ -468,4 +467,194 @@ fn a_paragraph_split_in_an_equation_without_office_math_reads_back_as_the_edit()
     // The cut falls after the first space, which stays in the first paragraph, so the text read
     // back is the source with a newline after that space, and nothing else moved or dropped.
     assert_eq!(s[0].text, cd.replacen(' ', " \n", 1), "the split text, exactly");
+}
+
+/// The saved Office Math of `src` with its first run coloured green (as a coloured source is
+/// written when the converter carries `\color`), read back; `keep_descr` keeps GridCraft's own
+/// source in the description, else the equation is another writer's Office Math.
+fn first_run_green(src: &str, ink: Color, keep_descr: bool) -> Shape {
+    let wb = book(vec![equation(1, "B2", src, ink)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    let at = d.find("<a:rPr lang=\"en-US\"").unwrap();
+    let close = d[at..].find('>').unwrap() + at + 1;
+    let green = "<a:solidFill><a:srgbClr val=\"008000\"/></a:solidFill>";
+    match d[close..].starts_with("<a:solidFill>") {
+        true => {
+            let end = d[close..].find("</a:solidFill>").unwrap() + close + "</a:solidFill>".len();
+            d.replace_range(close..end, green);
+        }
+        false => d.insert_str(close, green),
+    }
+    if !keep_descr {
+        let a = d.find(" descr=\"gridcraft:latex:").unwrap();
+        let b = d[a + 8..].find('"').unwrap() + a + 9;
+        d.replace_range(a..b, "");
+    }
+    parts.insert(name, d.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::Equation);
+    s[0].clone()
+}
+
+#[test]
+fn a_coloured_run_in_gridcraft_s_own_equation_is_not_the_frames_ink() {
+    // `b` and `+d` have no colour of their own: they take the frame's ink, not the green of the
+    // first run, which would paint the whole equation green after reopening the file.
+    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    assert_eq!(first_run_green(src, Color::Auto, true).line, Color::Auto);
+    assert_eq!(first_run_green(src, Color::Rgb(0x1F4E79), true).line, Color::Rgb(0x1F4E79));
+    // A source without a colour command keeps reading the run colour (files saved before the
+    // paragraph carried the ink), and another writer's Office Math too.
+    assert_eq!(first_run_green("a+b", Color::Auto, true).line, Color::Rgb(0x008000));
+    assert_eq!(first_run_green("a+b", Color::Auto, false).line, Color::Rgb(0x008000));
+}
+
+#[test]
+fn another_writer_s_paragraph_end_colour_is_not_the_frames_ink() {
+    // Another writer's Office Math with a green first run and a blue paragraph end: the blue
+    // `a:endParaRPr` is that writer's formatting, not GridCraft's saved ink, so the first run's
+    // colour stays the frame's ink as before.
+    let s = first_run_green("a+b", Color::Rgb(0x0000FF), false);
+    assert_eq!(s.line, Color::Rgb(0x008000));
+}
+
+#[test]
+fn an_equation_whose_office_math_was_rewritten_reads_its_first_run_as_the_frames_ink() {
+    // GridCraft's description is still there, but another application changed the Office Math
+    // (`b` became `c`), so the marker no longer matches and the equation is rebuilt from the
+    // Office Math. The blue paragraph end GridCraft saved is not its ink any more: the green
+    // first run stands in, and the next save writes that back instead of the stale blue.
+    let wb = book(vec![equation(1, "B2", "a+b", Color::Rgb(0x0000FF))]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    assert!(d.contains("<m:t>b</m:t>"), "the second operand is its own run: {d}");
+    d = d.replacen("<m:t>b</m:t>", "<m:t>c</m:t>", 1);
+    let at = d.find("<a:rPr lang=\"en-US\"").unwrap();
+    let close = d[at..].find('>').unwrap() + at + 1;
+    let green = "<a:solidFill><a:srgbClr val=\"008000\"/></a:solidFill>";
+    match d[close..].starts_with("<a:solidFill>") {
+        true => {
+            let end = d[close..].find("</a:solidFill>").unwrap() + close + "</a:solidFill>".len();
+            d.replace_range(close..end, green);
+        }
+        false => d.insert_str(close, green),
+    }
+    parts.insert(name, d.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!((s.len(), s[0].kind, s[0].text.as_str()), (1, ShapeKind::Equation, "a+c"), "rebuilt from the Office Math");
+    assert_eq!(s[0].line, Color::Rgb(0x008000));
+}
+
+#[test]
+fn a_coloured_equation_without_office_math_keeps_its_frame_ink() {
+    // `\begin{CD}` is outside the Office Math subset, so the equation is saved as the plain-text
+    // box alone, whose runs all carry the frame's ink; the colour command in the source does not
+    // make that ink Automatic on reopening.
+    let src = "{\\color{red}A} \\begin{CD} A @>f>> B \\end{CD}";
+    for ink in [Color::Rgb(0x0000FF), Color::Auto] {
+        let bytes = write_xlsx(&book(vec![equation(1, "B2", src, ink)])).unwrap();
+        assert!(!drawing(&unzip(&bytes)).contains("<a14:m>"), "written without Office Math");
+        let s = shapes(&read_xlsx(&bytes).unwrap().0);
+        assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, ink));
+    }
+}
+
+#[test]
+fn nested_colours_keep_the_frame_ink_through_save_and_reopen() {
+    // The combined round trip: the uncoloured parts (`b`, `+d`) take the frame's ink, so saving
+    // and reopening, twice, must leave that ink as it was rather than the source's green.
+    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    for ink in [Color::Auto, Color::Rgb(0x1F4E79)] {
+        let mut wb = book(vec![equation(1, "B2", src, ink)]);
+        for _ in 0..2 {
+            let bytes = write_xlsx(&wb).unwrap();
+            assert!(drawing(&unzip(&bytes)).contains("<a14:m>"), "written as Office Math");
+            wb = read_xlsx(&bytes).unwrap().0;
+            let s = shapes(&wb);
+            assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, ink));
+        }
+    }
+}
+
+#[test]
+fn a_workbook_saved_before_the_paragraph_carried_the_ink_keeps_its_explicit_frame_ink() {
+    // The earlier writer put the frame's ink on every Office Math run and wrote no fill on the
+    // paragraph end: strip that fill from a saved equation to get the same bytes. The styled
+    // runs (`\\mathbf`, `\\text`) also carry an `m:rPr` of Office Math style beside the `a:rPr`.
+    let src = "{\\color{green}a+{\\color{black}\\mathbf{b}}+\\text{c}}+d";
+    let wb = book(vec![equation(1, "B2", src, Color::Rgb(0x1F4E79))]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let d = drawing(&parts);
+    assert!(d.contains("<m:rPr><m:sty"), "a styled run writes an Office Math run style: {d}");
+    let at = d.find("<a:endParaRPr").unwrap();
+    let open_end = d[at..].find('>').unwrap() + at + 1;
+    let close = d[open_end..].find("</a:endParaRPr>").unwrap() + open_end;
+    assert!(d[open_end..close].contains("1F4E79"), "the paragraph end carries the ink: {d}");
+    let legacy = format!("{}{}", &d[..open_end], &d[close..]);
+    assert!(legacy.matches("1F4E79").count() > 1, "every run still carries the ink");
+    parts.insert(name, legacy.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, Color::Rgb(0x1F4E79)));
+}
+
+#[test]
+fn the_plain_text_stand_in_for_an_equation_is_drawn_at_a_normal_size() {
+    // A source Office Math cannot hold is saved as the text box alone; a source it can hold has
+    // the same box as its fallback. Neither takes the (large) size the equation is drawn at.
+    let wb = book(vec![equation(1, "B2", "\\begin{CD} A @>f>> B \\end{CD}", Color::Auto), equation(2, "B8", "x^2", Color::Auto)]);
+    let d = drawing(&unzip(&write_xlsx(&wb).unwrap()));
+    let text_runs: Vec<&str> =
+        d.match_indices("<a:r><a:rPr").map(|(i, _)| &d[i..i + d[i..].find("</a:rPr>").or_else(|| d[i..].find("/>")).unwrap()]).collect();
+    assert_eq!(text_runs.len(), 2, "{d}");
+    for r in text_runs {
+        assert!(r.contains(" sz=\"1100\""), "{r}");
+    }
+    // The Office Math box keeps the size of the equation.
+    assert!(!d.contains("<a:endParaRPr lang=\"en-US\" sz=\"1100\"/>"), "{d}");
+}
+
+#[test]
+fn rejected_office_math_without_a_saved_source_keeps_visible_text() {
+    let wb = book(vec![equation(1, "B2", "x^2", Color::Auto)]);
+    let original = unzip(&write_xlsx(&wb).unwrap());
+    let name = original.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let d = drawing(&original);
+    let c0 = d.find("<mc:Choice").unwrap();
+    let c1 = d.find("</mc:Choice>").unwrap();
+    let choice = &d[c0..c1];
+    let mut sp = choice[choice.find("<xdr:sp ").unwrap()..].to_string();
+    while let Some(a) = sp.find(" descr=\"gridcraft:latex:") {
+        let b = sp[a + 8..].find('"').unwrap() + a + 9;
+        sp.replace_range(a..b, "");
+    }
+    let a0 = d.find("<mc:AlternateContent").unwrap();
+    let a1 = d.find("</mc:AlternateContent>").unwrap() + "</mc:AlternateContent>".len();
+    for (body, expected) in [
+        ("<a:p><a14:m><m:oMath><m:r><m:t>x^2</m:t></m:r></m:oMath></a14:m></a:p>", "x^2"),
+        (
+            "<a:p><a:r><a:t>Solve: </a:t></a:r><a14:m><m:oMath><m:r><m:t>x^2</m:t></m:r></m:oMath></a14:m><a:r><a:t> please</a:t></a:r></a:p><a:p><a:r><a:t>next</a:t></a:r></a:p>",
+            "Solve: x^2 please\nnext",
+        ),
+        ("<a:p><a14:m><m:oMath><m:unknown><m:r><m:t>λ^2</m:t></m:r></m:unknown></m:oMath></a14:m></a:p>", "λ^2"),
+    ] {
+        let mut shape = sp.clone();
+        let start = shape.find("<xdr:txBody>").unwrap();
+        let end = shape.find("</xdr:txBody>").unwrap() + "</xdr:txBody>".len();
+        shape.replace_range(start..end, &format!("<xdr:txBody>{body}</xdr:txBody>"));
+        let mut xml = d.clone();
+        xml.replace_range(a0..a1, &shape);
+        let mut parts = original.clone();
+        parts.insert(name.clone(), xml.into_bytes());
+        let back = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+        assert_eq!(back.len(), 1);
+        assert_ne!(back[0].kind, ShapeKind::Equation);
+        assert_eq!(back[0].text, expected);
+        let again = shapes(&read_xlsx(&write_xlsx(&book(back)).unwrap()).unwrap().0);
+        assert_eq!(again[0].text, expected);
+    }
 }

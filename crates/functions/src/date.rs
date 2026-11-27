@@ -416,13 +416,17 @@ fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) 
     if days == 0 {
         return num_val(start as f64);
     }
+    // The holidays on working days, still sorted (`holidays` sorts them), so each step counts
+    // the ones it passed with two binary searches rather than a scan of every holiday: a run of
+    // consecutive holidays takes one step per holiday.
+    let hs: Vec<i64> = hs.into_iter().filter(|&h| !mask[weekday0(sys, h)]).collect();
     let dir = days.signum();
     let mut cur = start;
     let mut rem = days.abs();
     while rem > 0 {
         let next = advance(sys, cur, rem, dir, &mask, per_week);
         let (lo, hi) = if dir > 0 { (cur + 1, next) } else { (next, cur - 1) };
-        rem = hs.iter().filter(|&&h| h >= lo && h <= hi && !mask[weekday0(sys, h)]).count() as i64;
+        rem = hs.partition_point(|&h| h <= hi).saturating_sub(hs.partition_point(|&h| h < lo)) as i64;
         cur = next;
         if !(0..=MAX_SERIAL as i64).contains(&cur) {
             return Err(CellError::Num);
@@ -492,7 +496,16 @@ fn yearfrac(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
     let s = day_arg(a, 0, sys)?;
     let e = day_arg(a, 1, sys)?;
-    let basis = if has(a, 2) { to_int(num(a, 2)?)? } else { 0 };
+    let basis = if has(a, 2) {
+        let raw = num(a, 2)?;
+        // Excel rejects any negative basis before truncation: -0.9 would truncate to 0 and slip through.
+        if raw < 0.0 {
+            return Err(CellError::Num);
+        }
+        to_int(raw)?
+    } else {
+        0
+    };
     num_val(yearfrac_core(sys, s, e, basis)?)
 }
 
@@ -755,6 +768,23 @@ mod tests {
         is_err(ev("TIMEVALUE", vec![t("x")]), CellError::Value);
     }
 
+    /// Security: WORKDAY counts the holidays each step passes by binary search, so a long run of
+    /// consecutive holidays is linear work, not one scan of every holiday per holiday.
+    #[test]
+    fn workday_over_many_consecutive_holidays() {
+        let start = d(2000.0, 1.0, 3.0);
+        let hol: Vec<f64> = (1..=200_000).map(|i| start + f64::from(i)).collect();
+        let out = ev("WORKDAY.INTL", vec![n(start), n(1.0), n(11.0), av(col(&hol))]);
+        // Sundays are the only weekend (11): 200,000 days of holidays are skipped, landing on the
+        // first working day after them.
+        let after = start + 200_001.0;
+        let sunday = ev("WEEKDAY", vec![n(after), n(2.0)]) == nv(7.0);
+        close(out, if sunday { after + 1.0 } else { after });
+        // Holidays on a weekend don't push the result out.
+        let fri = d(2026.0, 10.0, 9.0);
+        close(ev("WORKDAY", vec![n(fri), n(1.0), av(col(&[fri + 1.0, fri + 3.0]))]), fri + 4.0);
+    }
+
     #[test]
     fn day_counts() {
         close(ev("DAYS", vec![n(d(2021.0, 3.0, 15.0)), n(d(2021.0, 2.0, 1.0))]), 42.0);
@@ -827,6 +857,19 @@ mod tests {
         close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 30.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 1.0 / 6.0);
         close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.0);
+    }
+
+    #[test]
+    fn yearfrac_rejects_negative_fractional_basis() {
+        // Excel rejects any negative basis: -0.9 must not truncate to 0.
+        let (s, e) = (n(d(2024.0, 1.0, 15.0)), n(d(2025.0, 6.0, 30.0)));
+        is_err(ev("YEARFRAC", vec![s.clone(), e.clone(), n(-0.9)]), CellError::Num);
+        // A positive fraction still truncates to basis 0.
+        let whole = match ev("YEARFRAC", vec![s.clone(), e.clone(), n(0.0)]) {
+            Value::Number(x) => x,
+            v => panic!("YEARFRAC basis 0 gave {v:?}"),
+        };
+        close_tol(ev("YEARFRAC", vec![s, e, n(0.9)]), whole, 1e-12);
     }
 
     #[test]
