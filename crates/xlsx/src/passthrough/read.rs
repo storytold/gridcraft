@@ -575,13 +575,13 @@ impl KeptReader {
 /// then it stays, empty, for the parts they keep.
 fn take_out_notices(kept: &mut Preserved, rel: &PreservedRel) {
     let target = normalize(&rel.target);
-    let others = kept.parts.len() > 1;
     let Some(part) = kept.parts.iter_mut().find(|q| normalize(&q.name) == target) else { return };
     match crate::custom_props::without_notices(&part.data) {
         crate::custom_props::Stripped::Unchanged => {}
         crate::custom_props::Stripped::Part(data) => part.data = Arc::from(data),
         crate::custom_props::Stripped::Nothing(empty) => {
-            if others {
+            // Its own relationships, to a kept part or to an external target, need it there.
+            if !part.rels.is_empty() {
                 part.data = Arc::from(empty);
             } else {
                 kept.parts.clear();

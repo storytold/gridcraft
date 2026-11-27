@@ -250,8 +250,13 @@ fn a_part_with_something_after_its_root_stays_as_it_came() {
             assert!(matches!(without_notices(part.as_bytes()), Stripped::Unchanged), "{part}");
         }
     }
-    // What a well-formed part may hold after its root keeps it readable.
-    let fine = format!("<Properties xmlns=\"{NS}\">{notice}</Properties>\n<!-- a note --><?app x?>\n");
+    // Nor before it.
+    for before in ["garbage", "<![CDATA[x]]>", "&amp;"] {
+        let part = format!(r#"{before}<Properties xmlns="{NS}">{notice}</Properties>"#);
+        assert!(matches!(without_notices(part.as_bytes()), Stripped::Unchanged), "{part}");
+    }
+    // What a well-formed part may hold around its root keeps it readable.
+    let fine = format!("<?xml version=\"1.0\"?>\n<!-- before --><Properties xmlns=\"{NS}\">{notice}</Properties>\n<!-- a note --><?app x?>\n");
     assert!(matches!(without_notices(fine.as_bytes()), Stripped::Nothing(_)));
 }
 
@@ -384,4 +389,21 @@ fn a_part_the_notices_leave_empty_stays_for_the_parts_it_points_to() {
     assert_one_part(&gone);
     // Without a relationship of its own, a part the notices leave empty goes.
     assert_no_part(&saved_without_python(&saved_again(&python_workbook())));
+}
+
+#[test]
+fn a_part_the_notices_leave_empty_keeps_an_external_relationship_of_its_own() {
+    // An external target is never opened, so the relationship is all there is of it.
+    let bytes = repack(
+        &saved_again(&python_workbook()),
+        &[(
+            "docProps/_rels/custom.xml.rels",
+            br#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rV2" Type="urn:vendor/link" Target="https://example.com/a" TargetMode="External"/></Relationships>"#,
+        )],
+    );
+    let gone = saved_without_python(&bytes);
+    let rels = text(&gone, "docProps/_rels/custom.xml.rels");
+    assert!(rels.contains(r#"Target="https://example.com/a""#) && rels.contains("External"), "{rels}");
+    assert!(!text(&gone, "docProps/custom.xml").contains(NOTICE_NAME));
+    assert_one_part(&gone);
 }

@@ -91,6 +91,10 @@ fn scan(bytes: &[u8]) -> Option<Scan> {
             }
             Event::Start(e) => (e, true),
             Event::Empty(e) => (e, false),
+            // Before the root, only a declaration, comments, processing instructions and white
+            // space; inside it, text belongs to what the scan keeps as it is.
+            Event::Text(t) if root.is_none() && !t.iter().all(u8::is_ascii_whitespace) => return None,
+            Event::CData(_) | Event::GeneralRef(_) if root.is_none() => return None,
             _ => continue,
         };
         if root.is_none() {
