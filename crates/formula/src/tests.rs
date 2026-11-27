@@ -79,6 +79,19 @@ fn roundtrips() {
 }
 
 #[test]
+fn long_numeric_literal_round_trips_in_a1_and_r1c1() {
+    let at = gridcraft_core::CellRef::new(0, 0);
+    for input in ["1234567890123456", "-1234567890123456", "0.6666666666666666", "1.234567890123456E+3", "1.7976931348623157E+308"] {
+        let expr = parse(input).unwrap();
+        for printed in [print(&expr), print_r1c1(&expr, at)] {
+            assert_eq!(parse(&printed).unwrap(), expr, "{input} printed as {printed}");
+        }
+    }
+    assert_eq!(rt("0.3"), "0.3");
+    assert_eq!(rt("1E+15"), "1E+15");
+}
+
+#[test]
 fn normalises() {
     assert_eq!(rt("=sum(a1:b2)"), "SUM(A1:B2)");
     assert_eq!(rt("= 1 + 2"), "1+2");
