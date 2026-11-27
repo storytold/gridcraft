@@ -148,6 +148,7 @@ fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
     warnings.extend(enforce_python_limits(&mut wb));
+    crate::cmd::data::migrate_loaded_autofilters(&mut wb);
     Ok((wb, warnings))
 }
 

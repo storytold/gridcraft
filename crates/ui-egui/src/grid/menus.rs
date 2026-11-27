@@ -60,7 +60,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     });
                     app.grid.filter_narrow_search = !has_criterion;
                     app.grid.filter_edited_search = None;
-                    gridcraft_engine::cmd::data::filter_values(&wb, si, col)
+                    gridcraft_engine::cmd::data::filter_choices(&wb, si, col)
                 }
             };
             // A search narrows the visible list; on an unfiltered column without cross-search edits,
@@ -80,13 +80,13 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
             let mut edited = false;
-            let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
+            let all = checks.iter().filter(|c| matches(&c.label)).all(|c| c.checked);
             let mut all_new = all;
             let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
             if ui.checkbox(&mut all_new, label).changed() {
-                for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    if c.1 != all_new {
-                        c.1 = all_new;
+                for c in checks.iter_mut().filter(|c| matches(&c.label)) {
+                    if c.checked != all_new {
+                        c.checked = all_new;
                         edited = true;
                     }
                 }
@@ -94,8 +94,8 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
-                for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    if ui.checkbox(on, v.as_str()).changed() {
+                for c in checks.iter_mut().filter(|c| matches(&c.label)) {
+                    if ui.checkbox(&mut c.checked, c.label.as_str()).changed() {
                         edited = true;
                     }
                 }
@@ -104,7 +104,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 if needle.is_empty() {
                     app.grid.filter_narrow_search = false;
                     app.grid.filter_edited_search = None;
-                } else if checks.iter().all(|(_, on)| *on) {
+                } else if checks.iter().all(|c| c.checked) {
                     app.grid.filter_edited_search = None;
                 } else {
                     app.grid.filter_edited_search = Some(needle.clone());
@@ -113,7 +113,18 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             app.grid.filter_checks = Some(checks.clone());
             app.grid.filter_search.clone_from(&search);
             let narrow = app.grid.filter_narrow_search && !needle.is_empty();
-            let checks: Vec<(String, bool)> = if narrow { checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect() } else { checks };
+            let visible_checks: Vec<gridcraft_engine::cmd::data::FilterChoice> = if narrow {
+                checks
+                    .iter()
+                    .cloned()
+                    .map(|mut c| {
+                        c.checked &= matches(&c.label);
+                        c
+                    })
+                    .collect()
+            } else {
+                checks.clone()
+            };
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button("Clear Filter");
@@ -122,23 +133,18 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(|(_, on)| *on);
+                let any = visible_checks.iter().any(|c| c.checked);
                 let apply = ui.button("Apply");
                 app.grid.filter_buttons = vec![ascending.id, descending.id, clear.id, apply.id];
                 if apply.clicked() || (enter && any) {
-                    let mut checks = gridcraft_engine::cmd::data::filter_selection(&wb, si, col, &checks);
+                    let mut merged = gridcraft_engine::cmd::data::filter_choices_selection(&wb, si, col, &visible_checks);
                     if narrow {
-                        for (value, on) in &mut checks {
-                            *on &= matches(value);
+                        for c in &mut merged {
+                            c.checked &= matches(&c.label);
                         }
                     }
-                    let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
-                    let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
-                    let p = if checks.iter().all(|(_, b)| *b) {
-                        json!({"column": col_to_letters(col), "clear": true})
-                    } else {
-                        json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})
-                    };
+                    let active_checks: Vec<_> = merged.iter().map(|c| (c, c.checked)).collect();
+                    let p = gridcraft_engine::cmd::data::filter_choices_params(&col_to_letters(col), &active_checks);
                     let _ = app.run("data.filterBy", p);
                     close = true;
                 }
@@ -227,12 +233,16 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {
                                 let a = d.selection.active;
-                                let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
+                                let col = col_to_letters(a.col);
+                                let params =
+                                    d.wb.active()
+                                        .map(|sh| gridcraft_engine::cmd::data::filter_by_cell_params(&d.wb, sh, a, &col))
+                                        .unwrap_or_else(|| json!({"column": col, "values": [], "blanks": true}));
                                 let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
                                 if !has {
                                     let _ = app.run("data.filter", json!({}));
                                 }
-                                app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
+                                app.run_or_alert("data.filterBy", params);
                             }
                         }
                         "edit.copy" | "edit.cut" => {
