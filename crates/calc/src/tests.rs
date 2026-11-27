@@ -3510,13 +3510,17 @@ fn aggregates_over_ranges_match_a_plain_fold_bit_for_bit() {
     let check = |wb: &Workbook, when: &str| {
         let sh = wb.sheet(0).unwrap();
         for (cell, f, lead, blocks) in &oracle {
-            let (mut sum, mut count, mut error) = (lead.unwrap_or(0.0), u64::from(lead.is_some()), None);
+            let (mut nums, mut count, mut error) = (Vec::new(), 0u64, None);
+            if let Some(l) = *lead {
+                nums.push(l);
+                count += 1;
+            }
             for &(r0, c0, r1, c1) in blocks {
                 for r in r0..=r1 {
                     for col in c0..=c1 {
                         match sh.value(CellRef::new(r, col)) {
                             Value::Number(n) => {
-                                sum += n;
+                                nums.push(n);
                                 count += 1;
                             }
                             Value::Error(e) if *f != "COUNT" => error = error.or(Some(e)),
@@ -3525,12 +3529,15 @@ fn aggregates_over_ranges_match_a_plain_fold_bit_for_bit() {
                     }
                 }
             }
+            // SUM snaps only its last addition, matching Acc::finish. AVERAGE and the
+            // running total use the unsapped left-to-right fold.
+            let plain = nums.iter().fold(0.0, |a, n| a + n);
             let want = match (error, *f) {
                 (Some(e), _) => Value::Error(e),
-                (_, "SUM") => Value::number(sum),
+                (_, "SUM") => Value::number(gridcraft_core::arith::sum_snapped(&nums)),
                 (_, "COUNT") => Value::number(count as f64),
                 (_, _) if count == 0 => Value::Error(CellError::Div0),
-                _ => Value::number(sum / count as f64),
+                _ => Value::number(plain / count as f64),
             };
             let got = sh.value(*cell);
             let same = match (&got, &want) {
