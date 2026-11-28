@@ -1255,3 +1255,23 @@ fn python_mode_does_not_start_on_a_draft_typed_inside_a_spill() {
     let a2 = app.session.active().and_then(|d| d.wb.sheet(0)).and_then(|sh| sh.cell(gridcraft_engine::core::CellRef::new(1, 0)).cloned());
     assert_eq!(a2.map(|c| (c.input_text(), c.py.is_some())), Some(("5".to_string(), false)));
 }
+
+#[test]
+fn invalid_object_ids_leave_the_selection_unchanged() {
+    let mut app = test_app();
+    let shape = app.session.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap();
+    let id = shape["shape"].as_u64().unwrap();
+    let ctx = egui::Context::default();
+    call(&mut app, &ctx, "ui.object.select", json!({"id": id, "kind": "shape"}));
+    let selected = app.selected_object;
+    assert!(selected.is_some());
+    for id in [Json::Null, json!("1"), json!(-1), json!(1.5), json!(true), json!([]), json!({}), json!(u64::MAX)] {
+        let Outcome::Done(reply) = handle(&mut app, &ctx, "ui.object.select", &json!({"id": id})) else {
+            panic!("object selection answers immediately");
+        };
+        assert_eq!(reply["ok"], false, "{id}: {reply}");
+        assert_eq!(app.selected_object, selected, "invalid id {id} must preserve the selected object");
+    }
+    call(&mut app, &ctx, "ui.object.select", json!({}));
+    assert_eq!(app.selected_object, None, "omitting id still clears the selection");
+}
