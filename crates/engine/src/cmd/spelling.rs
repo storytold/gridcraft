@@ -155,9 +155,12 @@ fn spelling(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn add_word(s: &mut Session, p: &Json) -> Result<Json> {
-    let w = str_param(p, "word").ok_or_else(|| bad("review.addToDictionary", "missing `word`"))?.to_string();
-    if !s.prefs.user_dictionary.iter().any(|u| u.eq_ignore_ascii_case(&w)) {
-        s.prefs.user_dictionary.push(w);
+    let w = str_param(p, "word").ok_or_else(|| bad("review.addToDictionary", "missing `word`"))?.trim();
+    if w.is_empty() {
+        return Err(bad("review.addToDictionary", "`word` must not be empty"));
+    }
+    if !s.prefs.user_dictionary.iter().any(|u| u.eq_ignore_ascii_case(w)) {
+        s.prefs.user_dictionary.push(w.to_string());
     }
     ok()
 }
@@ -188,6 +191,20 @@ fn thesaurus(_: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn add_to_dictionary_trims_words_and_rejects_blanks() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let command = "review.addToDictionary";
+
+        assert!(s.execute(command, json!({"word": " \t"})).is_err());
+        assert!(s.prefs.user_dictionary.is_empty());
+
+        s.execute(command, json!({"word": " GridCraft \t"})).unwrap();
+        s.execute(command, json!({"word": "gridcraft"})).unwrap();
+        assert_eq!(s.prefs.user_dictionary, ["GridCraft"]);
+    }
 
     #[test]
     fn edits1_is_capped_for_very_long_words() {
