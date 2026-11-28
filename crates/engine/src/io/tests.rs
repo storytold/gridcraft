@@ -920,6 +920,37 @@ fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces()
     assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("a b"));
 }
 
+/// A two-row page with a leading comment sized so that its `<html` tag starts at byte `at` of the
+/// UTF-8 file (#4675), or at byte `at` of the UTF-16 LE file, byte-order mark included.
+fn page_with_tag_at(at: usize, utf16: bool) -> Vec<u8> {
+    let page = "<html><body><table><tr><td>Caf\u{e9}</td><td>ASCII_SENTINEL</td></tr><tr><td>SECOND_ROW</td></tr></table></body></html>";
+    let unit = if utf16 { 2 } else { 1 };
+    let fixed = if utf16 { 2 + "<!--\n\n-->\n".len() * 2 } else { "<!--\n\n-->\n".len() };
+    let filler = "x".repeat((at - fixed) / unit);
+    let text = format!("<!--\n{filler}\n-->\n{page}");
+    let bytes = if utf16 { [0xFF, 0xFE].into_iter().chain(text.encode_utf16().flat_map(u16::to_le_bytes)).collect() } else { text.into_bytes() };
+    assert_eq!(bytes.get(at..at + 5 * unit).map(|b| b.iter().filter(|&&c| c != 0).copied().collect::<Vec<u8>>()), Some(b"<html".to_vec()));
+    bytes
+}
+
+#[test]
+fn a_web_page_opens_wherever_its_tag_falls_against_the_first_64_kib() {
+    // The page is told from the start of the file, read 64 KiB at a time: a tag that window cuts in
+    // two, or one that starts past it after a long comment, was read as text (#4675).
+    for utf16 in [false, true] {
+        let offsets = if utf16 { (65_526..=65_540).step_by(2).collect::<Vec<_>>() } else { (65_528..=65_540).collect() };
+        for at in offsets {
+            let (wb, _) = open_bytes("source.htm", &page_with_tag_at(at, utf16)).unwrap();
+            let sh = wb.sheet(0).unwrap();
+            let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+            let case = format!("tag at byte {at}, utf16 {utf16}");
+            assert_eq!(v("A1"), gridcraft_core::Value::text("Caf\u{e9}"), "{case}");
+            assert_eq!(v("B1"), gridcraft_core::Value::text("ASCII_SENTINEL"), "{case}");
+            assert_eq!(v("A2"), gridcraft_core::Value::text("SECOND_ROW"), "{case}");
+        }
+    }
+}
+
 /// A small SYLK file written the way spreadsheets export one: a header, number formats, column
 /// widths, cells that carry on from the last row or column, formulas in R1C1 and a shared formula.
 const SYLK: &str = "ID;PTEST;N;E\r\nP;PGeneral\r\nP;P0.00\r\nP;Pyyyy\\-mm\\-dd\r\nF;W1 1 18\r\nF;W2 3 9\r\nB;Y5;X7\r\n\

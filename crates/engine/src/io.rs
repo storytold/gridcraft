@@ -385,6 +385,38 @@ fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
 /// How much of a text file is read to tell whether it is a web page.
 const HTML_SNIFF_BYTES: usize = 64 << 10;
 
+/// How many characters after the comments tell a web page by its first tag.
+const HTML_HEAD_CHARS: usize = 16;
+
+/// The first [`HTML_HEAD_CHARS`] characters of `bytes` after a byte-order mark, leading whitespace
+/// and the comments an exporter writes before the page (`<!-- ... -->`), lowercased. The start is
+/// decoded [`HTML_SNIFF_BYTES`] at a time, and the window doubles while those characters run past
+/// its end: a tag the first window cuts in two, or one that starts after a long comment, is still
+/// seen (#4675). A file that doesn't start with a comment is decoded once, in the first window.
+fn page_start(bytes: &[u8]) -> String {
+    let mut window = HTML_SNIFF_BYTES;
+    loop {
+        let whole = window >= bytes.len();
+        let start = gridcraft_xlsx::decode_text(bytes.get(..window).unwrap_or(bytes));
+        let mut rest = start.trim_start_matches('\u{feff}').trim_start();
+        let mut open_comment = false;
+        while let Some(after) = rest.strip_prefix("<!--") {
+            match after.find("-->").and_then(|end| after.get(end + 3..)) {
+                Some(more) => rest = more.trim_start(),
+                None => {
+                    open_comment = true;
+                    break;
+                }
+            }
+        }
+        let head: String = rest.chars().take(HTML_HEAD_CHARS).collect();
+        if whole || (!open_comment && head.chars().count() == HTML_HEAD_CHARS) {
+            return head.to_ascii_lowercase();
+        }
+        window = window.saturating_mul(2);
+    }
+}
+
 /// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
 /// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
 /// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
@@ -396,16 +428,7 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     if matches!(kind, Some(FileKind::Json)) || bytes.len() > gridcraft_xlsx::MAX_CSV_BYTES {
         return None;
     }
-    let start = gridcraft_xlsx::decode_text(bytes.get(..HTML_SNIFF_BYTES).unwrap_or(bytes));
-    // Comments an exporter writes before the page (`<!-- ... -->`) don't make it something else.
-    let mut rest = start.trim_start_matches('\u{feff}').trim_start();
-    while let Some(after) = rest.strip_prefix("<!--") {
-        match after.find("-->").and_then(|end| after.get(end + 3..)) {
-            Some(more) => rest = more.trim_start(),
-            None => break,
-        }
-    }
-    let head: String = rest.chars().take(16).collect::<String>().to_ascii_lowercase();
+    let head = page_start(bytes);
     if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
         return None;
     }
