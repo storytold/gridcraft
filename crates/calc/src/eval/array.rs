@@ -123,7 +123,7 @@ pub(super) fn broadcast_len(rows: usize, cols: usize) -> Option<usize> {
     usize::try_from(cells).ok()
 }
 
-fn broadcast_dim(a: usize, b: usize) -> usize {
+pub(super) fn broadcast_dim(a: usize, b: usize) -> usize {
     if a == 1 {
         b
     } else if b == 1 {

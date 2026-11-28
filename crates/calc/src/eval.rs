@@ -913,6 +913,17 @@ mod fuel_tests {
     }
 
     #[test]
+    fn ifs_over_arrays_is_charged_per_cell_and_pair() {
+        let wb = Workbook::default();
+        // A 100 x 100 result from a row and a column, read against 3 pairs: 30,000 units.
+        let src = "=ROWS(IFS(SEQUENCE(1,100)>SEQUENCE(100),1,SEQUENCE(1,100)<SEQUENCE(100),2,TRUE,3))";
+        let (v, _) = eval_work(wb.clone(), EVAL_WORK, src);
+        assert_eq!(v, Value::number(100.0));
+        let (v, _) = eval_work(wb, 20_000, src);
+        assert!(is_calc(&v), "{v:?}");
+    }
+
+    #[test]
     fn an_aggregate_inside_every_lambda_call_spends_work() {
         let wb = Workbook::default();
         // 100 calls, each summing the 10,000 values of a captured array: about a million units.

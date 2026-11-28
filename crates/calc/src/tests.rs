@@ -871,6 +871,29 @@ fn ifs_and_lazy() {
 }
 
 #[test]
+fn ifs_with_array_conditions_spills_one_result_per_element() {
+    let mut t = T::new();
+    // The formula from #4611: every element picks the value of its first true condition.
+    t.set("A1", "=LET(n,--SEQUENCE(4),IFS(n<=1,\"one\",n<=3,\"few\",n<=4,\"four\",1,\"\"))");
+    assert_eq!(t.get("A1"), Value::from("one"));
+    assert_eq!(t.get("A2"), Value::from("few"));
+    assert_eq!(t.get("A3"), Value::from("few"));
+    assert_eq!(t.get("A4"), Value::from("four"));
+    // An element no condition holds for is #N/A, an erroring condition gives its error, and the
+    // values can be arrays of the same shape.
+    t.set("B1", "1");
+    t.set("B2", "0");
+    t.set("B3", "=1/0");
+    t.set("C1", "=IFS(B1:B3=1,{10;20;30},B1:B3=0,\"zero\")");
+    assert_eq!(t.num("C1"), 10.0);
+    assert_eq!(t.get("C2"), Value::from("zero"));
+    assert_eq!(t.get("C3"), Value::Error(CellError::Div0));
+    t.set("E1", "=IFS({1,2}=3,\"x\")");
+    assert_eq!(t.get("E1"), Value::Error(CellError::NA));
+    assert_eq!(t.get("F1"), Value::Error(CellError::NA));
+}
+
+#[test]
 fn choose_with_an_array_index() {
     let mut t = T::new();
     for (i, (k, v)) in [(1, 10), (2, 20), (3, 30)].iter().enumerate() {

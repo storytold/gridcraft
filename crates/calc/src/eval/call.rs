@@ -1,4 +1,4 @@
-use super::array::{Acc, Agg, zip2, zip3};
+use super::array::{Acc, Agg, broadcast_dim, broadcast_len, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
@@ -19,21 +19,7 @@ impl<'h> Evaluator<'h> {
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => self.if_call(args),
-            "IFS" => {
-                if args.len() < 2 || !args.len().is_multiple_of(2) {
-                    return err(CellError::Value);
-                }
-                for pair in args.chunks(2) {
-                    let [c, v] = pair else { break };
-                    let cv = self.value(c);
-                    match cv.scalar().to_bool() {
-                        Ok(true) => return self.eval(v),
-                        Ok(false) => {}
-                        Err(e) => return err(e),
-                    }
-                }
-                err(CellError::NA)
-            }
+            "IFS" => self.ifs_call(args),
             "IFERROR" | "IFNA" => self.if_error_call(name, args),
             "CHOOSE" => self.choose_call(args),
             "SWITCH" => self.switch_call(args),
@@ -176,6 +162,65 @@ impl<'h> Evaluator<'h> {
             },
             Err(error) => err(error),
         }
+    }
+
+    fn ifs_call(&mut self, args: &[Expr]) -> Ev {
+        if args.len() < 2 || !args.len().is_multiple_of(2) {
+            return err(CellError::Value);
+        }
+        let pairs = args.as_chunks::<2>().0;
+        for (i, [c, v]) in pairs.iter().enumerate() {
+            let condition = self.value(c);
+            if let Value::Array(_) = condition {
+                return self.ifs_lifted(condition, &pairs[i..]);
+            }
+            match condition.to_bool() {
+                Ok(true) => return self.eval(v),
+                Ok(false) => {}
+                Err(e) => return err(e),
+            }
+        }
+        err(CellError::NA)
+    }
+
+    /// IFS from the first pair whose condition is an array: each element of the broadcast result
+    /// takes the value of its first true condition, the error of a condition that fails before
+    /// one is true, or `#N/A` when none is.
+    fn ifs_lifted(&mut self, first: Value, pairs: &[[Expr; 2]]) -> Ev {
+        let mut first = Some(first);
+        let mut items = Vec::with_capacity(pairs.len());
+        for [c, v] in pairs {
+            let condition = match first.take() {
+                Some(f) => f,
+                None => self.value(c),
+            };
+            items.push((condition, self.value(v)));
+        }
+        let dims = |v: &Value| if let Value::Array(a) = v { (a.rows, a.cols) } else { (1, 1) };
+        let (rows, cols) =
+            items.iter().flat_map(|(c, v)| [dims(c), dims(v)]).fold((1, 1), |(r, k), (vr, vc)| (broadcast_dim(r, vr), broadcast_dim(k, vc)));
+        let Some(n) = broadcast_len(rows, cols) else { return err(CellError::Num) };
+        // Every cell of the result may read every condition: charged before the loop.
+        if !self.spend((n as u64).saturating_mul(items.len() as u64)) {
+            return err(CellError::Calc);
+        }
+        let get = |v: &Value, r: usize, col: usize| if let Value::Array(a) = v { a.get_broadcast(r, col) } else { v.clone() };
+        let mut data = Vec::with_capacity(n);
+        for r in 0..rows {
+            for col in 0..cols {
+                let mut out = Value::Error(CellError::NA);
+                for (condition, value) in &items {
+                    match get(condition, r, col).to_bool() {
+                        Ok(true) => out = get(value, r, col),
+                        Ok(false) => continue,
+                        Err(e) => out = Value::Error(e),
+                    }
+                    break;
+                }
+                data.push(out);
+            }
+        }
+        Ev::V(Value::from(Array { rows, cols, data }))
     }
 
     fn if_error_call(&mut self, name: &str, args: &[Expr]) -> Ev {
