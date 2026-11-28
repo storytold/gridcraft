@@ -713,7 +713,10 @@ fn build_craft_rows(data: SheetCellData<'_>, sid: &dyn Fn(gridcraft_model::Style
                     crate::array_formula::Export::Unchanged => None,
                     crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
                     crate::array_formula::Export::Legacy(e) => {
-                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
+                        legacy_cell = cell.map(|x| Cell {
+                            formula: Some(std::sync::Arc::new(Formula { file_functions: f.file_functions.clone(), ..Formula::from_expr(e) })),
+                            ..x.clone()
+                        });
                         None
                     }
                 }

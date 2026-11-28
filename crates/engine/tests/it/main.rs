@@ -17,6 +17,7 @@ mod extreme_selection_moves;
 mod filter_whitespace;
 mod font_scheme_minor;
 mod format_as_table_restyle;
+mod function_prefixes;
 mod hidden_sheet_navigation;
 mod ink_roundtrip;
 mod line_count_overflow;

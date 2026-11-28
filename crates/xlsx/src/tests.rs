@@ -16,6 +16,7 @@ mod encrypted_tests;
 mod equation_tests;
 mod extlist;
 mod fixtures;
+mod function_prefixes;
 mod google_sheets_dummy;
 mod ink_roundtrip;
 mod literal_category_roundtrip;

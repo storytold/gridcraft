@@ -177,7 +177,8 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
         }
         // Text round trip: the stored expression is exactly what the text parses to.
         if let Some(out) = reads_back(out) {
-            return Some(Formula::new(&gridcraft_formula::print(&out)));
+            // Implicit intersection changes operators only, so every imported call keeps its namespace.
+            return Some(Formula { file_functions: formula.file_functions.clone(), ..Formula::from_expr(out) });
         }
         // The reading's `@` take it past the parser's nesting limit: handled as unfinished.
     }
@@ -188,7 +189,10 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     // it was read.
     let whole = matches!(expr.as_ref(), Expr::Unary(UnOp::At, _));
     let multi = legacy.top != Kind::Scalar || (legacy.certain && legacy.complete);
-    (multi && !whole).then(|| self::at(expr.as_ref().clone())).and_then(reads_back).map(|e| Formula::new(&gridcraft_formula::print(&e)))
+    (multi && !whole)
+        .then(|| self::at(expr.as_ref().clone()))
+        .and_then(reads_back)
+        .map(|e| Formula { file_functions: formula.file_functions.clone(), ..Formula::from_expr(e) })
 }
 
 /// `e` when its text (the printer writes only the parentheses the expression has) reads back as
