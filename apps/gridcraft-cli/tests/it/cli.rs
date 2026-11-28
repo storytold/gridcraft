@@ -174,6 +174,50 @@ fn check_exit_codes_and_json() {
 }
 
 #[test]
+fn check_fails_when_a_workbook_lacks_a_formula_oracle() {
+    use gridcraft_engine::core::{CellRef, Value};
+    use gridcraft_engine::model::{Cell, Formula, Workbook};
+    use std::sync::Arc;
+
+    let dir = tmpdir("check-no-oracle");
+    let write_book = |name: &str, formula: &str, value: Value| {
+        // Self-generated XLSX: the absent cache matches a workbook saved by
+        // a producer that cannot calculate it, without a third-party fixture.
+        let path = dir.join(name);
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().set_cell(CellRef::new(0, 0), Cell { value, formula: Some(Arc::new(Formula::new(formula))), ..Default::default() });
+        std::fs::write(&path, gridcraft_engine::io::save_bytes(&wb, name).unwrap()).unwrap();
+        path
+    };
+    let missing = write_book("missing.xlsx", "=2+3", Value::Empty);
+    let matching = write_book("matching.xlsx", "=2+3", Value::number(5.0));
+    let volatile = write_book("volatile.xlsx", "=RAND()", Value::number(0.5));
+    let empty = dir.join("empty.xlsx");
+    std::fs::write(&empty, gridcraft_engine::io::save_bytes(&Workbook::new(), "empty.xlsx").unwrap()).unwrap();
+
+    let run_check = |paths: &[&std::path::Path]| {
+        let mut args = vec!["check", "--json"];
+        args.extend(paths.iter().map(|p| p.to_str().unwrap()));
+        let output = run(&args);
+        let code = output.status.code();
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        (code, report)
+    };
+    let (missing_code, missing_report) = run_check(&[&missing]);
+    let (mixed_code, mixed_report) = run_check(&[&matching, &missing]);
+    let (clean_code, _) = run_check(&[&matching, &volatile, &empty]);
+    let _ = std::fs::remove_dir_all(dir);
+
+    assert_eq!(missing_report["totals"]["noOracle"], 1);
+    assert_eq!(missing_report["totals"]["checked"], 0);
+    assert_eq!(missing_report["totals"]["roundTripDiffering"], 0);
+    assert_eq!(missing_code, Some(1));
+    assert_eq!(mixed_report["totals"]["checked"], 1);
+    assert_eq!(mixed_code, Some(1));
+    assert_eq!(clean_code, Some(0));
+}
+
+#[test]
 fn check_rejects_an_empty_scan() {
     let dir = tmpdir("check-empty");
     std::fs::write(dir.join("notes.txt"), "not a workbook").unwrap();

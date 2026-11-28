@@ -106,9 +106,12 @@ Files that fail to open are reported with GridCraft's error and don't stop the r
 directory-entry/metadata errors, and subtrees or files omitted by the depth (32) and file (100,000) limits appear
 as failed path reports too, in both human and JSON output. Intentional hidden/lock-file exclusions remain ignored.
 JSON `totals.files` includes failed discovery paths; `totals.opened` counts only workbooks that opened successfully.
-An empty scan fails with a diagnostic. Exit code: 0 when at least one file was checked, discovery was complete, and every file
-opened with no mismatch and no round-trip difference, 1 otherwise, 2 on a usage error. `--max-report` caps the
-examples listed per file and category (counts are always complete).
+An empty scan fails with a diagnostic. Exit code: 0 when at least one workbook was checked, discovery was complete,
+and every workbook opened with no mismatch and no round-trip difference; 1 on failure, 2 on a usage error.
+A workbook with non-volatile formulas but no comparable cached results also exits 1, even in a batch where other
+workbooks do have comparisons. The report shows this as zero checked and a non-zero no-oracle count for the file.
+A workbook with no formulas or only volatile formulas still gets a round-trip check and does not fail for lack of
+comparisons. `--max-report` caps the examples listed per file and category (counts are always complete).
 
 The human report prints each file's mismatches and differing categories, a summary table, the most mismatching
 functions, mismatch signatures and totals. `--json` prints one object (schema `gridcraft-check/1`; new fields may be
