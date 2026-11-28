@@ -1544,6 +1544,46 @@ fn subtotal_and_aggregate_cap_cells_visited() {
     assert_eq!((t.num("E5"), t.num("E6"), t.num("E7")), (3.0, 3.0, 2.0));
 }
 
+/// Native Excel (#4277): AGGREGATE 14-19 answer #VALUE! when k is an error reached through a
+/// reference (a cell, a name, INDEX, INDIRECT), even with an error in the data too; a computed
+/// error k (`NA()`, `E1+0`) stays itself.
+#[test]
+fn aggregate_k_error_through_a_reference_is_value() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "10"), ("A2", "20"), ("A3", "30"), ("A4", "40"), ("E1", "=NA()"), ("E3", "=1/0"), ("E4", "2")] {
+        t.set(at, v);
+    }
+    t.set("C1", "10");
+    t.set("C2", "=1/0");
+    t.wb.names.push(gridcraft_model::DefinedName {
+        name: "ErrorCell".into(),
+        scope: None,
+        formula: "Sheet1!$E$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let value = Value::Error(CellError::Value);
+    let rows: [(&str, Value); 12] = [
+        ("=AGGREGATE(14,6,A1:A4,E1)", value.clone()),
+        ("=AGGREGATE(15,6,A1:A4,E3)", value.clone()),
+        ("=AGGREGATE(19,6,A1:A4,E1)", value.clone()),
+        ("=AGGREGATE(14,6,A1:A4,ErrorCell)", value.clone()),
+        ("=AGGREGATE(14,6,A1:A4,INDEX(E1:E2,1))", value.clone()),
+        ("=AGGREGATE(14,6,A1:A4,INDIRECT(\"E1\"))", value.clone()),
+        ("=AGGREGATE(14,4,C1:C2,E1)", value.clone()),
+        ("=AGGREGATE(14,6,A1:A4,E1+0)", Value::Error(CellError::NA)),
+        ("=AGGREGATE(14,6,A1:A4,NA())", Value::Error(CellError::NA)),
+        ("=AGGREGATE(15,6,A1:A4,INDEX(E3:E4,1)+0)", Value::Error(CellError::Div0)),
+        ("=AGGREGATE(14,6,A1:A4,E4)", Value::Number(30.0)),
+        ("=AGGREGATE(14,6,A1:A4,2)", Value::Number(30.0)),
+    ];
+    for (i, (f, want)) in rows.into_iter().enumerate() {
+        let at = format!("G{}", i + 1);
+        t.set(&at, f);
+        assert_eq!(t.get(&at), want, "{f}");
+    }
+}
+
 /// SUBTOTAL leaves out rows a filter hides for every function number, while 1-11 keep rows
 /// hidden by hand (as in ConditionalFormattingSamples.xlsx, where `SUBTOTAL(9,Table69[Sales])`
 /// under a filtered table adds only the visible rows).

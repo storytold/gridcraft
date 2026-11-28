@@ -361,8 +361,20 @@ impl<'h> Evaluator<'h> {
         let mut values = Vec::new();
         let mut k = None;
         let refs = if name == "AGGREGATE" && func >= 14 { &rest[..1.min(rest.len())] } else { rest };
-        if name == "AGGREGATE" && func >= 14 {
-            k = rest.get(1).map(|e| self.value(e));
+        if name == "AGGREGATE"
+            && func >= 14
+            && let Some(e) = rest.get(1)
+        {
+            let ev = self.eval(e);
+            let from_ref = matches!(ev, Ev::R(_));
+            let v = self.deref(ev);
+            // An error k reached through a reference (a cell, a name, INDEX, INDIRECT) is
+            // #VALUE! in Excel, ahead of any error in the data; a computed error such as NA() or
+            // E1+0 stays itself (#4277).
+            if from_ref && v.is_error() {
+                return err(CellError::Value);
+            }
+            k = Some(v);
         }
         // Every cell visited (even one skipped as hidden, nested or an error) and every value
         // counts against one budget for the whole call. All arguments are evaluated (references
