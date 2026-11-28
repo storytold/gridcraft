@@ -64,6 +64,21 @@ fn row_height_opens_with_the_height_ready_to_type() {
 }
 
 #[test]
+fn a_form_of_several_fields_opens_ready_to_type_in_the_first() {
+    // Page Setup's first field is the left margin; the other margins and the scaling come after it.
+    let mut h = harness();
+    let before = h.state().session.active().unwrap().wb.active().unwrap().print.clone();
+    h.state_mut().open_dialog("pageSetup", json!({}));
+    h.run_steps(6);
+    type_and_enter(&mut h, "1.5");
+    assert!(h.state().dialog.is_none(), "Enter confirmed the dialog");
+    let print = h.state().session.active().unwrap().wb.active().unwrap().print.clone();
+    assert_eq!(print.margins[0], 1.5, "the typing went to the first field, the left margin");
+    assert_eq!(print.margins[1..], before.margins[1..], "every other margin is as it was");
+    assert_eq!((print.scale, print.fit_to), (before.scale, before.fit_to), "the scaling is as it was");
+}
+
+#[test]
 fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_focused() {
     let mut h = harness();
     h.state_mut().open_dialog("commandSearch", json!({}));
