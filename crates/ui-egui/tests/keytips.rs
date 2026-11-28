@@ -827,3 +827,45 @@ fn borders_keytip_opens_the_borders_menu() {
     assert_eq!(h.state().keytips.prefix(), Some("H"), "Esc backs out to the Home letters");
     assert!(!egui::Popup::is_any_open(&h.ctx), "and closes the menu");
 }
+
+#[test]
+fn review_notes_keytips_open_the_menu_and_create_or_edit_the_note() {
+    use egui::accesskit::Role;
+
+    let mut h = harness_on(blank(), OperatingSystem::Windows);
+    alt_down(&mut h, Key::AltLeft);
+    alt_letter(&mut h, Key::R);
+    alt_up(&mut h, Key::AltLeft);
+    letter(&mut h, Key::N, false);
+    assert_eq!(h.state().keytips.prefix(), Some("RN"));
+    assert!(h.get_by_role_and_label(Role::Button, "New Note").is_focused());
+    assert!(h.state().message.is_none() && h.state().toast.is_none());
+    assert!(h.state().dialog.is_none());
+
+    key(&mut h, Key::Escape);
+    assert_eq!(h.state().keytips.prefix(), Some("R"));
+    assert!(h.query_by_label("New Note").is_none());
+    letter(&mut h, Key::N, false);
+    letter(&mut h, Key::N, false);
+    assert_eq!(h.state().dialog.as_ref().unwrap().title, "New Note");
+    assert!(h.query_by_label("Show All Notes").is_none());
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "review.newNote"));
+    events(&mut h, [Event::Text("Original note".into())]);
+    key(&mut h, Key::Tab);
+    key(&mut h, Key::Enter);
+    assert!(h.state().dialog.is_none());
+
+    sequence(&mut h, &[Key::R, Key::N], false);
+    assert!(h.get_by_role_and_label(Role::Button, "Edit Note").is_focused());
+    letter(&mut h, Key::E, false);
+    let edit = h.state().dialog.as_ref().unwrap();
+    assert_eq!(edit.title, "Edit Note");
+    assert_eq!(edit.values["text"], "Original note");
+    events(&mut h, [Event::Text("Updated note".into())]);
+    key(&mut h, Key::Tab);
+    key(&mut h, Key::Enter);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    let note = &sheet.comments[&CellRef::new(0, 0)];
+    assert!(!note.threaded);
+    assert_eq!(note.text, "Updated note");
+}

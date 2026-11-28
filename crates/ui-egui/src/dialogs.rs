@@ -564,17 +564,19 @@ impl Dialog {
             ),
             "comment" => {
                 let threaded = p("threaded").as_bool().unwrap_or(true);
-                let existing = app
-                    .session
-                    .active()
-                    .and_then(|d| d.wb.active().and_then(|s| s.comments.get(&d.selection.active).map(|c| c.text.clone())))
-                    .unwrap_or_default();
+                let existing = app.session.active().and_then(|d| d.wb.active()?.comments.get(&d.selection.active)).filter(|c| c.threaded == threaded);
                 Dialog::form(
                     if threaded { "comment" } else { "note" },
-                    if threaded { "New Comment" } else { "New Note" },
+                    if threaded {
+                        "New Comment"
+                    } else if existing.is_some() {
+                        "Edit Note"
+                    } else {
+                        "New Note"
+                    },
                     if threaded { "review.newComment" } else { "review.newNote" },
                     vec![Text { key: "text", label: if threaded { "Start a conversation:" } else { "Note:" } }],
-                    json!({"text": existing}),
+                    json!({"text": existing.map_or("", |c| c.text.as_str())}),
                 )
             }
             // Asks before a web or e-mail link leaves the workbook. OK opens it through

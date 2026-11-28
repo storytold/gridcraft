@@ -2425,7 +2425,44 @@ fn keytip_rl_() {
 fn keytip_rn_() {
     let mut h = harness(blank());
     sequence(&mut h, "RN", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "RN must invoke review.nextComment and surface its missing-params error");
+    assert_eq!(h.state().keytips.prefix(), Some("RN"), "RN must stay armed waiting for more input");
+}
+
+#[test]
+fn keytip_rnn_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RNN", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "RNN must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_rne_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RNE", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "RNE must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
+}
+
+#[test]
+fn keytip_rnh_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RNH", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "review.showNote"), "RNH must journal review.showNote");
+}
+
+#[test]
+fn keytip_rns_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RNS", false);
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "RNS must run review.showAllNotes cleanly");
+}
+
+#[test]
+fn keytip_rnc_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RNC", false);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "review.convertToComments"), "RNC must journal review.convertToComments");
 }
 
 #[test]
@@ -2470,7 +2507,8 @@ fn keytip_rs_() {
 fn keytip_rtn_() {
     let mut h = harness(blank());
     sequence(&mut h, "RTN", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "review.newNote"), "RTN must journal review.newNote");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "RTN must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -2478,6 +2516,13 @@ fn keytip_rv_() {
     let mut h = harness(blank());
     sequence(&mut h, "RV", false);
     assert!(h.state().message.is_some() || h.state().toast.is_some(), "RV must invoke review.previousComment and surface its missing-params error");
+}
+
+#[test]
+fn keytip_rx_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "RX", false);
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "RX must invoke review.nextComment and surface its missing-params error");
 }
 
 #[test]
@@ -3086,7 +3131,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 419;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

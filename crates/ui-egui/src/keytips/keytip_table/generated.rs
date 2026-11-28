@@ -327,14 +327,20 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("RD", Entry::Finish(Action::Command("review.deleteComment"))), // Excel: Delete Comment
     ("RG", Entry::Finish(Action::Pending("review.showChanges"))),   // pending; Excel: Track Changes; reserved until the command lands
     ("RL", Entry::Finish(Action::Pending("review.translate"))),     // pending; Excel: Translate; feature gap; reserved until the command lands
-    ("RN", Entry::Finish(Action::Command("review.nextComment"))),   // Excel: Next Comment
+    ("RN", Entry::Continue),                                        // Excel: Notes; group level
+    ("RNN", Entry::Finish(Action::Control("review.newNote"))),      // Excel: New Note
+    ("RNE", Entry::Finish(Action::Control("review.editNote"))),     // Excel: Edit Note
+    ("RNH", Entry::Finish(Action::Command("review.showNote"))),     // Excel: Show/Hide Note
+    ("RNS", Entry::Finish(Action::Command("review.showAllNotes"))), // Excel: Show All Notes
+    ("RNC", Entry::Finish(Action::Command("review.convertToComments"))), // Excel: Convert to Comments
     ("RO", Entry::Finish(Action::Command("review.protectWorkbook"))), // Excel: Protect and Share Workbook
     ("RPS", Entry::Finish(Action::Dialog("protectSheet"))),         // Excel: Protect Sheet
     ("RPW", Entry::Finish(Action::Command("review.protectWorkbook"))), // Excel: Protect Workbook
     ("RRS", Entry::Finish(Action::Pending("review.smartLookup"))),  // pending; Excel: Smart Lookup; feature gap; reserved until the command lands
     ("RS", Entry::Finish(Action::Dialog("spelling"))),              // Excel: Spelling
-    ("RTN", Entry::Finish(Action::Command("review.newNote"))),      // Excel: New Note
+    ("RTN", Entry::Finish(Action::Control("review.newNote"))),      // Excel: New Note
     ("RV", Entry::Finish(Action::Command("review.previousComment"))), // Excel: Previous Comment
+    ("RX", Entry::Finish(Action::Command("review.nextComment"))),   // Excel: Next Comment; GridCraft keytip
     ("WA", Entry::Finish(Action::Command("view.arrangeAll"))),      // Excel: Arrange All
     ("WC", Entry::Finish(Action::Command("view.customViews"))),     // Excel: Custom Views
     ("WF", Entry::Continue),                                        // Excel: Freeze Panes Menu; group level:
