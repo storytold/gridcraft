@@ -79,6 +79,7 @@ mod merge_center_label;
 mod merged_cells;
 mod more_colors;
 mod native_print;
+mod not_a_workbook;
 mod nowrap_line_breaks;
 mod number_stored_as_text;
 mod objects;
