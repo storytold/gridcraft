@@ -128,6 +128,19 @@ gate on every test run, so a version bump has to pass it. RaTeX positions glyphs
 font metrics; GridCraft never bundles the KaTeX fonts, so glyphs are drawn with system fonts
 and a glyph no font has is drawn as a `[?]` box.
 
+## Increase/Decrease Font Size step along the Font Size list and stop at 8 and 72
+
+Home › Increase Font Size and Decrease Font Size (Ctrl+Shift+> / <) move the active cell's size to
+the next size on Excel's Font Size list, `SIZES` in `cmd/format.rs`: 8, 9, 10, 11, 12, 14, 16, 18,
+20, 22, 24, 26, 28, 36, 48, 72. Neither goes past either end, as in Excel (observed: Microsoft 365,
+Windows): Decrease at 8 and Increase at 72 leave the size as it is, so text can't shrink to an
+unreadable size by accident, and then other selected cells keep theirs too; otherwise every
+selected cell gets the active cell's next size (observed: Excel 16.0, 11 pt active and 72 pt and
+20 pt beside it all become 12). Smaller and larger sizes are typed into the Font Size box. A size
+off the list steps to its neighbour (10.5 → 11 or 10); one typed below 8 goes up to 8 and stays
+going down, and one typed above 72 goes down to 72 and stays going up. Before, Decrease jumped from
+8 straight to 1 and Increase from 1 to 8, the shortcut skipped 22 and 26, and Increase went on past
+72 to 96 and 409.
 ## Number formats widen columns that weren't sized by hand (#1077)
 
 Increase/Decrease Decimal, the ribbon's other number formats (the Number Format list, Accounting,

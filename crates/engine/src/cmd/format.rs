@@ -358,12 +358,17 @@ fn font_size(s: &mut Session, p: &Json) -> Result<Json> {
     apply_style(s, p, |st| st.font.size = size)
 }
 
-const SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0, 96.0, 409.0];
+/// Increase/Decrease Font Size steps: the Font Size list, as in Excel (observed). Neither goes past
+/// either end: Decrease stops at 8 and Increase at 72, so text can't shrink to an unreadable size by
+/// accident; smaller and larger sizes are typed into the Font Size box. See docs/decisions.md.
+const SIZES: [f32; 16] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
 
 fn step_font(s: &mut Session, p: &Json, up: bool) -> Result<Json> {
     let cur = active_style(s)?.font.size;
-    let next =
-        if up { SIZES.iter().copied().find(|x| *x > cur).unwrap_or(409.0) } else { SIZES.iter().rev().copied().find(|x| *x < cur).unwrap_or(1.0) };
+    let next = if up { SIZES.iter().copied().find(|x| *x > cur) } else { SIZES.iter().rev().copied().find(|x| *x < cur) };
+    // At either end nothing changes, not even other selected cells of other sizes (observed: Excel
+    // 16.0 leaves an 11 pt cell alone when the active cell is at 72 pt).
+    let Some(next) = next else { return Ok(json!({"size": cur})) };
     apply_style(s, p, |st| st.font.size = next)?;
     Ok(json!({"size": next}))
 }
