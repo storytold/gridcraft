@@ -404,7 +404,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
-    window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
+    window_shown(app, ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -570,7 +570,15 @@ fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
     ok_cancel(ui, confirm, open);
 }
 
-/// Gives keyboard focus to the first text or number field the first time a form is drawn. A
+/// Returns the key of the first text, number, or reference field in a form dialog.
+pub(super) fn first_focus_key(d: &Dialog) -> Option<&'static str> {
+    d.fields.iter().find_map(|f| match f {
+        Field::Text { key, .. } | Field::Number { key, .. } | Field::Ref { key, .. } => Some(*key),
+        Field::Password { .. } | Field::Choice { .. } | Field::Check { .. } | Field::Note(_) => None,
+    })
+}
+
+/// Gives keyboard focus to the first text, number, or reference field the first time a form is drawn. A
 /// focused number field is in typing mode with its value selected, so Alt+H, O, W then 12 and
 /// Enter sets the width, as in Excel.
 /// Keeps asking until the field really has focus: a new window's first frame is an invisible
@@ -632,7 +640,9 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         } else {
                             ui.add(egui::TextEdit::singleline(&mut s).desired_width(320.0)).labelled_by(label.id)
                         };
-                        take_first_focus(d, &r);
+                        if first_focus_key(d) == Some(key) {
+                            take_first_focus(d, &r);
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(s));
                         }
@@ -666,7 +676,9 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         // Typed values count straight away: otherwise Enter or OK in the same frame
                         // confirms the old value, because a number field only commits when it loses focus.
                         let r = ui.add(egui::DragValue::new(&mut n).speed(0.5).update_while_editing(true)).labelled_by(label.id);
-                        take_first_focus(d, &r);
+                        if first_focus_key(d) == Some(key) {
+                            take_first_focus(d, &r);
+                        }
                         if r.changed() {
                             d.values.insert(key.into(), json!(n));
                         }

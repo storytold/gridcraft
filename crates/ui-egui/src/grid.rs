@@ -323,6 +323,8 @@ pub struct GridState {
     pub reveal_from: Option<CellRef>,
     pub last_title: Option<String>,
     pub drag_select: bool,
+    /// True while `ref_edit_pick_interact` owns the active `drag`.
+    pub(crate) picker_drag: bool,
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,
     /// Column and row of the clicked header cell, and where to open the menu.

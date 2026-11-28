@@ -49,6 +49,7 @@ impl InteractionInput<'_> {
     }
 }
 
+/// Handles pointer and keyboard interaction for the worksheet grid and its overlays.
 pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
@@ -73,10 +74,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let in_corner = pos.is_some_and(|p| p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top());
     // Insert › Controls places a control; a click works a form control (Ctrl or Cmd+click, or a
     // right-click, selects it instead).
-    if app.editor.is_none() && crate::control_ui::place(app, ui, resp, geo, sh) {
+    // Reference picking must select cells beneath worksheet controls and objects.
+    let picking_ref = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    if app.editor.is_none() && !picking_ref && crate::control_ui::place(app, ui, resp, geo, sh) {
         return;
     }
-    if app.editor.is_none() && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
+    if app.editor.is_none() && !picking_ref && app.session.draw_tool.is_empty() && crate::form_controls::interact(app, &ctx, resp, geo, sh) {
         keyboard(app, &ctx, resp, geo, sh);
         return;
     }
@@ -113,6 +116,11 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         freeze_columns: freeze_cols,
         freeze_rows,
     };
+    // A RefEdit pick is selection-only: never activate worksheet objects or actions.
+    if picking_ref {
+        ref_edit_pick_interact(app, &input);
+        return;
+    }
     if handle_draw_tool(app, &input) {
         return;
     }
@@ -239,6 +247,150 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     handle_release(app, &input);
 
     handle_context_menu_and_keyboard(app, &input);
+}
+
+/// Selects underlying worksheet cells, rows or columns while a dialog's RefEdit is picking.
+///
+/// This path deliberately bypasses worksheet controls, objects, hyperlinks,
+/// slicers, filter buttons, fill handles, move borders and double-click edits.
+/// Neither clicking nor dragging here may execute a workbook-editing action.
+fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
+    let (resp, geo, sh, wb) = (input.response, input.geo, input.sheet, input.workbook);
+    let mods = input.modifiers;
+    let clicked = input.primary_clicked;
+    let drag_started = resp.drag_started_by(egui::PointerButton::Primary);
+
+    app.grid.control = None;
+    app.grid.focused_control = None;
+
+    if (drag_started || (clicked && app.grid.drag == Drag::None))
+        && let Some(p) = input.press_origin.map(|p| geo.mirror_pos(p)).or(input.position)
+    {
+        let in_corner = p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top();
+        let in_cells = geo.in_cells(p);
+        let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
+        let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+        if (in_corner || in_cells || in_col_header || in_row_header) && app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+            return;
+        }
+        if in_corner {
+            if app.session.run("selection.set", json!({"range": RangeRef::all().a1()})).is_ok() {
+                note_selecting_press(app);
+            }
+        } else if in_cells {
+            let c = geo.cell_at(sh, p);
+            let ok = if mods.shift {
+                let sel = &input.selection;
+                let area = RangeRef::new(sel.anchor, c);
+                let ok = app.session.run("selection.set", json!({"range": area.a1(), "active": sel.active.a1()})).is_ok();
+                if ok && let Some(doc) = app.session.active_mut() {
+                    doc.selection.anchor = sel.anchor;
+                }
+                ok
+            } else if mods.command {
+                select_ranges(app, RangeRef::cell(c), true, c)
+            } else {
+                app.session.run("selection.set", json!({"cell": c.a1()})).is_ok()
+            };
+            if ok {
+                note_selecting_press(app);
+                app.grid.drag = Drag::Select;
+                app.grid.drag_select = true;
+                app.grid.picker_drag = true;
+            }
+        } else if in_col_header {
+            let col = geo.col_at(sh, p.x);
+            let anchor = if mods.shift { input.selection.anchor.col } else { col };
+            let area = RangeRef::cols(anchor.min(col), anchor.max(col));
+            if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), col)) {
+                if mods.shift
+                    && let Some(doc) = app.session.active_mut()
+                {
+                    doc.selection.anchor = input.selection.anchor;
+                }
+                note_selecting_press(app);
+                app.grid.drag = Drag::Cols(anchor);
+                app.grid.drag_select = true;
+                app.grid.picker_drag = true;
+            }
+        } else if in_row_header {
+            let row = geo.row_at(sh, p.y);
+            let anchor = if mods.shift { input.selection.anchor.row } else { row };
+            let area = RangeRef::rows(anchor.min(row), anchor.max(row));
+            if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(row, geo.col_at(sh, geo.cells.left() + 1.0))) {
+                if mods.shift
+                    && let Some(doc) = app.session.active_mut()
+                {
+                    doc.selection.anchor = input.selection.anchor;
+                }
+                note_selecting_press(app);
+                app.grid.drag = Drag::Rows(anchor);
+                app.grid.drag_select = true;
+                app.grid.picker_drag = true;
+            }
+        }
+    }
+
+    // Only selection drags are admitted here; no Fill, Move or Object drags.
+    if (drag_started || resp.dragged() || resp.drag_stopped())
+        && let Some(p) = input.position
+    {
+        let auto = if resp.dragged() { drag_auto_scroll(geo, p, &app.grid.drag) } else { egui::Vec2::ZERO };
+        match app.grid.drag.clone() {
+            Drag::Select => {
+                select_to_pointer(app, geo, sh, wb, p);
+                scroll_by(app, auto);
+            }
+            Drag::Rows(anchor) => {
+                let row = geo.row_at(sh, p.y);
+                let area = RangeRef::rows(anchor.min(row), anchor.max(row));
+                let mut active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                if !area.contains(active) {
+                    active = CellRef::new(anchor, active.col);
+                }
+                drag_header_selection(app, area, active);
+                scroll_by(app, vec2(0.0, auto.y));
+            }
+            Drag::Cols(anchor) => {
+                let col = geo.col_at(sh, p.x);
+                let area = RangeRef::cols(anchor.min(col), anchor.max(col));
+                let mut active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                if !area.contains(active) {
+                    active = CellRef::new(active.row, anchor);
+                }
+                drag_header_selection(app, area, active);
+                scroll_by(app, vec2(auto.x, 0.0));
+            }
+            _ => {}
+        }
+    }
+
+    if app.grid.picker_drag && (resp.drag_stopped() || (!input.any_pointer_down && !resp.dragged())) {
+        app.grid.drag = Drag::None;
+        app.grid.drag_select = false;
+        app.grid.picker_drag = false;
+    }
+
+    keyboard(app, &input.context, resp, geo, sh);
+}
+
+/// Replaces the last range of the active selection during a RefEdit header drag,
+/// preserving any earlier Cmd/Ctrl-selected areas and the current Shift anchor.
+fn drag_header_selection(app: &mut SheetApp, area: RangeRef, active: CellRef) {
+    let Some(doc) = app.session.active() else { return };
+    let anchor = doc.selection.anchor;
+    let mut ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+    if ranges.is_empty() {
+        ranges.push(area.a1());
+    } else {
+        ranges.pop();
+        ranges.push(area.a1());
+    }
+    if app.session.run("selection.set", json!({"range": ranges.join(","), "active": active.a1()})).is_ok()
+        && let Some(doc) = app.session.active_mut()
+    {
+        doc.selection.anchor = anchor;
+    }
 }
 
 fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
@@ -417,6 +569,7 @@ fn current_cell_link(app: &SheetApp, c: CellRef) -> Option<gridcraft_engine::mod
     gridcraft_engine::links::cell_link(&d.wb, d.wb.active_sheet(), c)
 }
 
+/// Handles grid pointer presses, selection changes and dialog reference picks.
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
@@ -698,6 +851,7 @@ fn spend_escape(ctx: &egui::Context) -> bool {
     in_egui || crate::framework::take_window_cancel(ctx)
 }
 
+/// Updates an active grid drag gesture (selection, resize, fill, move, or object drag).
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
@@ -725,21 +879,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     if resp.dragged()
         && let Some(p) = pos
     {
-        // Auto-scroll near edges.
-        let edge = 24.0;
-        let mut auto = egui::Vec2::ZERO;
-        if p.y > geo.cells.bottom() - edge {
-            auto.y = 20.0;
-        }
-        if p.y < geo.cells.top() + edge * 0.5 && !matches!(app.grid.drag, Drag::ResizeRow { .. }) {
-            auto.y = -20.0;
-        }
-        if p.x > geo.cells.right() - edge {
-            auto.x = 30.0;
-        }
-        if p.x < geo.cells.left() + edge * 0.5 && !matches!(app.grid.drag, Drag::ResizeCol { .. }) {
-            auto.x = -30.0;
-        }
+        let auto = drag_auto_scroll(geo, p, &app.grid.drag);
         let pc = CellRef::new(
             geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
             geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
@@ -1108,6 +1248,25 @@ fn coalesce_resize_undo(app: &mut SheetApp) {
     {
         d.undo.pop();
     }
+}
+
+/// Computes edge auto-scroll velocity while dragging near the viewport bounds.
+fn drag_auto_scroll(geo: &Geo, p: Pos2, drag: &Drag) -> egui::Vec2 {
+    let edge = 24.0;
+    let mut auto = egui::Vec2::ZERO;
+    if p.y > geo.cells.bottom() - edge {
+        auto.y = 20.0;
+    }
+    if p.y < geo.cells.top() + edge * 0.5 && !matches!(drag, Drag::ResizeRow { .. }) {
+        auto.y = -20.0;
+    }
+    if p.x > geo.cells.right() - edge {
+        auto.x = 30.0;
+    }
+    if p.x < geo.cells.left() + edge * 0.5 && !matches!(drag, Drag::ResizeCol { .. }) {
+        auto.x = -30.0;
+    }
+    auto
 }
 
 fn scroll_by(app: &mut SheetApp, d: egui::Vec2) {

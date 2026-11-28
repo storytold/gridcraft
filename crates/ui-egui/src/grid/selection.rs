@@ -235,7 +235,8 @@ pub(super) fn add_mode_base(app: &SheetApp) -> Vec<String> {
     ranges
 }
 
-pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
+/// Updates the active worksheet's selection ranges and returns whether `selection.set` succeeded.
+pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) -> bool {
     // A clicked area is kept: the next Add mode arrow starts a new one.
     app.grid.add_pending = None;
     let current: Vec<RangeRef> = if add { app.session.active().map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
@@ -250,7 +251,7 @@ pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: 
     // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
-    let _ = app.run("selection.set", params);
+    app.run("selection.set", params).is_ok()
 }
 
 #[cfg(test)]

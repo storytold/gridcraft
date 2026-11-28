@@ -289,6 +289,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
                 // the grid doesn't choose it again.
                 if key != "output" && d.refs.target.as_deref() == Some("output") {
                     d.refs.target = None;
+                    super::ref_edit::clear_picker_drag(app);
                 }
             }
             if key == "output" {

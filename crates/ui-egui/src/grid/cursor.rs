@@ -24,8 +24,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
     // Draw tools and Insert › Controls placement own the cursor over cells, including while
-    // recording a stroke or drawing the control.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
+    // recording a stroke or drawing the control, except while a dialog's RefEdit box is picking.
+    let picking = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    if !picking && (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
@@ -42,7 +43,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         return;
     }
     let Some(p) = pos else { return };
-    hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
+    hover_cursor(app, ctx, resp, &pointer, geo, sh, p, picking);
 }
 
 /// The cursor a held drag shows, or `None` when the drag leaves it to hover. `rtl` swaps the
@@ -63,9 +64,19 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
 }
 
 /// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
-fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
+#[allow(clippy::too_many_arguments)]
+fn hover_cursor(
+    app: &SheetApp,
+    ctx: &egui::Context,
+    resp: &egui::Response,
+    pointer: &egui::PointerState,
+    geo: &Geo,
+    sh: &Sheet,
+    p: Pos2,
+    picking: bool,
+) {
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
-    if freeze_cols.contains(p) || freeze_rows.contains(p) {
+    if !picking && (freeze_cols.contains(p) || freeze_rows.contains(p)) {
         freeze_cursor(app, ctx, resp, pointer, freeze_cols.contains(p));
         return;
     }
@@ -78,10 +89,10 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
     let handle_panes = geo.range_panes(RangeRef::cell(sel.current().end));
     let border_panes = geo.range_panes(sel.current());
-    let on_handle = handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
-    let on_cur_border = on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
+    let on_handle = !picking && handle.contains(p) && handle_panes.iter().any(|r| r.contains(p));
+    let on_cur_border = !picking && on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
     // The selected object's handles resize it; any object's body moves it.
-    let idle = app.grid.drag == Drag::None && app.editor.is_none();
+    let idle = !picking && app.grid.drag == Drag::None && app.editor.is_none();
     let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p) } else { None };
     let hit = if idle { crate::chartview::hit(app, geo, sh, p) } else { None };
     // A form control works on click unless it is selected (or Ctrl or Cmd is held).
@@ -102,7 +113,7 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
         ctx.set_cursor_icon(CursorIcon::PointingHand);
     } else if on_object {
         ctx.set_cursor_icon(CursorIcon::Move);
-    } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
+    } else if !picking && (near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some())) {
         header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
@@ -116,7 +127,7 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     } else if in_col_header {
         let col = geo.col_at(sh, p.x);
         let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
-        ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+        ctx.set_cursor_icon(if !picking && selected { CursorIcon::Move } else { CursorIcon::Default });
     }
 }
 
