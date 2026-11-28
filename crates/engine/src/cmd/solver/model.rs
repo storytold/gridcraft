@@ -405,9 +405,9 @@ pub(super) fn is_model_name(name: &str) -> bool {
 /// The model as hidden names scoped to its sheet (replacing any saved before).
 pub(super) fn save_model(wb: &mut Workbook, m: &Model) {
     let Some(sheet_name) = wb.sheet(m.sheet).map(|s| s.name.clone()) else { return };
-    wb.names.retain(|n| !(n.scope == Some(m.sheet) && is_model_name(&n.name)));
+    wb.names_mut().retain(|n| !(n.scope == Some(m.sheet) && is_model_name(&n.name)));
     let mut put = |name: String, formula: String| {
-        wb.names.push(DefinedName { name, scope: Some(m.sheet), formula, comment: String::new(), hidden: true });
+        wb.names_mut().push(DefinedName { name, scope: Some(m.sheet), formula, comment: String::new(), hidden: true });
     };
     put("solver_opt".into(), ref_text(&sheet_name, &m.objective.a1()));
     let (typ, val) = match m.goal {

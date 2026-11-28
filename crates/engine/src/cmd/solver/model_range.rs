@@ -279,18 +279,18 @@ pub(super) fn reset_model(s: &mut Session, _p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let active = d.wb.active_sheet();
     let removed = d.wb.names.iter().filter(|n| is_sheet_model_name(n, active)).count();
-    let mut after = d.wb.names.clone();
+    let mut after = d.wb.names.to_vec();
     after.retain(|n| !is_sheet_model_name(n, active));
     let masked = {
         let mut probe = (*d.wb).clone();
-        probe.names = after;
+        *probe.names_mut() = after;
         saved_model(&probe, active).is_some()
     };
     if removed > 0 || masked {
         edit(s, |cx| {
-            cx.wb.names.retain(|n| !is_sheet_model_name(n, active));
+            cx.wb.names_mut().retain(|n| !is_sheet_model_name(n, active));
             if masked {
-                cx.wb.names.push(DefinedName {
+                cx.wb.names_mut().push(DefinedName {
                     name: "solver_opt".into(),
                     scope: Some(active),
                     formula: "\"\"".into(),

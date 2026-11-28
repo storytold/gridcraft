@@ -14,9 +14,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
-use gridcraft_model::{CalcMode, Workbook};
+use gridcraft_model::{CalcMode, Formula, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Area, Evaluator, Host, NameCache, precedents_with, stack_position};
 use crate::spill_index::{SpillIndex, indexing_pays};
 
 /// Changed cells (in one `cells_changed`) from which a sheet's spill areas may be indexed.
@@ -36,6 +36,8 @@ mod pass_host;
 use graph::Intervals;
 pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
+#[cfg(test)]
+pub(crate) use pass_host::NAMES_PARSED;
 use pass_host::{PassHost, spills_as_before};
 
 /// Calculation state kept beside a workbook.
@@ -55,6 +57,13 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// Areas the formulas of the graph hold from names, so the budget on them holds across edits
+    /// as well as within one build (see [`NameCache`]), and what each formula holding some was
+    /// charged, given back when the formula is resolved again or removed.
+    name_areas: usize,
+    name_charges: HashMap<Key, usize>,
+    /// The formulas [`Calc::mark_spill_reader`] put in the graph's dynamic set.
+    spill_readers: HashSet<Key>,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -163,6 +172,9 @@ impl Default for Calc {
             last_recalc_cells: 0,
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
+            name_areas: 0,
+            name_charges: HashMap::default(),
+            spill_readers: HashSet::default(),
         }
     }
 }
@@ -248,14 +260,14 @@ impl Calc {
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
+        let mut names = NameCache::default();
+        self.name_charges.clear();
         for (si, sheet) in wb.sheets.iter().enumerate() {
             for (c, cell) in sheet.cells.iter() {
                 if cell.value == Value::Error(CellError::Spill) {
                     self.spill_errors.insert((si, c));
                 }
-                if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
-                {
+                if let Some((areas, dynamic)) = self.resolve_charged(&mut names, wb, (si, c), cell.formula.as_deref()) {
                     self.graph.insert((si, c), Node { areas, dynamic });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
@@ -268,7 +280,49 @@ impl Calc {
             }
         }
         self.graph.settle();
+        self.name_areas = names.stored();
+        // From the arrays the sheets hold now (a rebuild after undo or redo calculates nothing).
+        self.spill_readers.clear();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for anchor in sheet.spill_ranges.keys() {
+                self.mark_spill_reader(wb, (si, *anchor));
+            }
+        }
         self.circular = if wb.calc.iterative { Vec::new() } else { self.loops_among(&circ) };
+    }
+
+    /// Gives back to `names` what the formulas at `keys` were charged, each key once: a batch does
+    /// this for all its cells before it resolves any, so whether a new reader fits within the budget
+    /// doesn't depend on whether a cell it replaces comes before or after it.
+    fn give_back_charges(&mut self, names: &mut NameCache, keys: &[Key]) {
+        if self.name_charges.is_empty() {
+            return;
+        }
+        for k in keys {
+            if let Some(old) = self.name_charges.remove(k) {
+                names.give_back(old);
+            }
+        }
+    }
+
+    /// Resolves the precedents of the formula at `k` (none when `formula` is `None` or doesn't
+    /// parse) against `names`, giving back what the cell was charged before (a key met twice in one
+    /// batch) and recording what it is charged now, so the running total in `names` stays the sum
+    /// of the charges in `name_charges`.
+    fn resolve_charged(&mut self, names: &mut NameCache, wb: &Workbook, k: Key, formula: Option<&Formula>) -> Option<(Vec<Area>, bool)> {
+        // Most workbooks charge no formula: then nothing is looked up.
+        if !self.name_charges.is_empty()
+            && let Some(old) = self.name_charges.remove(&k)
+        {
+            names.give_back(old);
+        }
+        let before = names.stored();
+        let resolved = formula.and_then(|f| f.with_expr(|e| precedents_with(wb, k.0, e, names)))?;
+        let charge = names.stored().saturating_sub(before);
+        if charge > 0 {
+            self.name_charges.insert(k, charge);
+        }
+        Some(resolved)
     }
 
     /// The circular references of a rebuilt workbook (after undo, redo or a rollback, which put
@@ -360,25 +414,48 @@ impl Calc {
         self.standing = Standing::default();
     }
 
+    /// Resolves the precedents of the formulas at `keys` again from the workbook's current defined
+    /// names, as [`Calc::cells_changed`] does, without calculating anything: for formulas whose
+    /// names were rewritten in manual mode, whose values wait for the next calculation while Trace
+    /// Precedents and the what-if trials read the graph at once. A formula that doesn't parse
+    /// leaves the graph, as [`Calc::rebuild`] leaves it out; a cell without a formula is skipped.
+    pub fn resolve_again(&mut self, wb: &Workbook, keys: &[Key]) {
+        let mut names = NameCache::with_stored(self.name_areas);
+        self.give_back_charges(&mut names, keys);
+        for &k in keys {
+            let Some(f) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref()) else { continue };
+            match self.resolve_charged(&mut names, wb, k, Some(f)) {
+                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic }),
+                None => self.graph.remove(k),
+            }
+            self.mark_spill_reader(wb, k);
+        }
+        self.name_areas = names.stored();
+        self.graph.settle();
+    }
+
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        // The budget on areas taken from names counts on from what the graph's formulas hold: an
+        // edited formula gives its charge back before it is resolved again, so editing or refilling
+        // the same readers doesn't spend it. The whole batch gives its charges back first.
+        let mut names = NameCache::with_stored(self.name_areas);
+        self.give_back_charges(&mut names, changed);
         for &k in changed {
             if wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.value == Value::Error(CellError::Spill)) {
                 self.spill_errors.insert(k);
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+            let formula = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_deref());
+            let precedent = self.resolve_charged(&mut names, wb, k, formula);
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match precedent {
-                Some((areas, dynamic)) => {
-                    self.graph.insert(k, Node { areas, dynamic });
-                }
+                Some((areas, dynamic)) => self.graph.insert(k, Node { areas, dynamic }),
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
                     self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
@@ -413,7 +490,9 @@ impl Calc {
                     }
                 }
             }
+            self.mark_spill_reader(wb, k);
         }
+        self.name_areas = names.stored();
         self.graph.settle();
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
@@ -766,7 +845,73 @@ impl Calc {
         for (sheet_index, range) in freed {
             spill_changes.extend(self.unblock_candidates(wb, sheet_index, range.end));
         }
+        // A formula newly found reading its own array is evaluated once more, now dynamic. Only the
+        // formulas that laid out an array can be newly marked; the marked ones are checked again.
+        for key in spills.keys() {
+            if self.mark_spill_reader(wb, *key) {
+                spill_changes.push(*key);
+            }
+        }
+        if !self.spill_readers.is_empty() {
+            let marked: Vec<Key> = self.spill_readers.iter().copied().collect();
+            for key in marked {
+                self.mark_spill_reader(wb, key);
+            }
+        }
         spill_changes
+    }
+
+    /// Keeps the formula at `k` in the graph's dynamic set while its array is laid out over cells
+    /// it reads statically and it mentions a name (a defined name, a LET or LAMBDA name, or a call
+    /// of a LAMBDA name), and takes it out again when that ends. Such a formula is then evaluated on
+    /// every pass, and once more after its array is laid out, as a formula with dynamic references
+    /// is. A formula reading cells of its own array reads its previous result there in an
+    /// incremental pass and empty cells in a full one (#4470). Evaluated on every pass, the two
+    /// agree where the array's cells don't read one another: the second evaluation reads the cells
+    /// the first laid out, in both. Kept to formulas mentioning a name, whose values it keeps as
+    /// they were while a name made a formula dynamic; a formula reading its own array through
+    /// plain references is left to #4470. Returns whether `k` was newly put in the set.
+    ///
+    /// Cost: a lookup in the sheet's spill areas for each call; for an anchor, a scan of its own
+    /// areas, and a walk of its formula only when one of them overlaps the array and `k` is not
+    /// marked yet.
+    fn mark_spill_reader(&mut self, wb: &Workbook, k: Key) -> bool {
+        let spill = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1));
+        // Most formulas hold no array, and most workbooks no marked formula.
+        if spill.is_none() && self.spill_readers.is_empty() {
+            return false;
+        }
+        let overlaps = |node: &Node, area: &RangeRef| !node.dynamic && node.areas.iter().any(|a| a.sheet == k.0 && a.range.intersects(area));
+        let reads_own_array = spill.is_some_and(|area| self.graph.nodes.get(&k).is_some_and(|node| overlaps(node, area)));
+        if !reads_own_array {
+            if self.spill_readers.remove(&k) && self.graph.nodes.get(&k).is_some_and(|n| !n.dynamic) {
+                self.graph.dynamic.remove(&k);
+            }
+            return false;
+        }
+        if self.spill_readers.contains(&k) && self.graph.dynamic.contains(&k) {
+            return false;
+        }
+        let mentions_name = wb
+            .sheet(k.0)
+            .and_then(|s| s.cell(k.1))
+            .and_then(|c| c.formula.as_deref())
+            .and_then(|f| {
+                f.with_expr(|e| {
+                    let mut found = false;
+                    e.walk(&mut |x| found |= matches!(x, Expr::Name(_)) || matches!(x, Expr::Call(n, _) if !crate::eval::is_known_function(n)));
+                    found
+                })
+            })
+            .unwrap_or(false);
+        if !mentions_name {
+            if self.spill_readers.remove(&k) {
+                self.graph.dynamic.remove(&k);
+            }
+            return false;
+        }
+        self.spill_readers.insert(k);
+        self.graph.dynamic.insert(k)
     }
 }
 
@@ -828,6 +973,7 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    host.one_shot = true;
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
 }
@@ -852,6 +998,7 @@ pub fn evaluate_bounded(wb: &Workbook, sheet: usize, at: CellRef, formula: &str,
     let exprs = HashMap::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    host.one_shot = true;
     let mut ev = Evaluator::new(&mut host, sheet, at).with_work(work);
     let r = ev.eval(&expr);
     if ev.is_exhausted() {
@@ -1334,6 +1481,37 @@ pub(crate) mod tests {
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
         assert!(host.cycles.is_empty());
         assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
+    }
+
+    /// A pass keeps the parsed definitions of names while their text stays within
+    /// MAX_PASS_NAME_TEXT (1 MiB), all names together; a name past it is parsed again at each use,
+    /// with the same result. A long name read first fills the budget up to the last three bytes,
+    /// or two: the three bytes of `small_sum` then fit exactly, or go one past. The long name is
+    /// longer than a formula may be (8,192 characters), so it doesn't parse and reads #NAME?, but
+    /// its text counts all the same.
+    #[test]
+    fn a_pass_keeps_parsed_names_up_to_its_text_limit() {
+        const LIMIT: usize = 1 << 20;
+        for (filler, small_kept) in [(LIMIT - 3, true), (LIMIT - 2, false)] {
+            let mut wb = Workbook::new();
+            for (name, formula) in [("long_filler", format!("1{}", " ".repeat(filler - 1))), ("small_sum", "2+3".to_string())] {
+                wb.names_mut().push(gridcraft_model::DefinedName { name: name.into(), scope: None, formula, comment: String::new(), hidden: false });
+            }
+            let (first, second) = (CellRef::parse("A1").unwrap(), CellRef::parse("A2").unwrap());
+            let mut exprs = HashMap::default();
+            for (at, text) in [(first, "=long_filler"), (second, "=small_sum")] {
+                wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(text)));
+                exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(text).unwrap()));
+            }
+            let mut rng = 1u64;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+            host.calculate((0, first));
+            host.calculate((0, second));
+            assert_eq!(host.results.get(&(0, first)), Some(&Value::Error(gridcraft_core::CellError::Name)), "{filler}");
+            assert_eq!(host.results.get(&(0, second)), Some(&Value::Number(5.0)), "{filler}: evaluated, kept or not");
+            assert!(host.keeps_name(0), "{filler}: the long name is kept");
+            assert_eq!(host.keeps_name(1), small_kept, "{filler}: the small name is kept only within the limit");
+        }
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the

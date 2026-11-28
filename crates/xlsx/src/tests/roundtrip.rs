@@ -504,9 +504,9 @@ fn sample() -> Workbook {
         },
     );
     wb.sheets.push(Arc::new(s3));
-    wb.names.push(DefinedName { name: "Rate".into(), scope: None, formula: "0.07".into(), comment: "c".into(), hidden: false });
-    wb.names.push(DefinedName { name: "Local".into(), scope: Some(1), formula: "Hidden!$A$1".into(), comment: String::new(), hidden: true });
-    wb.names.push(DefinedName {
+    wb.names_mut().push(DefinedName { name: "Rate".into(), scope: None, formula: "0.07".into(), comment: "c".into(), hidden: false });
+    wb.names_mut().push(DefinedName { name: "Local".into(), scope: Some(1), formula: "Hidden!$A$1".into(), comment: String::new(), hidden: true });
+    wb.names_mut().push(DefinedName {
         name: "Pick".into(),
         scope: None,
         formula: "XLOOKUP(1,Hidden!A:A,Hidden!A:A)".into(),
@@ -1392,7 +1392,7 @@ fn implied_intersection_made_redundant_by_an_edit_saves_legacy() {
     assert_eq!(text(&wb, "C5"), "SQRT(@Rng)");
     // What deleting rows 2:3 leaves.
     wb.sheet_mut(0).unwrap().cells.set(at("B5"), Cell::formula(Formula::new("SQRT(@A1:A1)")));
-    wb.names.iter_mut().find(|n| n.name == "Rng").unwrap().formula = "Data!$A$1:$A$1".into();
+    wb.names_mut().iter_mut().find(|n| n.name == "Rng").unwrap().formula = "Data!$A$1:$A$1".into();
     let bytes = write_xlsx(&wb).unwrap();
     assert_eq!(written_formula(&bytes, "B5"), (Some("SQRT(A1:A1)".into()), None));
     assert_eq!(written_formula(&bytes, "C5"), (Some("SQRT(Rng)".into()), None));

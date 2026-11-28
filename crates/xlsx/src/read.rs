@@ -505,7 +505,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
                 }
                 continue;
             }
-            wb.names.push(DefinedName {
+            wb.names_mut().push(DefinedName {
                 name: name.to_string(),
                 scope,
                 formula: crate::fmla::from_file(text),

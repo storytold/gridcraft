@@ -25,17 +25,23 @@ pub(super) fn ruler(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"on": on}))
 }
 
-/// The Watch Window list isn't an edit (Excel doesn't undo it): undo and redo keep the current
-/// list when they swap in another snapshot of the workbook.
-pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>) {
+/// Carries the current Watch Window list into a restored workbook and returns the rewrite of its
+/// name there (`None` when it already held the list). The list isn't an edit (Excel
+/// doesn't undo it): undo and redo keep the current list when they swap in another snapshot of the
+/// workbook, and recalculate the formulas reading the list's name from the returned rewrite: those
+/// depend on the name statically, so nothing else would. In manual mode the graph is rebuilt at
+/// once and their values wait for the next calculation (F9, Shift+F9, or leaving manual mode).
+pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>) -> Option<crate::cmd::name_readers::Rewrite> {
     let find = |wb: &Workbook| wb.names.iter().find(|n| n.name == WATCH_NAME).cloned();
     let keep = find(from);
     if keep == find(to) {
-        return;
+        return None;
     }
     let wb = std::sync::Arc::make_mut(to);
-    wb.names.retain(|n| n.name != WATCH_NAME);
-    wb.names.extend(keep);
+    let rewrite = crate::cmd::name_readers::Rewrite::before(&wb.names, WATCH_NAME);
+    wb.names_mut().retain(|n| n.name != WATCH_NAME);
+    wb.names_mut().extend(keep);
+    Some(rewrite)
 }
 
 /// Normal, Page Layout and Page Break Preview belong to the window, not to the edits: Excel doesn't
@@ -197,9 +203,17 @@ pub(super) fn watch_window(s: &mut Session, p: &Json) -> Result<Json> {
     if changed {
         let v = json!(list.clone());
         let d = s.doc_mut()?;
-        // The watch list is view state: don't add an undo step.
+        // The watch list is view state: don't add an undo step. A formula that reads the name
+        // is recalculated all the same (the list is stored as a defined name), and when that
+        // evaluated a formula the revision moves, as undo and redo move it, so caches keyed on it
+        // show the new values. In manual mode the readers wait for the next calculation, and the
+        // revision stays.
         let wb = std::sync::Arc::make_mut(&mut d.wb);
+        let rewrite = crate::cmd::name_readers::Rewrite::before(&wb.names, WATCH_NAME);
         stash_set(wb, WATCH_NAME, &v);
+        if crate::cmd::name_readers::recalc_after_rewrite(&mut d.calc, wb, rewrite) {
+            d.revision += 1;
+        }
     }
     let d = s.doc()?;
     let rows: Vec<Json> = list

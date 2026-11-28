@@ -129,6 +129,8 @@ impl<'h> Evaluator<'h> {
             return err(CellError::Value);
         }
         let base = self.env.len();
+        // Each variable is bound for the values after it and for the result, and shadows a defined
+        // name (`Evaluator::name`); `Walk::collect` in `eval/special.rs` binds LET in the same order.
         for pair in args[..args.len() - 1].chunks(2) {
             let [Expr::Name(n), v] = pair else {
                 self.env.truncate(base);

@@ -1319,7 +1319,7 @@ fn reset_all_masks_a_workbook_level_model_and_keeps_other_sheets_models() {
             ("solver_eng", "2"),
             ("solver_ssz", "500"),
         ] {
-            wb.names.push(gridcraft_model::DefinedName {
+            wb.names_mut().push(gridcraft_model::DefinedName {
                 name: name.into(),
                 scope: None,
                 formula: formula.into(),
@@ -1425,11 +1425,11 @@ fn saving_and_resetting_a_model_keep_the_users_own_solver_names() {
         let wb = std::sync::Arc::make_mut(&mut d.wb);
         // The user's own names, on the sheet and the workbook, and Excel's Solver names the
         // model replaces.
-        wb.names.push(name("solver_budget", Some(0), "Sheet1!$C$1", false));
-        wb.names.push(name("Solver_Lhs_Total", Some(0), "Sheet1!$C$1", false));
-        wb.names.push(name("solver_budget", None, "Sheet1!$C$1", false));
-        wb.names.push(name("solver_lin", Some(0), "2", true));
-        wb.names.push(name("solver_lhs12", Some(0), "Sheet1!$A$1", true));
+        wb.names_mut().push(name("solver_budget", Some(0), "Sheet1!$C$1", false));
+        wb.names_mut().push(name("Solver_Lhs_Total", Some(0), "Sheet1!$C$1", false));
+        wb.names_mut().push(name("solver_budget", None, "Sheet1!$C$1", false));
+        wb.names_mut().push(name("solver_lin", Some(0), "2", true));
+        wb.names_mut().push(name("solver_lhs12", Some(0), "Sheet1!$A$1", true));
     }
     let names = |s: &Session| -> Vec<String> {
         let mut v: Vec<String> = s.doc().unwrap().wb.names.iter().map(|n| format!("{}@{:?}", n.name, n.scope)).collect();
@@ -1681,9 +1681,9 @@ fn excel_iteration_and_time_limits_are_not_read_as_gridcraft_options() {
     {
         let d = s.doc_mut().unwrap();
         let wb = std::sync::Arc::make_mut(&mut d.wb);
-        wb.names.retain(|n| !n.name.starts_with("gridcraft_"));
+        wb.names_mut().retain(|n| !n.name.starts_with("gridcraft_"));
         for (name, formula) in [("solver_itr", "100"), ("solver_mni", "30")] {
-            wb.names.push(gridcraft_model::DefinedName {
+            wb.names_mut().push(gridcraft_model::DefinedName {
                 name: name.into(),
                 scope: Some(0),
                 formula: formula.into(),

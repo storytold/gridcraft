@@ -209,8 +209,11 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
+    let list_kept = super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
+    if let Some(rewrite) = list_kept {
+        super::name_readers::recalc_after_rewrite(&mut d.calc, std::sync::Arc::make_mut(&mut d.wb), rewrite);
+    }
     d.revision += 1;
     Ok(json!({"undone": label}))
 }
@@ -231,8 +234,11 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
+    let list_kept = super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
+    if let Some(rewrite) = list_kept {
+        super::name_readers::recalc_after_rewrite(&mut d.calc, std::sync::Arc::make_mut(&mut d.wb), rewrite);
+    }
     d.revision += 1;
     Ok(json!({"redone": label}))
 }

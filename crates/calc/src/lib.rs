@@ -10,7 +10,7 @@ pub mod recalc;
 mod spill_index;
 mod trimrange;
 
-pub use eval::{Area, SPECIAL_FUNCTIONS, is_known_function};
+pub use eval::{Area, CallGives, SPECIAL_FUNCTIONS, call_gives, is_known_function};
 pub use precision::DisplayedPrecision;
 pub use recalc::{Bounded, Calc, Key, evaluate, evaluate_bounded, evaluate_expr, now_serial};
 
