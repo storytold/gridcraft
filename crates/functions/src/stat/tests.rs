@@ -761,9 +761,17 @@ fn t_density_is_stable_for_large_degrees() {
 }
 
 #[test]
-fn t_inv_zero_probability_returns_div0() {
+fn t_inv_zero_probability_returns_div0_for_one_degree() {
     is_err(ev("T.INV", vec![n(-0.1), n(1.0)]), CellError::Num);
     is_err(ev("T.INV", vec![n(0.0), n(1.0)]), CellError::Div0);
+    // Degrees truncate before the check, so 1.9 is still one degree (inferred, not measured in Excel).
+    is_err(ev("T.INV", vec![n(0.0), n(1.9)]), CellError::Div0);
+    // Above one degree, Excel gives #NUM! at probability 0 (#4021).
+    is_err(ev("T.INV", vec![n(0.0), n(2.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(0.0), n(5.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(-0.1), n(2.0)]), CellError::Num);
+    is_err(ev("T.INV", vec![n(1.0), n(2.0)]), CellError::Num);
+    close_tol(ev("T.INV", vec![n(0.5), n(2.0)]), 0.0, D7);
     close_tol(ev("T.INV", vec![n(0.75), n(2.0)]), 0.8164966, D7);
     is_err(ev("T.INV", vec![n(1.0), n(1.0)]), CellError::Num);
     is_err(ev("T.INV", vec![n(1.1), n(1.0)]), CellError::Num);
