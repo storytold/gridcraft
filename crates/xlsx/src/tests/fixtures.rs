@@ -47,6 +47,27 @@ fn shared_formulas_and_value_types() {
 }
 
 #[test]
+fn impossible_typed_dates_are_dropped_with_a_warning() {
+    let body = r#"<sheetData><row r="1">
+        <c r="A1" t="d"><v>2023-02-29</v></c>
+        <c r="B1" t="d"><v>2024-04-31</v></c>
+        <c r="C1" t="d"><v>2024-02-29</v></c>
+        <c r="D1"><v>42</v></c>
+    </row></sheetData>"#;
+    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("A1")), Value::Empty, "29 February 2023 does not exist");
+    assert_eq!(s.value(at("B1")), Value::Empty, "April has 30 days");
+    assert_eq!(
+        s.value(at("C1")),
+        Value::Number(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, 2024, 2, 29).unwrap()),
+        "a real leap day still imports"
+    );
+    assert_eq!(s.value(at("D1")), Value::Number(42.0), "the sentinel survives");
+    assert!(rep.warnings.iter().any(|w| w.contains("date cells could not be read")), "the drop is disclosed: {:?}", rep.warnings);
+}
+
+#[test]
 fn workbook_settings_names_and_states() {
     let wb_extra = r#"<workbookPr date1904="1"/><workbookProtection workbookPassword="83AF" lockStructure="1"/><bookViews><workbookView activeTab="0"/></bookViews>"#;
     // Defined names must come after <sheets>; build the workbook by hand.
