@@ -571,7 +571,8 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+                (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
+                (Some(p), None) => open(p)?,
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -674,6 +675,12 @@ mod tests {
         assert_eq!(value_text(&json!(true)), "TRUE");
         assert_eq!(value_text(&json!({"error": "#DIV/0!"})), "#DIV/0!");
         assert_eq!(value_text(&json!([[1.0, 2.0], [3.0, "x"]])), "1\t2\n3\tx");
+    }
+
+    #[test]
+    fn headless_mcp_rejects_conflicting_workbook_inputs() {
+        let args = ["--in", "/no/such/file.xlsx", "--sample", "sales"].map(str::to_string);
+        assert_eq!(mcp(&args), Err("give --in or --sample, not both".into()));
     }
 
     #[test]
