@@ -860,14 +860,10 @@ fn read_craft_formula_text(
     dynamic: bool,
     unwrapped: &mut bool,
 ) -> Option<Formula> {
-    let mut formula = crate::fmla::cell_from_file(f.text.trim());
-    if let Some(known) = cx.known_function
-        && let Some(u) = unwrap_google_sheets(&formula.text, known)
-    {
-        // The wrapper's calls are gone: derive namespace metadata from its replacement.
-        formula = crate::fmla::cell_from_file(&u);
-        *unwrapped = true;
-    }
+    let file_text = f.text.trim();
+    let rewritten = cx.known_function.and_then(|known| unwrap_google_sheets(file_text, known));
+    *unwrapped = rewritten.is_some();
+    let formula = rewritten.unwrap_or_else(|| crate::fmla::cell_from_file(file_text));
     let text = formula.text.as_str();
     match f.kind {
         CraftFormulaKind::Shared => {

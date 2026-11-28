@@ -1,7 +1,7 @@
 //! Formula text conversion between the model (canonical text, no `=`) and files (`_xlfn.`
 //! prefixes for newer functions).
 
-use gridcraft_formula::Expr;
+use gridcraft_formula::{Expr, normalize_function_name, parser::parse_preserving_call_names};
 use gridcraft_model::{FileFunctionPrefix, Formula};
 use std::collections::BTreeMap;
 
@@ -330,15 +330,18 @@ fn mentions_dummy_function(text: &str) -> bool {
     text.as_bytes().windows(NEEDLE.len()).any(|w| w.eq_ignore_ascii_case(NEEDLE))
 }
 
-/// The model text of `text` (a formula as read, see [`from_file`]) with its Google Sheets export
-/// wrappers replaced (see [`crate::read_xlsx_with`]), or `None` when nothing changes.
-pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> Option<String> {
+/// Read the file formula with any supported Google Sheets export wrappers replaced, or return
+/// `None` when nothing changes. Each call keeps its file name on the syntax node through the
+/// rewrite, so inserted and discarded calls cannot shift the prefixes of surviving calls.
+pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> Option<Formula> {
     if !mentions_dummy_function(text) {
         return None;
     }
-    let e = gridcraft_formula::parse(text.strip_prefix('=').unwrap_or(text)).ok()?;
+    let e = parse_preserving_call_names(text).ok()?;
     let unwrapped = unwrap_dummy_functions(e, known)?;
-    Some(gridcraft_formula::print(&strip_param_prefixes(unwrapped)))
+    let formula = cell_from_file(&gridcraft_formula::print(&unwrapped));
+    // A replacement could put the combined expression past the parser's nesting limit.
+    formula.expr.is_some().then_some(formula)
 }
 
 /// The original formula inside Google Sheets' export wrapper
@@ -347,12 +350,11 @@ pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> 
 /// the doubled quotes. The cached value is also the cell's `<v>`, which the reader keeps.
 fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> {
     let Expr::Call(name, args) = e else { return None };
-    // The parser has already dropped an `_xlfn.` prefix from IFERROR.
-    if !name.eq_ignore_ascii_case("IFERROR") {
+    if normalize_function_name(name) != "IFERROR" {
         return None;
     }
     let [Expr::Call(dummy, inner), _fallback] = args.as_slice() else { return None };
-    if !dummy.eq_ignore_ascii_case(DUMMY_FUNCTION) {
+    if !normalize_function_name(dummy).eq_ignore_ascii_case(DUMMY_FUNCTION) {
         return None;
     }
     let [Expr::Text(src)] = inner.as_slice() else { return None };
@@ -361,21 +363,20 @@ fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> 
     if src.len() > gridcraft_formula::MAX_FORMULA_LEN && src.chars().count() > gridcraft_formula::MAX_FORMULA_LEN {
         return None;
     }
-    let parsed = gridcraft_formula::parse(src).ok()?;
+    let parsed = parse_preserving_call_names(src).ok()?;
     // A function GridCraft can't calculate would show `#NAME?` where Excel shows the cached
     // value; a wrapper inside the text is one too, so only one level is ever unwrapped.
     let mut all_known = true;
     parsed.walk(&mut |x| {
         if let Expr::Call(n, _) = x {
-            all_known &= known(n);
+            all_known &= known(&normalize_function_name(n));
         }
     });
     all_known.then_some(parsed)
 }
 
 /// `e` with each Google Sheets export wrapper (see [`dummy_function_inner`]) replaced by the
-/// formula it holds, for the whole formula or anywhere inside it, or `None` when none is. If the
-/// result no longer parses (nesting beyond the parser's limit), nothing is replaced.
+/// formula it holds, for the whole formula or anywhere inside it, or `None` when none is.
 fn unwrap_dummy_functions(e: Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> {
     // The whole formula: no parentheses needed.
     if let Some(inner) = dummy_function_inner(&e, known) {
@@ -406,11 +407,7 @@ fn unwrap_dummy_functions(e: Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr>
         }
         None => x,
     });
-    if !found {
-        return None;
-    }
-    gridcraft_formula::parse(&gridcraft_formula::print(&rewritten)).ok()?;
-    Some(rewritten)
+    found.then_some(rewritten)
 }
 
 /// What the engine passes as `known` (`gridcraft_calc::is_known_function`), for tests here: the
@@ -567,11 +564,9 @@ mod tests {
         assert_eq!(to_file(&Formula::new("GROUPBY(A1:A3,B1:B3,\"SUM\")")), "_xlfn.GROUPBY(A1:A3,B1:B3,\"SUM\")");
     }
 
-    /// A formula as the reader leaves it, then with Google Sheets' wrappers unwrapped against
-    /// the real function library.
+    /// Read the file formula against the real function library.
     fn read(file: &str) -> String {
-        let text = from_file(file);
-        unwrap_google_sheets(&text, &test_known_function).unwrap_or(text)
+        unwrap_google_sheets(file, &test_known_function).map_or_else(|| from_file(file), |formula| formula.text)
     }
 
     /// #2871: Google Sheets' export wraps formulas as
@@ -622,7 +617,7 @@ mod tests {
         ] {
             let kept = gridcraft_formula::print(&gridcraft_formula::parse(file).unwrap());
             assert_eq!(read(file), kept, "{file}");
-            assert_eq!(unwrap_google_sheets(&from_file(file), &test_known_function), None, "{file}");
+            assert!(unwrap_google_sheets(file, &test_known_function).is_none(), "{file}");
         }
         // Inner text over the formula length limit.
         let long = format!("IFERROR(__xludf.DUMMYFUNCTION(\"{}\"),5)", "1".repeat(gridcraft_formula::MAX_FORMULA_LEN + 1));
