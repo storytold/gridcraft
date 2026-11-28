@@ -61,6 +61,21 @@ For Chat Completions, the manual choices are none, minimal, low, medium, high, x
 
 Wingman runs its own tool loop against the configured model API. In Zed these are [model providers](https://zed.dev/docs/ai/llm-providers); [external agents](https://zed.dev/docs/ai/external-agents) are separate programs using ACP, with their own sessions, permissions and tools. Wingman does not launch Zed's `agent_servers`. Use `language_models` for a model endpoint and `context_servers` for additional MCP tools.
 
+### Code, diagrams and equations
+
+Fenced code uses the workbook theme. Language tags such as `rust`, `python`, `vba`, `formula` and `json` select syntax highlighting; unrecognized tags show plain code. **Copy code** copies the full original block, including indentation and line endings, even when the preview is shortened.
+
+A `mermaid` fence can draw a flowchart or sequence diagram in the conversation. For example:
+
+```mermaid
+flowchart LR
+    A[Read cells] --> B{Blank?}
+    B -->|Yes| C[Skip]
+    B -->|No| D[Calculate]
+```
+
+Use a `math`, `latex` or `tex` fence for a block equation. In prose, `$x^2$` or `\(x^2\)` renders inline; `$$…$$` or `\[…\]` renders on its own row. All previews are local and read-only. **Source** switches a fenced equation or diagram back to its exact notation. Unsupported Mermaid features (including subgraphs, sequence control blocks and diagram types other than flowcharts and sequences) and equations that cannot be drawn show their source instead.
+
 ## Work with a sheet
 
 | Access | What the model can do |

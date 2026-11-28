@@ -1,10 +1,15 @@
 //! A native, workbook-scoped assistant. The editor interaction reference is the
 //! [Zed agent panel](https://zed.dev/docs/ai/agent-panel); the tools operate on GridCraft documents.
 mod chat;
+mod code_preview;
 mod compact;
 mod composer;
 mod history;
+mod math_preview;
 mod mcp;
+mod mermaid;
+mod message_math;
+mod message_view;
 mod panel;
 mod pixels;
 mod provider;

@@ -15,7 +15,7 @@ A few controls share an engine command but have different routes:
 
 ## Coverage by section
 
-1914 entries in 25 sections. A command can appear in more than one menu.
+1915 entries in 25 sections. A command can appear in more than one menu.
 
 | Section | Direct | Equivalent | Inspect | Guide |
 |---|---:|---:|---:|---:|
@@ -42,7 +42,7 @@ A few controls share an engine command but have different routes:
 | Table Design | 75 | 3 | 2 | 8 |
 | View | 5 | 6 | 1 | 51 |
 | Window | 0 | 1 | 2 | 24 |
-| Wingman | 0 | 0 | 0 | 26 |
+| Wingman | 0 | 0 | 0 | 27 |
 | Workbook | 40 | 0 | 4 | 173 |
 
 ## Automate
@@ -1835,6 +1835,8 @@ A few controls share an engine command but have different routes:
 
 | Group / menu | Control | Command | Access | Wingman tool |
 |---|---|---|---|---|
+| Code Block | Copy code | — | guide | — |
+| Code Block | Source | — | guide | — |
 | Controls | Redo draft edit | — | guide | — |
 | Controls | Undo draft edit | — | guide | — |
 | Controls | Wingman | `view.wingman` | guide | — |
@@ -1845,7 +1847,6 @@ A few controls share an engine command but have different routes:
 | Input | Deny | — | guide | — |
 | Input | Send | — | guide | — |
 | Input | Stop | — | guide | — |
-| Message | Copy code | — | guide | — |
 | Settings | Cancel | — | guide | — |
 | Settings | Find models | — | guide | — |
 | Settings | Open JSON | — | guide | — |

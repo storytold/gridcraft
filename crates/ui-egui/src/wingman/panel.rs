@@ -1,6 +1,6 @@
 use super::{AgentKey, Approval, Mode, PanelState, ToolRounds, chat::CallPolicy, provider};
 use crate::{SheetApp, i18n::Language, theme::Tokens};
-use egui::{Align, Align2, Button, Context, Layout, Rect, RichText, ScrollArea, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align, Align2, Button, Context, Layout, Rect, ScrollArea, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
 
 const ICON: &[u8] = include_bytes!("../../../../assets/wingman/artcraft-ai-256.png");
@@ -309,10 +309,10 @@ impl PanelState {
                 let (thinking, answer) = super::transcript::assistant_parts(&t.partial_thinking, &t.partial, false);
                 if self.show_thinking && !thinking.is_empty() {
                     ui.strong(l.tr("Thinking"));
-                    message(ui, l, thinking, false, &[]);
+                    ui.push_id("live_thinking", |ui| message(ui, l, thinking, false, &[]));
                 }
                 if !answer.is_empty() {
-                    message(ui, l, answer, false, &[]);
+                    ui.push_id("live_answer", |ui| message(ui, l, answer, false, &[]));
                 }
             }
         });
@@ -601,27 +601,13 @@ impl PanelState {
     }
 }
 
-// Render code as copyable, selectable text; response text never activates links or commands.
 fn message(ui: &mut Ui, l: Language, text: &str, finished: bool, references: &[std::ops::Range<usize>]) {
+    let mut previews_left = 32;
     message_parts(text, |language, start, value, closed| {
-        let visible = value.strip_suffix("\r\n").or_else(|| value.strip_suffix('\n')).unwrap_or(value);
-        let label: egui::WidgetText = if let Some(language) = language {
-            ui.horizontal_wrapped(|ui| {
-                if !language.is_empty() {
-                    ui.weak(language);
-                }
-                if (closed || finished) && ui.small_button(l.tr("Copy code")).clicked() {
-                    ui.ctx().copy_text(value.to_owned());
-                }
-            });
-            RichText::new(visible).monospace().into()
-        } else {
-            // The parser sees the entire message, including any surrounding code fences.
-            let i = references.partition_point(|s| s.start < start);
-            let mut local = references[i..].iter().take_while(|s| s.end <= start + visible.len()).map(|s| s.start - start..s.end - start).peekable();
-            if local.peek().is_some() { super::composer::reference_layout(ui, visible, local).into() } else { visible.into() }
-        };
-        ui.add(egui::Label::new(label).wrap().selectable(true));
+        ui.push_id(start, |ui| match language {
+            Some(language) => super::message_view::code_block(ui, l, language, value, closed, finished, &mut previews_left),
+            None => super::message_view::prose(ui, l, value, start, references, &mut previews_left),
+        });
     });
 }
 

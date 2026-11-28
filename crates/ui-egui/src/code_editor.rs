@@ -209,9 +209,21 @@ pub fn font() -> FontId {
 
 /// A layout job for `text` with syntax colours.
 pub fn layout_job(text: &str, lang: Lang, font: &FontId, plain: egui::Color32, syntax: &Syntax, wrap_width: f32) -> egui::text::LayoutJob {
+    layout_spans(text, highlight(text, lang), font, plain, syntax, wrap_width)
+}
+
+/// Apply the editor palette to ordered token spans without changing the source.
+pub(crate) fn layout_spans(
+    text: &str,
+    spans: impl IntoIterator<Item = (Range<usize>, Token)>,
+    font: &FontId,
+    plain: egui::Color32,
+    syntax: &Syntax,
+    wrap_width: f32,
+) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let mut pos = 0usize;
-    for (range, token) in highlight(text, lang) {
+    for (range, token) in spans {
         if range.start < pos {
             continue;
         }
