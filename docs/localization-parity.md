@@ -27,7 +27,9 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
   each. The tables are used by
   the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
+  dialog, every dialog title and the shared OK/Cancel buttons; the Find and Replace dialog routes
+  its labels, tabs, buttons and its results line through `tr`, and reports the not-found in its
+  results area in the interface language (11-03); the other dialogs, menus,
   context menus, task panes, status messages and command labels are still English literals.
   Untranslated labels fall back to English.
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
@@ -145,6 +147,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-22 | minor | The Find dialog's duplicate catalog rows are dropped after merging main: main's own catalogs already translate the dialog's title, fields, buttons and count line, so Russian keeps the wording main chose; `i18n/ru.rs` adds only the contextual tab keys and the `Nothing found` / `Nothing found for “{}”` lines, which the other catalogs lack and fall back to English |
 | 2026-11-18 | minor | The fill-handle menus (right-drag menu and Auto Fill Options: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Fill Days, Fill Weekdays, Fill Months, Fill Years, and the button's own name) have a row in all 18 non-English catalogs, and Series…, Down and Up from the Home › Fill menu in the nine catalogs that lacked them; the Ukrainian rows that held English are translated. A test fails when one goes missing (#4458). The translations are AI-assisted and not yet reviewed by native speakers |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
