@@ -18,6 +18,7 @@ use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param
 
 mod advanced_filter;
 mod consolidate;
+mod group_key;
 mod scenarios;
 
 use advanced_filter::advanced_filter;
