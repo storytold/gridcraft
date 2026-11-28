@@ -1,6 +1,6 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
-    formula_locale, i18n, json, now_ms, printing,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SaveRequest, SheetApp, UiRequest, backstage, clamp_interface_scale,
+    clean_error, dialogs, formula_locale, i18n, json, now_ms, printing,
 };
 
 impl SheetApp {
@@ -151,6 +151,11 @@ impl SheetApp {
             self.ui.ribbon_tab = "View".into();
             self.ui.ribbon_collapsed = false;
             self.open_switch_windows = true;
+            return;
+        }
+        // A menu-style save that would lose something asks first; programmatic callers of `run`
+        // get `warnings` in the result instead.
+        if matches!(id, "file.save" | "file.saveAs") && self.hold_save(SaveRequest::Command { id: id.into(), params: params.clone() }) {
             return;
         }
         match self.run(id, params) {
@@ -465,40 +470,41 @@ impl SheetApp {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
-                } else if self.services.download.is_some()
-                    && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
-                    && let Some(dl) = &self.services.download
-                    && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
-                {
-                    let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
-                    dl(&name, &b);
+                } else if self.services.download.is_some() && !self.hold_save(SaveRequest::Download) {
+                    self.download_workbook("xlsx");
                 }
             }
+            // The notice AutoSave holds back with: Save asks what the notice says.
+            "saveLoss" => self.run_or_alert("file.save", json!({})),
             // File › Options (`file.options`) and the File tab itself open the Backstage view.
             "options" => self.open_backstage(backstage::Page::Options),
             "backstage" => {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
             }
-            // The macro step editor stays until it closes itself (its draft, overlays and debug
-            // run go with it), so another dialog can't replace it.
-            _ if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") => {
-                self.message = Some((
-                    "Macro".into(),
-                    "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
-                ));
-            }
-            other => {
-                // A dialog replaced while one of its reference boxes picks (a ribbon command
-                // opening another dialog) first puts the sheet and selection from before picking
-                // back, as closing it does.
-                if let Some(mut old) = self.dialog.take() {
-                    // The draft was committed above, so the sheet can be shown again.
-                    let _ = old.end_pick(self);
-                }
-                self.dialog = dialogs::Dialog::open(self, other, params);
-            }
+            other => self.replace_dialog(|app| dialogs::Dialog::open(app, other, params)),
         }
+    }
+
+    /// Shows the dialog `make` builds in place of the one that is open.
+    pub(super) fn replace_dialog(&mut self, make: impl FnOnce(&mut SheetApp) -> Option<dialogs::Dialog>) {
+        // The macro step editor stays until it closes itself (its draft, overlays and debug
+        // run go with it), so another dialog can't replace it.
+        if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
+            self.message = Some((
+                "Macro".into(),
+                "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
+            ));
+            return;
+        }
+        // A dialog replaced while one of its reference boxes picks (a ribbon command opening
+        // another dialog) first puts the sheet and selection from before picking back, as closing
+        // it does.
+        if let Some(mut old) = self.dialog.take() {
+            // The draft was committed by the caller, so the sheet can be shown again.
+            let _ = old.end_pick(self);
+        }
+        self.dialog = make(self);
     }
 
     /// Opens the File tab's Backstage view on `page`, committing a cell still being edited first

@@ -81,6 +81,8 @@ pub struct Dialog {
     /// Open Hyperlink: the address the prompt shows, which OK opens. Private, unlike `values`, so
     /// `ui.dialog.set` can't swap it behind the text the user reads (#2181).
     link: Option<String>,
+    /// Save Workbook: the save the question holds back. Not in `values`, as for `link`.
+    save: Option<crate::state::PendingSave>,
     pub(crate) focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -245,6 +247,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             link: None,
+            save: None,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
@@ -271,6 +274,7 @@ impl Dialog {
             picture_target: None,
             back: None,
             link: None,
+            save: None,
             focus_initialized: false,
             pick: None,
             original_link_text: None,
@@ -279,6 +283,16 @@ impl Dialog {
     }
 
     /// Opens the named dialog with defaults from the active workbook, including a cell's stored hyperlink.
+    /// The save the Save Workbook question holds back.
+    pub(crate) fn pending_save(&self) -> Option<crate::state::PendingSave> {
+        self.save.clone()
+    }
+
+    /// The question a save asks first about what it would lose.
+    pub(crate) fn save_loss(pending: crate::state::PendingSave) -> Dialog {
+        Dialog { save: Some(pending), ..Dialog::custom("saveLoss", "Save Workbook", json!({})) }
+    }
+
     pub fn open(app: &mut SheetApp, name: &str, params: Json) -> Option<Dialog> {
         let sel = app.session.active().map(|d| d.selection.current().a1()).unwrap_or_default();
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();

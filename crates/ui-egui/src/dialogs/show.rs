@@ -374,6 +374,24 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                "saveLoss" => {
+                    let lang = app.ui.language;
+                    let pending = d.pending_save();
+                    for loss in pending.iter().flat_map(|p| p.losses.messages()) {
+                        ui.add(egui::Label::new(loss).wrap());
+                    }
+                    ui.horizontal(|ui| {
+                        for (label, answer) in [
+                            ("Cancel", crate::SaveLossAnswer::Cancel),
+                            ("Save Anyway", crate::SaveLossAnswer::Anyway),
+                            ("Save as GridCraft Workbook…", crate::SaveLossAnswer::Json),
+                        ] {
+                            if ui.button(lang.tr(label)).clicked() && pending.clone().is_none_or(|p| app.answer_save_loss(answer, p, ui.ctx())) {
+                                open = false;
+                            }
+                        }
+                    });
+                }
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {

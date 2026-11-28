@@ -767,3 +767,290 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// A workbook with a sheet left out of whole-workbook printing, saved as `path` before it was marked.
+fn marked_after_saving(services: Services, path: &str) -> egui_kittest::Harness<'static, SheetApp> {
+    let mut h = harness(services);
+    h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+    h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": true})).unwrap();
+    h.run_steps(2);
+    h
+}
+
+fn dialog(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<String> {
+    h.state().dialog.as_ref().map(|d| d.name().to_string())
+}
+
+#[test]
+fn saving_asks_before_it_drops_a_print_exclusion() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path, kept) = (dir.join("Book.xlsx").to_string_lossy().into_owned(), dir.join("Kept.json").to_string_lossy().into_owned());
+    let target = kept.clone();
+    let mut h = marked_after_saving(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() }, &path);
+    let before = std::fs::read(&path).unwrap();
+
+    // Cancel: nothing is written and the workbook stays unsaved.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    click(&mut h, "Cancel");
+    assert_eq!(dialog(&h), None);
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    // The other format keeps the mark and becomes the workbook's file.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    click(&mut h, "Save as GridCraft Workbook…");
+    assert_eq!(dialog(&h), None);
+    let d = h.state().session.active().unwrap();
+    assert!(!d.is_dirty() && d.path.as_deref() == Some(kept.as_str()));
+    let (wb, _) = gridcraft_engine::io::open_bytes("Kept.json", &std::fs::read(&kept).unwrap()).unwrap();
+    assert!(wb.active().unwrap().print.excluded);
+
+    // Going ahead saves the .xlsx, and the same loss isn't asked about again.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({"path": &path}));
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    assert_ne!(std::fs::read(&path).unwrap().len(), 0);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+
+    // A script is never asked: the result carries the loss.
+    let r = h.state_mut().run("file.save", serde_json::json!({})).unwrap();
+    assert!(r["warnings"][0].is_string() && dialog(&h).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_goes_on_once_the_save_loss_is_answered() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Save");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the question comes first: {sent:?}");
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    click_commands(&mut h, "Cancel");
+    assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the workbook open");
+    request_window_close(&mut h);
+    click_commands(&mut h, "Save");
+    let sent = click_commands(&mut h, "Save Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn autosave_waits_instead_of_dropping_a_print_exclusion() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    let before = std::fs::read(&path).unwrap();
+    h.state_mut().ui.autosave = true;
+    for _ in 0..40 {
+        h.run_steps(1);
+        if h.state().notice.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(h.state().notice.is_some(), "it says AutoSave is on hold");
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// AutoSave's hold ends, with its notice, when there is nothing left to hold back for, and a later
+/// hold on the same sheets is said again. A notice about something else stays.
+#[test]
+fn an_autosave_hold_ends_with_its_notice() {
+    fn until(h: &mut egui_kittest::Harness<'_, SheetApp>, done: impl Fn(&SheetApp) -> bool) -> bool {
+        for _ in 0..60 {
+            h.run_steps(1);
+            if done(h.state()) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    }
+    let held = |a: &SheetApp| a.notice.as_ref().is_some_and(|n| n.text.contains("on hold"));
+    let exclude = |h: &mut egui_kittest::Harness<'_, SheetApp>, on: bool| {
+        h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": on})).unwrap();
+    };
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-resume-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    h.state_mut().ui.autosave = true;
+    assert!(until(&mut h, held));
+    // Nothing is lost any more: AutoSave saves.
+    exclude(&mut h, false);
+    assert!(until(&mut h, |a| a.session.active().is_some_and(|d| !d.is_dirty())), "AutoSave resumed");
+    assert!(until(&mut h, |a| a.notice.is_none()), "the hold's notice goes with it");
+    // The same sheets again: held, and said again.
+    exclude(&mut h, true);
+    assert!(until(&mut h, held), "a later hold is said again");
+    // Turning AutoSave off ends the hold, but not a notice about something else.
+    let other = gridcraft_ui_egui::Notice { text: "Macros were kept.".into(), kind: gridcraft_ui_egui::NoticeKind::Info, action: None };
+    h.state_mut().notice = Some(other.clone());
+    h.state_mut().ui.autosave = false;
+    h.run_steps(2);
+    assert_eq!(h.state().notice.as_ref(), Some(&other));
+    // A Save the user agreed to ends it too.
+    h.state_mut().notice = None;
+    h.state_mut().ui.autosave = true;
+    assert!(until(&mut h, held));
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    h.run_steps(2);
+    assert_eq!(h.state().notice, None);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save As asks about the file that was picked, and leaves the workbook's own file alone.
+#[test]
+fn save_as_asks_about_the_picked_file_and_keeps_the_first_one() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-as-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let (path, other) = (at("Book.xlsx"), at("Other.xlsx"));
+    let target = other.clone();
+    let mut h = marked_after_saving(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() }, &path);
+    let before = std::fs::read(&path).unwrap();
+    h.state_mut().run_or_alert("file.saveAs", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    click(&mut h, "Save Anyway");
+    assert_eq!(dialog(&h), None);
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the workbook's own file isn't overwritten");
+    assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some(other.as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The question keeps what it asked about: neither a file that opens meanwhile nor the control
+/// channel changes what Save Anyway writes.
+#[test]
+fn save_anyway_writes_what_was_asked_about() {
+    use gridcraft_ui_egui::control::handle;
+    let dir = std::env::temp_dir().join(format!("gridcraft-loss-bound-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let inbox: gridcraft_ui_egui::Inbox = Default::default();
+    let mut h = marked_after_saving(Services { inbox: Some(inbox.clone()), ..Default::default() }, &at("Book.xlsx"));
+    let window = h.state().session.active_window().unwrap();
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(2);
+    let ctx = h.ctx.clone();
+    let set = serde_json::json!({"field": "params", "value": {"path": at("Elsewhere.xlsx")}});
+    handle(h.state_mut(), &ctx, "ui.dialog.set", &set);
+
+    inbox.lock().unwrap().push(("Dropped.csv".into(), b"1,2".to_vec()));
+    h.run_steps(3);
+    assert_eq!((h.state().session.documents().len(), dialog(&h)), (2, None), "the question stays in its window");
+    h.state_mut().enter_window(window);
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    assert!(!std::path::Path::new(&at("Elsewhere.xlsx")).exists());
+    let d = h.state().session.active().unwrap();
+    assert!(!d.is_dirty() && d.path.as_deref() == Some(at("Book.xlsx").as_str()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Agreeing is to exactly the sheets that lose the mark, also those the question only counts.
+#[test]
+fn another_excluded_sheet_is_asked_about_also_past_the_names_shown() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-loss-many-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    let exclude = |h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str, on: bool| {
+        h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"sheet": name, "excluded": on})).unwrap();
+    };
+    for i in 0..13 {
+        h.state_mut().run("home.insertSheet", serde_json::json!({"name": format!("S{i:02}")})).unwrap();
+    }
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    // In tab order: the last two in the workbook are past the ten names shown.
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    for n in &names[..12] {
+        exclude(&mut h, n, true);
+    }
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None, "the same sheets aren't asked about again");
+    exclude(&mut h, &names[11], false);
+    exclude(&mut h, &names[12], true);
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A question that another one replaces hands its close and quit on.
+#[test]
+fn closing_goes_on_after_a_second_save_loss_question() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-loss-again-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+    let target = at("Other.xlsx");
+    let mut h = marked_after_saving(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() }, &at("Book.xlsx"));
+    request_window_close(&mut h);
+    click_commands(&mut h, "Save");
+    let sent = click_commands(&mut h, "Save as GridCraft Workbook…");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "an .xlsx was picked: asked again");
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    let sent = click_commands(&mut h, "Save Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    assert!(std::path::Path::new(&at("Other.xlsx")).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A workbook with no file goes through Save As first, and the close still follows the answer.
+#[test]
+fn closing_a_new_workbook_goes_on_after_save_as_asks() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-loss-new-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("New.xlsx").to_string_lossy().into_owned();
+    let target = path.clone();
+    let mut h = harness(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() });
+    h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": true})).unwrap();
+    h.run_steps(2);
+    request_window_close(&mut h);
+    click_commands(&mut h, "Save");
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    let sent = click_commands(&mut h, "Save Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close) && std::path::Path::new(&path).exists(), "{sent:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The web's Save asks before the .xlsx is handed to the browser.
+#[test]
+fn a_download_asks_before_it_drops_a_print_exclusion() {
+    let got = Arc::new(Mutex::new(Vec::new()));
+    let sink = got.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| sink.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": true})).unwrap();
+    for (answer, kind) in [("Cancel", None), ("Save as GridCraft Workbook…", Some(".json")), ("Save Anyway", Some(".xlsx"))] {
+        h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+        h.run_steps(3);
+        assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+        assert!(got.lock().unwrap().is_empty());
+        click(&mut h, answer);
+        let names = std::mem::take(&mut *got.lock().unwrap());
+        assert_eq!((names.len(), names.first().map(|n| n.ends_with(kind.unwrap_or_default()))), (usize::from(kind.is_some()), kind.map(|_| true)));
+    }
+}

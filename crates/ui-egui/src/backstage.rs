@@ -723,7 +723,9 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
             let before = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
             app.open_dialog("saveAs", json!({}));
             let after = app.session.active().map(|d| (d.path.clone(), d.is_dirty()));
-            if after != before || app.services.pick_save.is_none() {
+            // A question about what the save would lose shows over the sheet.
+            let asking = app.dialog.as_ref().is_some_and(|d| d.name() == "saveLoss");
+            if after != before || asking || app.services.pick_save.is_none() {
                 out.close = true;
             }
         } else if export_as(app, fmt) {

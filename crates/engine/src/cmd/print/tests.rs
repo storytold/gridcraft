@@ -1361,6 +1361,97 @@ fn equations_print_with_the_symbol_font() {
     assert!(contains(&pdf, "(?) Tj"));
 }
 
+/// Printing the workbook leaves out sheets marked not to print, unless every sheet is.
+#[test]
+fn workbook_printing_skips_excluded_sheets() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    let printed = |wb: &gridcraft_model::Workbook| super::layout::layouts(wb, &all).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(printed(&wb), vec![0, 1]);
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![1]);
+    // Printing the active sheet alone still prints it.
+    let active = super::layout::PrintOptions::default();
+    assert_eq!(super::layout::layouts(&wb, &active).iter().map(|l| l.sheet).collect::<Vec<_>>(), vec![0]);
+    std::sync::Arc::make_mut(&mut wb.sheets[1]).print.excluded = true;
+    assert_eq!(printed(&wb), vec![0, 1]);
+}
+
+/// Page Setup's `excluded` marks the sheet; whole-workbook PDF export then skips it.
+#[test]
+fn page_setup_excluded_leaves_the_sheet_out_of_workbook_export() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "two"})).unwrap();
+    let (_, both) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(both, 2);
+    assert!(s.execute("pageLayout.pageSetup", json!({})).unwrap().get("excluded").is_none());
+    let r = s.execute("pageLayout.pageSetup", json!({"sheet": "Two", "excluded": true})).unwrap();
+    assert_eq!(r["excluded"], true);
+    let (pdf, one) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(one, 1);
+    assert!(contains(&pdf, "(one) Tj") && !contains(&pdf, "(two) Tj"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pdf_of(&mut s, json!({"sheets": "all"})).1, 2);
+}
+
+/// Workbook printing never falls back to an excluded sheet when every other sheet is empty, and a
+/// range given for an excluded active sheet still prints.
+#[test]
+fn excluded_active_sheet_is_not_the_empty_fallback_but_prints_an_explicit_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    let mut one = gridcraft_model::Sheet::new("One");
+    one.set_value(CellRef::new(0, 0), Value::Text("One".into()));
+    one.print.excluded = true;
+    wb.sheets.push(std::sync::Arc::new(one));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Two")));
+    assert_eq!(wb.active_sheet(), 0);
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    // One is excluded, Two is blank: Two's blank page, not One.
+    let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
+    assert_eq!(sheets_of(&all), vec![1]);
+    // An explicit range for the (excluded) active sheet prints it.
+    let ranged = super::layout::PrintOptions {
+        all_sheets: true,
+        ranges: gridcraft_core::RangeRef::parse("A1:B2").into_iter().collect(),
+        ..Default::default()
+    };
+    let lays = super::layout::layouts(&wb, &ranged);
+    assert_eq!(lays.iter().map(|l| (l.sheet, l.area)).collect::<Vec<_>>(), vec![(0, gridcraft_core::RangeRef::parse("A1:B2").unwrap())]);
+}
+
+/// When every visible sheet is excluded they all print, with or without a range for the active one.
+#[test]
+fn every_sheet_excluded_prints_them_all_also_with_a_range() {
+    use gridcraft_core::Value;
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheets.clear();
+    for name in ["One", "Two"] {
+        let mut sh = gridcraft_model::Sheet::new(name);
+        sh.set_value(CellRef::new(0, 0), Value::Text(name.into()));
+        sh.print.excluded = true;
+        wb.sheets.push(std::sync::Arc::new(sh));
+    }
+    let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
+    assert_eq!(sheets_of(&super::layout::PrintOptions { all_sheets: true, ..Default::default() }), vec![0, 1]);
+    let ranged = super::layout::PrintOptions {
+        all_sheets: true,
+        ranges: gridcraft_core::RangeRef::parse("A1:B2").into_iter().collect(),
+        ..Default::default()
+    };
+    assert_eq!(sheets_of(&ranged), vec![0, 1]);
+}
+
 #[test]
 fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     use gridcraft_chart::Prim;
@@ -1385,6 +1476,43 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     pics.chart_prims = MAX_CHART_PRIMS - 10;
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
+
+/// Saving as .xlsx, which can't hold the `excluded` mark, says so in the result; the format that
+/// keeps it, a plain copy, and a workbook without the mark save quietly.
+#[test]
+fn saving_reports_an_excluded_mark_the_format_drops() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-losses-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let excluded = |path: &str| {
+        let mut s = Session::new();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.doc().unwrap().wb.sheets.iter().any(|sh| sh.print.excluded)
+    };
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for r in [s.execute("file.saveAs", json!({"path": at("plain.xlsx")})), s.execute("file.save", json!({})), s.execute("file.saveBytes", json!({}))]
+    {
+        assert!(r.unwrap().get("warnings").is_none(), "nothing is lost");
+    }
+    s.execute("pageLayout.pageSetup", json!({"sheet": "Two", "excluded": true})).unwrap();
+    let saved = s.execute("file.save", json!({})).unwrap();
+    assert!(saved["warnings"][0].as_str().is_some_and(|w| w.contains("Two")), "{saved}");
+    assert!(!excluded(&at("plain.xlsx")), "the mark is gone once the file is reopened");
+    for r in [
+        s.execute("file.saveAs", json!({"path": at("marked.xlsm")})),
+        s.execute("file.saveBytes", json!({"format": "xlsx"})),
+        s.execute_headless("file.save", json!({"path": at("headless.xlsx")})),
+    ] {
+        assert!(r.unwrap()["warnings"][0].as_str().is_some_and(|w| w.contains("Two")));
+    }
+    assert!(s.take_ui_requests().is_empty(), "a programmatic save never asks");
+    assert!(s.execute("file.saveAs", json!({"path": at("copy.csv")})).unwrap().get("warnings").is_none());
+    assert!(s.execute("file.saveAs", json!({"path": at("kept.json")})).unwrap().get("warnings").is_none());
+    assert!(excluded(&at("kept.json")), "GridCraft's own format keeps it");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
