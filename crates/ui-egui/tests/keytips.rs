@@ -869,3 +869,35 @@ fn review_notes_keytips_open_the_menu_and_create_or_edit_the_note() {
     assert!(!note.threaded);
     assert_eq!(note.text, "Updated note");
 }
+
+#[test]
+fn blank_review_dialogs_keep_the_existing_note_or_thread() {
+    let cases =
+        [("review.newComment", &[Key::R, Key::N, Key::N][..], "New Note", ""), ("review.newNote", &[Key::R, Key::C][..], "New Comment", "   ")];
+    for (existing_command, keys, title, text) in cases {
+        let mut session = blank();
+        session.execute(existing_command, json!({"text": "Original text"})).unwrap();
+        let threaded = existing_command == "review.newComment";
+        if threaded {
+            session.execute("review.replyComment", json!({"text": "Original reply"})).unwrap();
+        }
+        let mut h = harness(session);
+        sequence(&mut h, keys, false);
+        assert_eq!(h.state().dialog.as_ref().unwrap().title, title);
+        if !text.is_empty() {
+            events(&mut h, [Event::Text(text.into())]);
+        }
+        key(&mut h, Key::Tab);
+        key(&mut h, Key::Enter);
+
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+        let comment = &sheet.comments[&CellRef::new(0, 0)];
+        assert_eq!(comment.text, "Original text");
+        assert_eq!(comment.threaded, threaded);
+        if threaded {
+            assert_eq!(comment.replies.first().map(|(_, text)| text.as_str()), Some("Original reply"));
+        }
+        assert!(h.state().message.is_some());
+        assert_eq!(h.state().dialog.as_ref().unwrap().title, title);
+    }
+}
