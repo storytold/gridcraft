@@ -694,3 +694,29 @@ fn refused_shared_copies_keep_their_values_inside_array_ranges() {
     assert_eq!(s.value(c2), gridcraft_core::Value::Number(7.0));
     assert!(rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
 }
+
+/// #4455: a typed date with a negative UTC offset reads like one with a positive offset instead of
+/// importing blank; a multi-byte offset is malformed, not a crash.
+#[test]
+fn typed_dates_with_negative_utc_offsets_are_read() {
+    use gridcraft_core::{CellRef, Value};
+    let row = |r: u32, v: &str| format!(r#"<row r="{r}"><c r="A{r}" t="d"><v>{v}</v></c><c r="B{r}"><v>{r}</v></c></row>"#);
+    let body = format!(
+        "<sheetData>{}{}{}{}</sheetData>",
+        row(1, "2025-01-02T10:34:56-00:00"),
+        row(2, "2025-01-02T10:34:56-08:00"),
+        row(3, "2025-01-02T10:34:56+00:00"),
+        row(4, "2025-01-02T10:34:56-€0")
+    );
+    let (wb, _) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let at = |a: &str| s.value(CellRef::parse(a).unwrap());
+    let want = Value::number(45659.0 + (10.0 * 3600.0 + 34.0 * 60.0 + 56.0) / 86400.0);
+    for a in ["A1", "A2", "A3"] {
+        assert_eq!(at(a), want, "{a}");
+    }
+    assert_eq!(at("A4"), Value::Empty);
+    for r in 1..=4 {
+        assert_eq!(at(&format!("B{r}")), Value::Number(f64::from(r)), "sentinel B{r}");
+    }
+}
