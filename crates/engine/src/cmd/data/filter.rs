@@ -3,7 +3,7 @@ use super::{
     AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
     data_target, edit, json,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------- filter
 
@@ -429,18 +429,39 @@ fn table_filter_range(t: &gridcraft_model::Table) -> Option<RangeRef> {
     (end_row >= t.range.start.row).then(|| RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col)))
 }
 
-/// Precomputed per-criterion stats, blank flags, and lowercased value sets for evaluating a filter over rows.
+/// Marks which criterion spellings are displayed labels, so those spellings cannot also
+/// match a different cell by its canonical value. Include rows beyond the checklist's cap.
+fn value_keys(wb: &Workbook, sh: &Sheet, range: RangeRef, col: u32, values: &[String]) -> HashMap<String, bool> {
+    let mut keys: HashMap<_, _> = values.iter().map(|value| (filter_case_key(value.trim()), false)).collect();
+    let mut remaining = keys.len();
+    for row in range.start.row.saturating_add(1)..=range.end.row {
+        if remaining == 0 {
+            break;
+        }
+        let cell = CellRef::new(row, col);
+        if sh.value_ref(cell).is_some_and(|v| !filter_dropdown_blank(v))
+            && let Some(shown) = keys.get_mut(&filter_case_key(crate::display::cell_text(wb, sh, cell).trim()))
+            && !*shown
+        {
+            *shown = true;
+            remaining -= 1;
+        }
+    }
+    keys
+}
+
+/// Precomputed per-criterion statistics, blank flags, and value keys for evaluating rows.
 struct PreparedFilter<'a> {
     range: RangeRef,
     criteria: &'a [(u32, FilterCriterion)],
     criterion_blanks: Vec<bool>,
-    criterion_values: HashMap<usize, HashSet<String>>,
+    criterion_values: HashMap<usize, HashMap<String, bool>>,
     col_stats: HashMap<usize, (Option<f64>, f64)>,
 }
 
 impl<'a> PreparedFilter<'a> {
-    /// Precomputes blank flags, value lookup sets, Top10 thresholds, and column averages once before evaluating rows.
-    fn new(sh: &Sheet, af_range: RangeRef, criteria: &'a [(u32, FilterCriterion)]) -> Self {
+    /// Precomputes blank flags, value keys, Top10 thresholds, and column averages before evaluating rows.
+    fn new(wb: &Workbook, sh: &Sheet, af_range: RangeRef, criteria: &'a [(u32, FilterCriterion)]) -> Self {
         let range = RangeRef::new(af_range.start, CellRef::new(af_range.end.row.min(gridcraft_core::MAX_ROWS - 1), af_range.end.col));
         let criterion_blanks = criteria
             .iter()
@@ -452,9 +473,13 @@ impl<'a> PreparedFilter<'a> {
         let criterion_values = criteria
             .iter()
             .enumerate()
-            .filter_map(|(i, (_, c))| match c {
-                FilterCriterion::Values { values, .. } => Some((i, values.iter().map(|v| filter_case_key(v.trim())).collect())),
-                _ => None,
+            .filter_map(|(i, (off, c))| {
+                let FilterCriterion::Values { values, identities, .. } = c else { return None };
+                if identities.iter().any(|id| !id.starts_with("fmtws:")) {
+                    return None;
+                }
+                let col = range.start.col.checked_add(*off)?;
+                Some((i, value_keys(wb, sh, range, col, values)))
             })
             .collect();
         let mut col_stats = HashMap::new();
@@ -515,9 +540,13 @@ impl<'a> PreparedFilter<'a> {
                     if has_primary {
                         row_matches_primary_identities(wb, sh, c, &v, identities)
                     } else {
-                        self.criterion_values
-                            .get(&i)
-                            .is_some_and(|set| set.contains(&filter_case_key(text.trim())) || set.contains(&filter_case_key(v.display().trim())))
+                        self.criterion_values.get(&i).is_some_and(|keys| {
+                            keys.contains_key(&filter_case_key(text.trim()))
+                                || keys.get(&filter_case_key(v.display().trim())).is_some_and(|is_label| {
+                                    // Show Formulas changes the label, not the ability to filter by the result.
+                                    !*is_label || (sh.show_formulas && visible_formula_text(wb, sh, c).is_some())
+                                })
+                        })
                     }
                 };
                 if pre_migration {
@@ -642,8 +671,8 @@ pub(crate) fn migrate_loaded_autofilters(wb: &mut Workbook) {
         }
         let unhide: Vec<u32> = if let Some(sh) = wb.sheet(si) {
             let after_specs = collect_sheet_filters(sh);
-            let old_prepared: Vec<_> = before_filters.iter().map(|(r, c)| PreparedFilter::new(sh, *r, c)).collect();
-            let new_prepared: Vec<_> = after_specs.iter().map(|(r, c)| PreparedFilter::new(sh, *r, c)).collect();
+            let old_prepared: Vec<_> = before_filters.iter().map(|(r, c)| PreparedFilter::new(wb, sh, *r, c)).collect();
+            let new_prepared: Vec<_> = after_specs.iter().map(|(r, c)| PreparedFilter::new(wb, sh, *r, c)).collect();
             sh.rows
                 .iter()
                 .filter(|(_, info)| info.hidden)
@@ -708,7 +737,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
 /// Evaluates `criteria` over `af_range` on `sheet` and updates row visibility.
 fn apply_criteria_range(wb: &mut Workbook, sheet: usize, af_range: RangeRef, criteria: &[(u32, FilterCriterion)]) {
     let hide: Vec<(u32, bool)> = if let Some(sh) = wb.sheet(sheet) {
-        let prepared = PreparedFilter::new(sh, af_range, criteria);
+        let prepared = PreparedFilter::new(wb, sh, af_range, criteria);
         (prepared.range.start.row.saturating_add(1)..=prepared.range.end.row).map(|row| (row, !prepared.row_passes(wb, sh, row, false))).collect()
     } else {
         return;
@@ -842,7 +871,7 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
         Some((_, (_, FilterCriterion::Values { identities, .. }))) if !identities.is_empty() => Some(identities.as_slice()),
         _ => None,
     };
-    let prepared = PreparedFilter::new(sh, af.range, &af.criteria);
+    let prepared = PreparedFilter::new(wb, sh, af.range, &af.criteria);
     type ChoiceBucket = ((u8, i64, String), FilterChoice, (String, &'static str));
     let mut seen: std::collections::BTreeMap<Option<String>, ChoiceBucket> = std::collections::BTreeMap::new();
     // Imported end rows cannot add choices beyond the grid either.
