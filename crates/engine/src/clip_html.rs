@@ -16,6 +16,9 @@ const MAX_ROW_SPAN: usize = gridcraft_core::MAX_ROWS as usize;
 /// Most cells, span placeholders included, one paste reads from the HTML. Past it the rest of the
 /// table is ignored: the HTML only refines cells of the tab-separated text, which stays the source.
 const MAX_HTML_CELLS: usize = 1_000_000;
+/// Deepest nested `<table>` stack we materialize; deeper tables are skipped so hostile markup
+/// cannot grow the frame stack without bound.
+const MAX_TABLE_DEPTH: usize = 64;
 
 /// One table cell: its visible text, the number the source recorded for it, if any, and whether
 /// it is a header cell (`<th>`).
@@ -32,22 +35,28 @@ pub(crate) struct HtmlCell {
 /// from above holds an empty cell, so positions line up with the tab-separated text. Empty when
 /// there is no table.
 pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<Vec<HtmlCell>> {
-    let mut grid = Grid::new(max_rows, max_cols);
     if html.len() > MAX_HTML {
-        return grid.rows;
+        return Vec::new();
     }
-    let mut cell: Option<OpenCell> = None;
-    let mut in_table = false;
+    let mut frames: Vec<TableFrame> = Vec::new();
+    let mut ignored_depth = 0usize;
     let mut rest = html;
-    while !rest.is_empty() && !grid.full {
+    while !rest.is_empty() {
+        if frames.len() == 1 && frames.first().is_some_and(|f| f.grid.full) {
+            break;
+        }
         let Some(lt) = rest.find('<') else {
-            if let Some(c) = cell.as_mut() {
-                c.cell.text.push_str(rest);
+            if ignored_depth == 0
+                && let Some(cell) = frames.last_mut().and_then(|f| f.cell.as_mut())
+            {
+                cell.cell.text.push_str(rest);
             }
             break;
         };
-        if let Some(c) = cell.as_mut() {
-            c.cell.text.push_str(rest.get(..lt).unwrap_or_default());
+        if ignored_depth == 0
+            && let Some(cell) = frames.last_mut().and_then(|f| f.cell.as_mut())
+        {
+            cell.cell.text.push_str(rest.get(..lt).unwrap_or_default());
         }
         rest = rest.get(lt..).unwrap_or_default();
         if let Some(after) = rest.strip_prefix("<!--") {
@@ -62,47 +71,149 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
         let name_end = body.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(body.len());
         let name = body.get(..name_end).unwrap_or_default().to_ascii_lowercase();
         let attrs = body.get(name_end..).unwrap_or_default();
+        if ignored_depth > 0 {
+            match (name.as_str(), closing) {
+                ("style" | "script", false) => {
+                    rest = find_end_tag(rest, &name).and_then(|i| rest.get(i..)).unwrap_or_default();
+                }
+                ("table", false) => ignored_depth = ignored_depth.saturating_add(1),
+                ("table", true) => ignored_depth -= 1,
+                _ => {}
+            }
+            continue;
+        }
         match (name.as_str(), closing) {
             ("style" | "script", false) => {
                 // Raw text: skip to the closing tag.
-                let end = format!("</{name}");
-                rest = find_ci(rest, &end).and_then(|i| rest.get(i..)).unwrap_or_default();
+                rest = find_end_tag(rest, &name).and_then(|i| rest.get(i..)).unwrap_or_default();
             }
             ("table", false) => {
-                if in_table {
-                    break; // a nested table: the outer one is the clipboard grid, stop here
+                if frames.len() >= MAX_TABLE_DEPTH {
+                    ignored_depth = 1;
+                } else if let Some(parent) = frames.last() {
+                    // An open cell with no row yet will open one when it closes: reserve it.
+                    let host_row = usize::from(parent.grid.rows.is_empty() && parent.cell.is_some());
+                    let used_rows = parent.grid.rows.len().saturating_add(parent.pending_nested.len()).saturating_add(host_row);
+                    let rem_rows = parent.grid.max_rows.saturating_sub(used_rows);
+                    frames.push(TableFrame::new(rem_rows, max_cols, parent.grid.budget));
+                } else {
+                    frames.push(TableFrame::new(max_rows, max_cols, MAX_HTML_CELLS));
                 }
-                in_table = true;
             }
             ("table", true) => {
-                grid.finish(&mut cell);
-                if !grid.rows.is_empty() {
-                    break;
+                let Some(frame) = frames.pop() else { continue };
+                let rows = close_frame(frame, frames.last_mut());
+                if frames.is_empty() && !rows.is_empty() {
+                    return rows;
                 }
-                in_table = false;
             }
-            ("tr", false) if in_table => {
-                grid.finish(&mut cell);
-                grid.start_row();
+            ("tr", false) => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.finish_cell();
+                    frame.flush_nested();
+                    frame.grid.start_row();
+                }
             }
-            ("td" | "th", false) if in_table => {
-                grid.finish(&mut cell);
-                let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
-                let colspan = span(attrs, "colspan", MAX_SPAN);
-                let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+            ("td" | "th", false) => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.finish_cell();
+                    let num =
+                        attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
+                    let colspan = span(attrs, "colspan", MAX_SPAN);
+                    let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
+                    frame.cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                }
             }
-            ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
+            ("td" | "th", true) => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.finish_cell();
+                }
+            }
+            ("tr", true) => {
+                if let Some(frame) = frames.last_mut() {
+                    frame.finish_cell();
+                    frame.flush_nested();
+                }
+            }
             ("br", _) => {
-                if let Some(c) = cell.as_mut() {
-                    c.cell.text.push(' ');
+                if let Some(cell) = frames.last_mut().and_then(|f| f.cell.as_mut()) {
+                    cell.cell.text.push(' ');
                 }
             }
             _ => {}
         }
     }
-    grid.finish(&mut cell);
-    grid.rows
+    while let Some(frame) = frames.pop() {
+        let rows = close_frame(frame, frames.last_mut());
+        if frames.is_empty() {
+            return rows;
+        }
+    }
+    Vec::new()
+}
+
+/// Closes `frame` and either merges its rows into `parent.pending_nested` (charging its cell
+/// budget against `parent`) or returns the finished outer-table rows.
+fn close_frame(mut frame: TableFrame, parent: Option<&mut TableFrame>) -> Vec<Vec<HtmlCell>> {
+    frame.finish_cell();
+    frame.flush_nested();
+    let used_budget = frame.initial_budget.saturating_sub(frame.grid.budget);
+    if let Some(parent) = parent {
+        parent.grid.budget = parent.grid.budget.saturating_sub(used_budget);
+        if parent.grid.budget == 0 {
+            parent.grid.full = true;
+        }
+        parent.pending_nested.extend(frame.grid.rows);
+        Vec::new()
+    } else {
+        frame.grid.rows
+    }
+}
+
+/// One open `<table>` on the parser stack, with its own open cell and any nested tables' rows
+/// waiting to be placed after the current row finishes.
+struct TableFrame {
+    grid: Grid,
+    cell: Option<OpenCell>,
+    pending_nested: Vec<Vec<HtmlCell>>,
+    initial_budget: usize,
+}
+
+impl TableFrame {
+    fn new(max_rows: usize, max_cols: usize, max_budget: usize) -> Self {
+        let grid = Grid::new(max_rows, max_cols, max_budget);
+        let initial_budget = grid.budget;
+        TableFrame { grid, cell: None, pending_nested: Vec::new(), initial_budget }
+    }
+
+    fn finish_cell(&mut self) {
+        self.grid.finish(&mut self.cell);
+    }
+
+    fn flush_nested(&mut self) {
+        if self.pending_nested.is_empty() {
+            return;
+        }
+        let last_row = self.grid.rows.len().saturating_sub(1);
+        let mut added = 0usize;
+        for row in self.pending_nested.drain(..) {
+            if self.grid.rows.len() >= self.grid.max_rows {
+                self.grid.full = true;
+                break;
+            }
+            self.grid.rows.push(row);
+            added += 1;
+        }
+        // Only scan when some `rowspan` still reaches past the current row.
+        if added > 0 && self.grid.cover_end > last_row {
+            for u in &mut self.grid.covered_until {
+                if *u > last_row {
+                    *u = u.saturating_add(added);
+                }
+            }
+            self.grid.cover_end = self.grid.cover_end.saturating_add(added);
+        }
+    }
 }
 
 /// A `colspan`/`rowspan` attribute: at least 1, at most `max` (the sheet's extent), so a hostile
@@ -127,16 +238,18 @@ struct Grid {
     budget: usize,
     /// Per column: the row index (exclusive) down to which a `rowspan` from above covers it.
     covered_until: Vec<usize>,
+    /// The largest value in `covered_until`: no `rowspan` covers a row at or past it.
+    cover_end: usize,
     /// The row or cell budget ran out: nothing more is read.
     full: bool,
 }
 
 impl Grid {
-    fn new(max_rows: usize, max_cols: usize) -> Self {
+    fn new(max_rows: usize, max_cols: usize, max_budget: usize) -> Self {
         let max_rows = max_rows.min(MAX_ROW_SPAN);
         let max_cols = max_cols.min(MAX_SPAN);
-        let budget = MAX_HTML_CELLS.min(max_rows.saturating_mul(max_cols));
-        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false }
+        let budget = max_budget.min(MAX_HTML_CELLS).min(max_rows.saturating_mul(max_cols));
+        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), cover_end: 0, full: false }
     }
 
     /// Opens a new row, or marks the grid full when the pasted text has no more rows.
@@ -167,6 +280,10 @@ impl Grid {
     /// columns a `rowspan` above still covers, then the cell, then a placeholder per extra column.
     fn finish(&mut self, open: &mut Option<OpenCell>) {
         let Some(OpenCell { mut cell, colspan, rowspan }) = open.take() else { return };
+        if self.full {
+            // A rejected row's cells must not land in the last accepted row.
+            return;
+        }
         if self.rows.is_empty() {
             self.start_row();
         }
@@ -194,6 +311,7 @@ impl Grid {
             for u in self.covered_until.get_mut(start..end).into_iter().flatten() {
                 *u = (*u).max(until);
             }
+            self.cover_end = self.cover_end.max(until);
         }
     }
 
@@ -226,6 +344,23 @@ fn find_ci(hay: &str, needle: &str) -> Option<usize> {
         return None;
     }
     (0..=h.len() - n.len()).find(|&i| h.get(i..i + n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n)))
+}
+
+/// Byte index of the end tag `</name>` in `hay`: the name must end there (whitespace, `/` or `>`
+/// follows), so `</scripture>` does not end a `<script>`.
+fn find_end_tag(hay: &str, name: &str) -> Option<usize> {
+    let needle = format!("</{name}");
+    let mut from = 0usize;
+    while let Some(i) = hay.get(from..).and_then(|h| find_ci(h, &needle)) {
+        let at = from.saturating_add(i);
+        let after = at.saturating_add(needle.len());
+        match hay.as_bytes().get(after) {
+            None => return Some(at),
+            Some(b) if b.is_ascii_whitespace() || *b == b'/' || *b == b'>' => return Some(at),
+            Some(_) => from = after,
+        }
+    }
+    None
 }
 
 /// The value of attribute `name` in a tag's attribute text (quoted or bare). A bare attribute
@@ -423,6 +558,8 @@ mod tests {
         }
         assert_eq!(table_cells("<table><td x:num='1e999'>1</td></table>", 1, 1)[0][0].num, None);
         assert!(table_cells("<table><tr><td colspan=999999999>a</td></tr></table>", 1, usize::MAX)[0].len() <= MAX_SPAN);
+        let deep = format!("{}<tr><td>deep</td></tr>{}", "<table>".repeat(100), "</table>".repeat(100));
+        assert!(table_cells(&format!("<table><tr><td>outer{}after</td></tr></table>", deep), 10, 10)[0][0].text.contains("outer"));
     }
 
     #[test]
@@ -457,6 +594,52 @@ mod tests {
         assert_eq!((rows[1][0].clone(), rows[1][1].clone()), (HtmlCell::default(), HtmlCell::default()));
         assert_eq!(rows[1][2].num, Some(2.0));
         assert_eq!(rows[2][0].num, Some(3.0), "the span ends after its second row");
+    }
+
+    fn texts(rows: &[Vec<HtmlCell>]) -> Vec<Vec<&str>> {
+        rows.iter().map(|r| r.iter().map(|c| c.text.as_str()).collect()).collect()
+    }
+
+    #[test]
+    fn a_full_nested_table_drops_the_rejected_rows_cells() {
+        // The 2x2 outer table leaves the nested table one row: its second row must not be
+        // appended to the first.
+        let html = "<table><tr><td>A<table><tr><td>X</td></tr><tr><td>Y</td></tr></table></td></tr></table>";
+        assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A"], vec!["X"]]);
+    }
+
+    #[test]
+    fn a_nested_table_leaves_room_for_its_implicit_host_row() {
+        // `<td>A` with no `<tr>` still opens a row of its own when it closes.
+        let html = "<table><td>A<table><tr><td>X</td></tr><tr><td>Y</td><td>Z</td></tr></table></td><td>B</td></table>";
+        assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "B"], vec!["X"]]);
+    }
+
+    #[test]
+    fn raw_text_ends_only_at_its_own_end_tag() {
+        let html = r#"<table><tr><td>a<script>s="</scripture><td>bad</td>"</script></td><td>b</td></tr></table>"#;
+        assert_eq!(texts(&table_cells(html, 1, 3)), [vec!["a", "b"]]);
+
+        // Inside a table too deep to read, a `</table>` in the script text doesn't end the skip.
+        let skipped = r#"<table><script>s="</scripture></table>"</script></table>"#;
+        let deep = format!("{}{skipped}{}", "<table>".repeat(MAX_TABLE_DEPTH - 1), "</table>".repeat(MAX_TABLE_DEPTH - 1));
+        let html = format!("<table><tr><td>A{deep}</td><td>B</td></tr><tr><td>C</td></tr></table>");
+        assert_eq!(texts(&table_cells(&html, 2, 2)), [vec!["A", "B"], vec!["C"]]);
+    }
+
+    #[test]
+    fn nested_rows_shift_only_rowspans_that_continue() {
+        // A continuing rowspan moves below the nested row and still covers the next outer row.
+        let html = "<table><tr><td rowspan=2>M</td><td>A<table><tr><td>X</td></tr></table></td></tr><tr><td>B</td></tr></table>";
+        assert_eq!(texts(&table_cells(html, 3, 2)), [vec!["M", "A"], vec!["X"], vec!["", "B"]]);
+
+        // An expired sheet-width rowspan has nothing to move: later nested rows skip the scan.
+        let row = "<tr><td>o<table><tr><td>n</td></tr></table></td></tr>";
+        let html = format!("<table><tr><td colspan=16384 rowspan=2>W</td></tr><tr><td>c</td></tr>{}</table>", row.repeat(50_000));
+        let rows = table_cells(&html, usize::MAX, usize::MAX);
+        assert_eq!(rows.len(), 2 + 100_000);
+        assert_eq!(rows[1].len(), MAX_SPAN, "the span covers its second row");
+        assert_eq!((texts(&rows[2..3]), texts(&rows[rows.len() - 1..])), (vec![vec!["o"]], vec![vec!["n"]]));
     }
 
     #[test]

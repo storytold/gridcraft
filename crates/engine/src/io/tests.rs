@@ -920,6 +920,22 @@ fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces()
     assert_eq!(sh.value(CellRef::parse("B1").unwrap()), gridcraft_core::Value::text("a b"));
 }
 
+#[test]
+fn html_import_preserves_outer_cells_and_rows_after_nested_table() {
+    let page = "<!doctype html>\n<table>\n  <tr><td>Start</td><td>11</td></tr>\n  <tr><td>Container<table><tr><td>Inner</td></tr></table></td><td>22</td></tr>\n  <tr><td>After inner table</td><td>33</td></tr>\n</table>";
+    let (wb, warnings) = open_bytes("nested.html", page.as_bytes()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    let v = |a: &str| sh.value(CellRef::parse(a).unwrap());
+    assert_eq!(v("A1"), gridcraft_core::Value::text("Start"));
+    assert_eq!(v("B1"), gridcraft_core::Value::number(11.0));
+    assert_eq!(v("A2"), gridcraft_core::Value::text("Container"));
+    assert_eq!(v("B2"), gridcraft_core::Value::number(22.0));
+    assert_eq!(v("A3"), gridcraft_core::Value::text("Inner"));
+    assert_eq!(v("A4"), gridcraft_core::Value::text("After inner table"));
+    assert_eq!(v("B4"), gridcraft_core::Value::number(33.0));
+}
+
 /// A small SYLK file written the way spreadsheets export one: a header, number formats, column
 /// widths, cells that carry on from the last row or column, formulas in R1C1 and a shared formula.
 const SYLK: &str = "ID;PTEST;N;E\r\nP;PGeneral\r\nP;P0.00\r\nP;Pyyyy\\-mm\\-dd\r\nF;W1 1 18\r\nF;W2 3 9\r\nB;Y5;X7\r\n\
