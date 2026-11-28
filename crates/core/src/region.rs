@@ -779,11 +779,11 @@ impl Region {
     }
 }
 
-fn is_space_like(c: char) -> bool {
+pub(crate) fn is_space_like(c: char) -> bool {
     matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '\u{2009}')
 }
 
-fn is_apostrophe_like(c: char) -> bool {
+pub(crate) fn is_apostrophe_like(c: char) -> bool {
     matches!(c, '\'' | '\u{2019}')
 }
 
