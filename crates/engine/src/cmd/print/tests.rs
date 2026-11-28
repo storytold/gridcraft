@@ -588,6 +588,30 @@ fn text_y(pdf: &[u8], text: &str) -> Option<f32> {
     before[..tm].rsplit([' ', '\n']).next()?.parse().ok()
 }
 
+/// A whole-workbook export keys the header/footer kinds off the print's own page sequence:
+/// only the export's first page uses the first-page variants, and later sheets follow the
+/// absolute odd/even numbering (#4535).
+#[test]
+fn whole_workbook_export_keys_header_kinds_off_the_absolute_page_number() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["lead"]]})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&CLead &P"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]]})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [2, 4]})).unwrap();
+    s.execute(
+        "pageLayout.headerFooter",
+        json!({"header": "&COdd &P", "evenHeader": "&CEven &P", "firstHeader": "&CCover", "differentFirst": true, "differentOddEven": true}),
+    )
+    .unwrap();
+    let (pdf, pages) = pdf_of(&mut s, json!({"sheets": "all"}));
+    assert_eq!(pages, 4);
+    assert!(contains(&pdf, "(Lead 1) Tj"), "the leading sheet prints the odd header of its own");
+    assert!(contains(&pdf, "(Even 2) Tj"), "the second sheet's first page is absolute page 2: even variants");
+    assert!(contains(&pdf, "(Odd 3) Tj") && contains(&pdf, "(Even 4) Tj"));
+    assert!(!contains(&pdf, "(Cover) Tj"), "no page past the export's first prints a first-page header");
+}
+
 /// The x position and font size of the first `(text) Tj` in a PDF.
 fn text_at(pdf: &[u8], text: &str) -> Option<(f32, f32)> {
     let s = String::from_utf8_lossy(pdf);

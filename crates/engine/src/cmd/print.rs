@@ -143,7 +143,7 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
         let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
-        for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
+        for (ri, ci) in lay.pages.iter() {
             page_no += 1;
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
@@ -200,7 +200,10 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
                 date: date.clone(),
                 time: time.clone(),
             };
-            draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
+            // The header/footer kinds follow the export's own page sequence: the first-page
+            // variants belong to the export's first page, and odd/even to its absolute page
+            // numbers — a later sheet's pages do not restart the sequence (#4535).
+            draw_header_footer(pg, lay, lay.settings.hf_page(page_no == 1, page_no), &cx);
         }
     }
     for link in pending_links {
