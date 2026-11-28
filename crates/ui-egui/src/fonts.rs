@@ -7,12 +7,15 @@
 //! and bind the files a workbook actually uses into the families
 //! [`theme::font_definitions`](crate::theme::font_definitions) assembles.
 //!
-//! Native only: on wasm there are no system fonts, every function here reports "nothing", and the
-//! font list is the standard [`crate::ribbon::FONTS`] set.
+//! On wasm there are no system fonts: the scan finds nothing, and the font list is the standard
+//! [`crate::ribbon::FONTS`] set plus the faces a host page added at run time with `font.add`
+//! ([`add_font`]), which every build takes and binds like installed ones.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
+
+use egui::epaint::text::Blob;
 
 /// A font file is skipped by the scan past this size: a catalog only needs each face's name, and a
 /// damaged or enormous file must not turn startup into a long read.
@@ -38,7 +41,6 @@ pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
 }
 
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
-#[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
 
 /// One face of one installed font file.
@@ -94,7 +96,6 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
 }
 
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
-#[cfg(not(target_arch = "wasm32"))]
 fn style_weight(style: &str) -> f32 {
     let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     const TABLE: &[(&str, f32)] = &[
@@ -123,7 +124,6 @@ impl Face {
 }
 
 /// Whether a style name reads as italic or oblique.
-#[cfg(not(target_arch = "wasm32"))]
 fn style_italic(style: &str) -> bool {
     let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     s.contains("italic") || s.contains("oblique")
@@ -131,7 +131,6 @@ fn style_italic(style: &str) -> bool {
 
 /// Every face in `data` as `(index, family, names, style)`, where `names` holds every family name
 /// (see [`Face::names`]). Damaged data yields nothing, never a panic.
-#[cfg(not(target_arch = "wasm32"))]
 fn file_faces(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
     use skrifa::raw::FileRef;
     use skrifa::{MetadataProvider, string::StringId};
@@ -211,9 +210,17 @@ pub fn catalog() -> &'static [Face] {
     CATALOG.get_or_init(|| scan_dirs(&system_font_dirs()))
 }
 
-/// The catalog if the scan has finished, else `None` — never blocks, for use while painting.
+/// The catalog if the scan has finished, else `None`: never blocks, for use while painting. On
+/// wasm no scan runs, so the (empty) catalog is always there.
 fn catalog_now() -> Option<&'static [Face]> {
-    CATALOG.get().map(Vec::as_slice)
+    #[cfg(target_arch = "wasm32")]
+    {
+        Some(catalog())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        CATALOG.get().map(Vec::as_slice)
+    }
 }
 
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
@@ -231,14 +238,148 @@ pub fn start_scan() {
     });
 }
 
-/// Whether the background scan has finished.
+/// Whether the background scan has finished. Always on wasm, where no scan runs: the workbook's
+/// fonts are bound from the faces added with [`add_font`] at once.
 pub fn scan_done() -> bool {
-    CATALOG.get().is_some()
+    cfg!(target_arch = "wasm32") || CATALOG.get().is_some()
 }
 
-/// The faces of one installed family, by any of its names, regular-weight first (the order roles
-/// pick from).
+/// The most faces [`add_font`] keeps, over every file added.
+pub const MAX_ADDED_FACES: usize = 32;
+/// The largest font file [`add_font`] takes.
+pub const MAX_ADDED_FILE: usize = 64 << 20;
+/// The most bytes the added font files may hold together.
+pub const MAX_ADDED_BYTES: usize = 128 << 20;
+/// The longest file name kept for an added font (it only labels the face's key).
+const MAX_ADDED_NAME: usize = 128;
+
+/// Why [`add_font`] refused a font file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AddFontError {
+    /// The file is over [`MAX_ADDED_FILE`].
+    TooLarge,
+    /// No face in it can be read and drawn.
+    NotAFont,
+    /// The same file was added before.
+    AlreadyAdded,
+    /// Keeping it would pass [`MAX_ADDED_FACES`] or [`MAX_ADDED_BYTES`].
+    TooMany,
+}
+
+impl std::fmt::Display for AddFontError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => write!(f, "font file larger than {} MB", MAX_ADDED_FILE >> 20),
+            Self::NotAFont => f.write_str("not a font GridCraft can read (TTF, OTF or TTC)"),
+            Self::AlreadyAdded => f.write_str("this font file was already added"),
+            Self::TooMany => {
+                write!(f, "no room for more fonts (at most {MAX_ADDED_FACES} faces and {} MB in all)", MAX_ADDED_BYTES >> 20)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AddFontError {}
+
+/// The fonts added at run time, held in memory for the session: each file's bytes once, shared
+/// with egui, and its faces, which go by a key of their own (`added:{n}/{name}`) in place of a path.
+struct Added {
+    files: Vec<(PathBuf, Blob)>,
+    faces: Vec<Face>,
+    bytes: usize,
+    /// Counts the files added, so the app binds the workbook's fonts again after each one.
+    generation: u64,
+}
+
+impl Added {
+    const fn new() -> Self {
+        Self { files: Vec::new(), faces: Vec::new(), bytes: 0, generation: 0 }
+    }
+}
+
+static ADDED: RwLock<Added> = RwLock::new(Added::new());
+
+fn added() -> std::sync::RwLockReadGuard<'static, Added> {
+    ADDED.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Adds a font file's faces for the rest of the session, the way an installed font is found: the
+/// workbook's cells set in one of its families draw with it from the next frame on, and the font
+/// list offers it. `name` is the file's name, kept only as a label. Returns the faces added.
+///
+/// A web build has no font folders, so this is how a host page gives it the fonts its documents
+/// use. The file is refused, never partly kept, when it is over [`MAX_ADDED_FILE`], has no face
+/// egui can draw, was added before, or would pass [`MAX_ADDED_FACES`] or [`MAX_ADDED_BYTES`].
+pub fn add_font(name: &str, data: Vec<u8>) -> Result<Vec<Face>, AddFontError> {
+    if data.len() > MAX_ADDED_FILE {
+        return Err(AddFontError::TooLarge);
+    }
+    let found: Vec<_> = file_faces(&data).into_iter().filter(|(index, ..)| crate::theme::font_parses(&data, *index)).collect();
+    if found.is_empty() {
+        return Err(AddFontError::NotAFont);
+    }
+    add_into(&mut ADDED.write().unwrap_or_else(std::sync::PoisonError::into_inner), name, data, found)
+}
+
+/// [`add_font`] into a given registry, with the faces `data` was found to hold.
+fn add_into(added: &mut Added, name: &str, data: Vec<u8>, found: Vec<(u32, String, Vec<String>, String)>) -> Result<Vec<Face>, AddFontError> {
+    if added.files.iter().any(|(_, blob)| blob_bytes(blob) == data.as_slice()) {
+        return Err(AddFontError::AlreadyAdded);
+    }
+    if added.faces.len() + found.len() > MAX_ADDED_FACES || added.bytes + data.len() > MAX_ADDED_BYTES {
+        return Err(AddFontError::TooMany);
+    }
+    let label: String = name.chars().filter(|c| !c.is_control()).take(MAX_ADDED_NAME).collect();
+    let path = PathBuf::from(format!("added:{}/{label}", added.files.len()));
+    let faces: Vec<Face> = found
+        .into_iter()
+        .map(|(index, family, names, style)| Face {
+            family,
+            names,
+            path: path.clone(),
+            index,
+            weight: style_weight(&style),
+            italic: style_italic(&style),
+        })
+        .collect();
+    added.bytes += data.len();
+    let blob: Blob = std::sync::Arc::new(data);
+    added.files.push((path, blob));
+    added.faces.extend(faces.iter().cloned());
+    added.generation += 1;
+    Ok(faces)
+}
+
+fn blob_bytes(blob: &Blob) -> &[u8] {
+    (**blob).as_ref()
+}
+
+/// How many font files [`add_font`] has kept: the app binds the workbook's fonts again when it moves.
+pub fn added_generation() -> u64 {
+    added().generation
+}
+
+/// The font data for one face: an added face's shared bytes, else its file read from disk.
+fn face_data(face: &Face) -> Option<egui::FontData> {
+    let shared = added().files.iter().find(|(path, _)| *path == face.path).map(|(_, blob)| std::sync::Arc::clone(blob));
+    match shared {
+        Some(blob) => Some(egui::FontData::from_blob(blob, face.index)),
+        None => {
+            let mut fd = egui::FontData::from_owned(read_font(&face.path)?);
+            fd.index = face.index;
+            Some(fd)
+        }
+    }
+}
+
+/// The faces of one family, by any of its names, regular-weight first (the order roles pick from).
+/// A family added with [`add_font`] is taken from the added faces alone, so an installed family
+/// of the same name never mixes its faces in.
 pub fn faces_of(family: &str) -> Vec<Face> {
+    let from_added = faces_named(&added().faces, family);
+    if !from_added.is_empty() {
+        return from_added;
+    }
     catalog_now().map(|cat| faces_named(cat, family)).unwrap_or_default()
 }
 
@@ -264,18 +405,27 @@ fn faces_named(cat: &[Face], wanted: &str) -> Vec<Face> {
 /// get bound for a workbook, under the name the workbook uses: that is the name
 /// [`cell_family`](crate::theme::cell_family) looks up, so `맑은 고딕` binds as `맑은 고딕`, not as
 /// the catalog's `Malgun Gothic`.
+/// Faces added with [`add_font`] count as installed, also before the scan has finished.
 pub fn installed_among(names: &[String]) -> Vec<String> {
-    catalog_now().map(|cat| installed_in(cat, names)).unwrap_or_default()
+    let added = added();
+    let cat = catalog_now().unwrap_or_default();
+    installed_where(names, |wanted| added.faces.iter().chain(cat).any(|f| f.answers_to(wanted)))
 }
 
-/// [`installed_among`] over a given catalog. Names dedupe exactly, not case-folded: a role key is
-/// built from the cell's exact string, so `Calibri` and `calibri` each need their own binding (the
-/// font data behind them is shared, see [`face_key`]).
+/// [`installed_among`] over a given catalog.
+#[cfg(test)]
 fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
+    installed_where(names, |wanted| cat.iter().any(|f| f.answers_to(wanted)))
+}
+
+/// The names in `names` that `installed` says are there. Names dedupe exactly, not case-folded: a
+/// role key is built from the cell's exact string, so `Calibri` and `calibri` each need their own
+/// binding (the font data behind them is shared, see [`face_key`]).
+fn installed_where(names: &[String], installed: impl Fn(&str) -> bool) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<&str> = HashSet::new();
     for wanted in names {
-        if seen.insert(wanted.as_str()) && cat.iter().any(|f| f.answers_to(wanted)) {
+        if seen.insert(wanted.as_str()) && installed(wanted) {
             out.push(wanted.clone());
         }
     }
@@ -288,9 +438,9 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
+    let mut installed: Vec<String> = added().faces.iter().map(|f| f.family.clone()).collect();
+    installed.extend(catalog_now().unwrap_or_default().iter().map(|f| f.family.clone()));
     installed.sort_by_key(|a| a.to_lowercase());
     installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     for f in installed {
@@ -356,9 +506,7 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Some(bytes) = read_font(&face.path) else { continue };
-                let mut fd = egui::FontData::from_owned(bytes);
-                fd.index = face.index;
+                let Some(fd) = face_data(face) else { continue };
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
             }
             chain.push(key);
@@ -437,6 +585,47 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The faces a font file holds, as [`add_font`] finds them.
+    fn found(data: &[u8]) -> Vec<(u32, String, Vec<String>, String)> {
+        file_faces(data)
+    }
+
+    #[test]
+    fn added_fonts_are_kept_once_and_within_their_caps() {
+        let mut reg = Added::new();
+        let ubuntu = epaint_default_fonts::UBUNTU_LIGHT.to_vec();
+        let faces = add_into(&mut reg, "Ubuntu-Light.ttf", ubuntu.clone(), found(&ubuntu)).expect("added");
+        assert_eq!(faces.len(), 1);
+        assert_eq!((faces[0].family.as_str(), faces[0].weight, faces[0].italic), ("Ubuntu", 300.0, false));
+        assert_eq!(faces[0].path, PathBuf::from("added:0/Ubuntu-Light.ttf"));
+        assert_eq!((reg.generation, reg.bytes, reg.faces.len()), (1, ubuntu.len(), 1));
+        // The same bytes under another name are the same font.
+        assert_eq!(add_into(&mut reg, "copy.ttf", ubuntu.clone(), found(&ubuntu)).unwrap_err(), AddFontError::AlreadyAdded);
+        // Past the face cap or the byte cap nothing is kept.
+        let hack = epaint_default_fonts::HACK_REGULAR.to_vec();
+        reg.faces.extend(std::iter::repeat_n(faces[0].clone(), MAX_ADDED_FACES - 1));
+        assert_eq!(add_into(&mut reg, "Hack.ttf", hack.clone(), found(&hack)).unwrap_err(), AddFontError::TooMany);
+        reg.faces.truncate(1);
+        reg.bytes = MAX_ADDED_BYTES - hack.len() + 1;
+        assert_eq!(add_into(&mut reg, "Hack.ttf", hack.clone(), found(&hack)).unwrap_err(), AddFontError::TooMany);
+        assert_eq!((reg.generation, reg.files.len()), (1, 1), "a refused file changes nothing");
+        // A control character or an overlong name never reaches the key.
+        reg.bytes = ubuntu.len();
+        let long = format!("a\nb{}", "x".repeat(500));
+        let hack_faces = add_into(&mut reg, &long, hack.clone(), found(&hack)).expect("added");
+        let key = hack_faces[0].path.to_string_lossy().into_owned();
+        assert!(key.starts_with("added:1/ab") && !key.contains('\n') && key.chars().count() == "added:1/".len() + MAX_ADDED_NAME, "{key}");
+    }
+
+    #[test]
+    fn add_font_refuses_what_is_no_font_or_too_large() {
+        assert_eq!(add_font("x.ttf", b"not a font at all".to_vec()).unwrap_err(), AddFontError::NotAFont);
+        assert_eq!(add_font("x.ttf", Vec::new()).unwrap_err(), AddFontError::NotAFont);
+        // A name table without glyphs reads as a face, but egui could not draw it: refused.
+        assert_eq!(add_font("names.ttf", font_with_names(&[(EN, 1, "Only Names")])).unwrap_err(), AddFontError::NotAFont);
+        assert_eq!(add_font("big.ttf", vec![0; MAX_ADDED_FILE + 1]).unwrap_err(), AddFontError::TooLarge);
+    }
 
     #[test]
     fn style_names_map_to_weight_and_slant() {

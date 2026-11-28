@@ -217,6 +217,7 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "font.add" => self.add_font(p),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {

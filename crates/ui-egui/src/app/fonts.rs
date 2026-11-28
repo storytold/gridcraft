@@ -1,4 +1,4 @@
-use super::{SheetApp, theme};
+use super::{Json, SheetApp, json, theme};
 use crate::fonts;
 
 impl SheetApp {
@@ -15,6 +15,7 @@ impl SheetApp {
         self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
         self.fonts_bound = self.used_fonts();
         self.fonts_seen = self.fonts_key();
+        self.fonts_generation = fonts::added_generation();
     }
 
     /// The font names the open workbooks use: every style's font plus the theme's heading/body
@@ -38,6 +39,24 @@ impl SheetApp {
             .documents()
             .iter()
             .fold((0u64, 0u64), |(uid, rev), d| (uid.wrapping_mul(31).wrapping_add(d.uid), rev.wrapping_mul(31).wrapping_add(d.revision)))
+    }
+
+    /// `font.add`: `{data: base64 TTF/OTF/TTC, name?: file name}` → `{faces: [{family, weight,
+    /// italic}]}`. The faces join the installed fonts for the session ([`fonts::add_font`]); the
+    /// workbook's cells set in them draw with them from the next frame on.
+    pub(super) fn add_font(&mut self, p: &Json) -> Result<Json, String> {
+        let Some(data) = p.get("data").and_then(Json::as_str) else {
+            return Err("font.add: missing `data` (a base64 TTF, OTF or TTC file)".into());
+        };
+        // Refused before decoding: base64 is 4 characters for every 3 bytes.
+        if data.len() / 4 * 3 > fonts::MAX_ADDED_FILE + 3 {
+            return Err(format!("font.add: {}", fonts::AddFontError::TooLarge));
+        }
+        let bytes = gridcraft_engine::io::base64_decode(data).ok_or("font.add: `data` is not valid base64")?;
+        let name = p.get("name").and_then(Json::as_str).unwrap_or("font");
+        let faces = fonts::add_font(name, bytes).map_err(|e| format!("font.add: {e}"))?;
+        let faces: Vec<Json> = faces.iter().map(|f| json!({"family": f.family, "weight": f.weight, "italic": f.italic})).collect();
+        Ok(json!({ "faces": faces }))
     }
 
     /// Installs the text-width closure once, on the first frame.
@@ -96,15 +115,19 @@ impl SheetApp {
 
     /// Binds the workbook's installed fonts once the background scan has finished. Adding fonts
     /// re-applies the font set, which egui activates at the next pass, so skip this frame's paint
-    /// (same one-frame cost as startup). Only when an open workbook changed.
+    /// (same one-frame cost as startup). Only when an open workbook changed, or a font was added
+    /// with `font.add`.
     fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
         let seen = self.fonts_key();
-        if seen == self.fonts_seen {
+        let generation = fonts::added_generation();
+        if seen == self.fonts_seen && generation == self.fonts_generation {
             return;
         }
         let used = self.used_fonts();
         self.fonts_seen = seen;
-        if used == self.fonts_bound {
+        let font_added = generation != self.fonts_generation;
+        self.fonts_generation = generation;
+        if used == self.fonts_bound && !font_added {
             return;
         }
         craft_ui::fonts::load(ctx, theme::font_definitions_with(self.ui.language, &used));
