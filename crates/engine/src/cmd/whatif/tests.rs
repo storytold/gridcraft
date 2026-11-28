@@ -89,6 +89,28 @@ fn scenario_show_restores_a_percentage_cells_stored_number() {
 }
 
 #[test]
+fn scenario_show_refuses_changing_cells_merged_after_capture() {
+    for (changing, merge) in [("A2", "A1:A2"), ("A1", "A1:A2"), ("B1", "A1:B1")] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[2], [10]]})).unwrap();
+        s.execute("data.scenarioAdd", json!({"name": "Captured", "changing": changing})).unwrap();
+        s.execute("home.mergeCells", json!({"range": merge})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "=A2*2"})).unwrap();
+        let (a1, a2, b1, c1) = (v(&s, "A1"), v(&s, "A2"), v(&s, "B1"), v(&s, "C1"));
+        assert!(s.execute("data.scenarioShow", json!({"name": "Captured"})).is_err(), "{changing} in {merge}");
+        assert_eq!((v(&s, "A1"), v(&s, "A2"), v(&s, "B1"), v(&s, "C1")), (a1, a2, b1, c1), "{changing} in {merge}");
+    }
+    // A merge elsewhere does not block the scenario.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2], [10]]})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "Captured", "changing": "A2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "3"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    s.execute("data.scenarioShow", json!({"name": "Captured"})).unwrap();
+    assert_eq!(n(&s, "A2"), 10.0);
+}
+
+#[test]
 fn scenarios() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "B2", "values": [[10], [20]]})).unwrap();
