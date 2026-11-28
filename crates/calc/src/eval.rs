@@ -21,7 +21,7 @@ mod special;
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
-pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
+pub use special::{SPECIAL_FUNCTIONS, filter_aware, is_known_function, precedents, resized_sum_range};
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;

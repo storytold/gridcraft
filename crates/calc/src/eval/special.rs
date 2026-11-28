@@ -27,6 +27,18 @@ pub fn resized_sum_range(sum: RangeRef, height: u32, width: u32) -> RangeRef {
     RangeRef::new(sum.start, CellRef::new(row, col))
 }
 
+/// True when the formula reads row visibility: SUBTOTAL and AGGREGATE leave out rows a filter
+/// hides, so a filter change dirties exactly these cells (and, through them, their dependents).
+pub fn filter_aware(e: &Expr) -> bool {
+    let mut hit = false;
+    e.walk(&mut |x| {
+        if matches!(x, Expr::Call(n, _) if matches!(n.as_str(), "SUBTOTAL" | "AGGREGATE")) {
+            hit = true;
+        }
+    });
+    hit
+}
+
 /// Most expression nodes [`precedents`] visits before giving up and marking the formula dynamic.
 const MAX_PRECEDENT_NODES: usize = 1_000_000;
 

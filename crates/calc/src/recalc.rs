@@ -16,7 +16,7 @@ use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{CalcMode, Workbook};
 
-use crate::eval::{Evaluator, Host, precedents, stack_position};
+use crate::eval::{Evaluator, Host, filter_aware, precedents, stack_position};
 use crate::spill_index::{SpillIndex, indexing_pays};
 
 /// Changed cells (in one `cells_changed`) from which a sheet's spill areas may be indexed.
@@ -254,16 +254,19 @@ impl Calc {
                     self.spill_errors.insert((si, c));
                 }
                 if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
+                    && let Some((areas, dynamic, faware)) = f.with_expr(|e| {
+                        let (areas, dynamic) = precedents(wb, si, e);
+                        (areas, dynamic, filter_aware(e))
+                    })
                 {
-                    self.graph.insert((si, c), Node { areas, dynamic });
+                    self.graph.insert((si, c), Node { areas, dynamic, filter_aware: faware });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
                 } else if cell.py.is_some() {
                     // A Python cell lays out its kept result, so it is calculated like a formula
                     // that reads nothing: its spill is blocked and unblocked like a formula's.
-                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false, filter_aware: false });
                 }
             }
         }
@@ -361,6 +364,24 @@ impl Calc {
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
+    /// Recalculates the cells that read row visibility (SUBTOTAL/AGGREGATE) and their dependents
+    /// after a filter hid or revealed rows: the same closure an edit would start, seeded from the
+    /// filter-aware nodes instead of a full recalculation of every formula.
+    pub fn filter_changed(&mut self, wb: &mut Workbook) {
+        if wb.calc.mode == CalcMode::Manual {
+            return;
+        }
+        let seeds: Vec<Key> = self.graph.nodes.iter().filter(|(_, n)| n.filter_aware).map(|(k, _)| *k).collect();
+        // Dynamic formulas (names, INDIRECT/OFFSET) join the closure inside `dirty_closure` and
+        // may reach a visibility-sensitive formula without naming SUBTOTAL literally, so they
+        // keep this pass alive even when no static seed exists.
+        if seeds.is_empty() && self.graph.dynamic.is_empty() {
+            return;
+        }
+        let dirty = self.dirty_closure(wb, &seeds, &[]);
+        self.run(wb, dirty, false);
+    }
+
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
@@ -369,19 +390,23 @@ impl Calc {
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+            let precedent = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| {
+                f.with_expr(|e| {
+                    let (areas, dynamic) = precedents(wb, k.0, e);
+                    (areas, dynamic, filter_aware(e))
+                })
+            });
             let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
             let python = py.is_some();
             // A Python cell whose result (if any) is not an array spills nothing.
             let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
             match precedent {
-                Some((areas, dynamic)) => {
-                    self.graph.insert(k, Node { areas, dynamic });
+                Some((areas, dynamic, faware)) => {
+                    self.graph.insert(k, Node { areas, dynamic, filter_aware: faware });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
-                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false, filter_aware: false });
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -1123,7 +1148,7 @@ pub(crate) mod tests {
                 if let Some(sh) = wb.sheet_mut(0) {
                     sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
                 }
-                calc.graph.insert(k, Node { areas, dynamic: false });
+                calc.graph.insert(k, Node { areas, dynamic: false, filter_aware: false });
                 keys.push(k);
                 if rng(&mut s).is_multiple_of(7) {
                     calc.graph.settle();
