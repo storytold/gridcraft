@@ -449,6 +449,7 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
 }
 
 /// What the file system said about a recent workbook.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Modified {
     /// When it was last changed, in seconds since 1970.

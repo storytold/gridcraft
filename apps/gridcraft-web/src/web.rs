@@ -32,7 +32,8 @@ pub fn start() {
                 descriptor
             });
         }
-        if query().contains("webgl")
+        let parsed_query = crate::query::WebQuery::parse(&query());
+        if parsed_query.webgl
             && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
@@ -53,11 +54,10 @@ pub fn start() {
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
                     // In host mode the host sends the workbook to edit; no sample meanwhile.
-                    let q = if app_bridge.is_some() { String::new() } else { query() };
-                    if let Some(name) = q.split(['?', '&']).find_map(|kv| kv.strip_prefix("sample=")) {
+                    if app_bridge.is_none()
+                        && let Some(name) = &parsed_query.sample
+                    {
                         let _ = session.execute("file.new", serde_json::json!({"sample": name}));
-                    } else if q.contains("sample") {
-                        let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {
@@ -68,14 +68,7 @@ pub fn start() {
                     // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
                     // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps
                     // everything, as the default does.
-                    if let Some(chrome) = query_param("chrome") {
-                        match chrome.as_str() {
-                            "none" => app.chrome = gridcraft_ui_egui::Chrome { title_bar: false, file_tab: false },
-                            "notitlebar" => app.chrome.title_bar = false,
-                            "nofiletab" => app.chrome.file_tab = false,
-                            _ => {}
-                        }
-                    }
+                    app.chrome = parsed_query.chrome;
                     // Follow the browser's language, except a CJK one. CJK coverage comes from
                     // optional craft-fonts input, not a guaranteed web font set, so a CJK browser
                     // cannot be assumed to render localized labels without tofu. Users can still
@@ -93,15 +86,17 @@ pub fn start() {
                     crate::prefs::restore(&mut app, stored_ui.as_deref(), stored_prefs.as_deref());
                     let mut prefs = crate::prefs::PrefsSync::new(stored_ui, stored_prefs);
                     SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
+                    // Install `window.gridcraft` before `post_ready()` so a host listening to the
+                    // synchronous `data-host="page"` `gridcraft:ready` event can call the API right away.
+                    crate::api::install(&mut app, cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {
                         prefs.keep_user_name(app.session.prefs.user_name.clone());
-                        if let Some(author) = query_param("author") {
-                            crate::host::Bridge::set_author(&mut app, &author);
+                        if let Some(author) = &parsed_query.author {
+                            crate::host::Bridge::set_author(&mut app, author);
                         }
                         bridge.post_ready();
                     }
-                    crate::api::install(&mut app, cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs, last_title: String::new() }))
                 }),
             )
             .await;
@@ -111,18 +106,24 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>GridCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => show_startup_error(&document, &el, &format!("{e:?}")),
             }
         }
     });
 }
 
-fn query() -> String {
-    web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
+fn show_startup_error(document: &web_sys::Document, container: &web_sys::Element, detail: &str) {
+    container.set_text_content(Some(""));
+    for line in [format!("GridCraft failed to start: {detail}"), "A browser with WebGPU or WebGL2 is required.".to_string()] {
+        if let Ok(p) = document.create_element("p") {
+            p.set_text_content(Some(&line));
+            let _ = container.append_child(&p);
+        }
+    }
 }
 
-fn query_param(key: &str) -> Option<String> {
-    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
+fn query() -> String {
+    web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
 struct WebShell {
@@ -130,6 +131,7 @@ struct WebShell {
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
     prefs: crate::prefs::PrefsSync,
+    last_title: String,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -186,6 +188,15 @@ impl eframe::App for WebShell {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
+        } else {
+            let active = self.app.session.active();
+            let title = crate::query::format_document_title(active.map(|d| d.display_title()).as_deref(), active.is_some_and(|d| d.is_dirty()));
+            if title != self.last_title {
+                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                    doc.set_title(&title);
+                }
+                self.last_title = title;
+            }
         }
     }
 }
