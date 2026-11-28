@@ -111,3 +111,50 @@ fn ctrl_a_in_find_all_results_selects_the_found_cells_on_that_sheet() {
     assert!(status.accesskit_node().value().is_some_and(|l| l.contains(&other.len().to_string())), "the count of selected cells");
     assert_eq!(status.accesskit_node().live(), Live::Polite, "the count is announced");
 }
+
+/// In the Find All list, Enter on a focused result goes to that result rather than running Find
+/// Next, and Ctrl+click can't take out the last selected result, so the list and the grid agree
+/// on what is selected (#4874).
+#[test]
+fn enter_and_ctrl_click_on_a_find_all_result_keep_the_list_and_grid_in_step() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = harness();
+    let app = h.state_mut();
+    app.session.execute("range.setValues", json!({"range": "A1:A3", "values": [["pear"], ["pear"], ["pear"]]})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Key { key: Key::F, physical_key: Some(Key::F), pressed: true, repeat: false, modifiers: CTRL });
+    h.input_mut().events.push(Event::Key { key: Key::F, physical_key: Some(Key::F), pressed: false, repeat: false, modifiers: CTRL });
+    h.run_steps(6);
+    h.input_mut().events.push(Event::Text("pear".into()));
+    h.run_steps(4);
+    h.get_by_label("Find All").click();
+    h.run_steps(4);
+    let row = h.get_by_label_contains("  A2  ");
+    let name = row.accesskit_node().label().map(|l| l.to_string()).unwrap_or_default();
+    row.click();
+    h.run_steps(2);
+    let active = |h: &Harness| h.state().session.active().map(|d| d.selection.active.a1());
+    assert_eq!(active(&h).as_deref(), Some("A2"));
+    h.input_mut().events.push(Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.input_mut().events.push(Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: false,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(4);
+    assert_eq!(active(&h).as_deref(), Some("A2"), "Enter on the result stays on it instead of finding the next hit");
+    h.get_by_label(&name).click_modifiers(CTRL);
+    h.run_steps(4);
+    assert_eq!(h.get_by_label(&name).accesskit_node().toggled(), Some(Toggled::True), "the only selected result stays selected");
+    let sel = h.state().session.active().map(|d| d.selection.a1());
+    assert_eq!(sel.as_deref(), Some("A2"), "and the grid still selects its cell");
+}
