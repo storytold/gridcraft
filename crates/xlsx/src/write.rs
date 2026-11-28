@@ -443,6 +443,9 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     if !company.is_empty() {
         let _ = write!(app, "<Company>{}</Company>", esc(&company));
     }
+    // InDesign needs AppVersion for XLSX import. Use the value verified in #4759
+    // independently of GridCraft's release version.
+    app.push_str("<AppVersion>16.0300</AppVersion>");
     app.push_str("</Properties>");
     out.part("docProps/app.xml", Some("application/vnd.openxmlformats-officedocument.extended-properties+xml"), app.into_bytes());
     let mut root = Rels::default();

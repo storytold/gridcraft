@@ -2269,6 +2269,15 @@ fn r1c1_reference_style_is_kept() {
 }
 
 #[test]
+fn xlsx_exports_indesign_compatible_app_version() {
+    let saved = write_xlsx(&Workbook::new()).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let app = pkg.read_xml("docProps/app.xml").unwrap().unwrap();
+    assert_eq!(app.child("Application").unwrap().text, "GridCraft");
+    assert_eq!(app.child("AppVersion").unwrap().text, "16.0300");
+}
+
+#[test]
 fn remove_personal_information_is_kept_and_honoured() {
     // #3089: `<workbookPr filterPrivacy="1"/>` was dropped, so a workbook cleaned of personal
     // information came back with it switched off, and GridCraft wrote the author and company back.
