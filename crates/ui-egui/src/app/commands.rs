@@ -292,6 +292,8 @@ impl SheetApp {
                 match i18n::Language::parse(code) {
                     Some(l) => {
                         self.ui.language = l;
+                        // Now, so a command later in the same batch names new sheets in it.
+                        self.sync_default_names();
                         Ok(json!({"language": l}))
                     }
                     None => Err(format!("unknown language {code:?} (use one of {})", i18n::Language::code_list(", "))),
@@ -299,10 +301,12 @@ impl SheetApp {
             }
             "app.language.english" => {
                 self.ui.language = i18n::Language::En;
+                self.sync_default_names();
                 Ok(json!({"language": i18n::Language::En}))
             }
             "app.language.japanese" => {
                 self.ui.language = i18n::Language::Ja;
+                self.sync_default_names();
                 Ok(json!({"language": i18n::Language::Ja}))
             }
             "ui.quickAnalysis" => crate::quick_analysis::toggle(self, p.get("open").and_then(Json::as_bool)),

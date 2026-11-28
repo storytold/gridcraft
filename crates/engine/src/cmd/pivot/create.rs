@@ -105,12 +105,13 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
     let values = field_list(p.get("values"));
     let filters = field_list(p.get("filters"));
     let mut new_sheet_at: Option<usize> = None;
+    let sheet_word = s.default_names.sheet.clone();
     let res = edit(s, |cx| {
         let id = next_pivot_id(&cx.wb);
         let (si, anchor) = match target {
             Some(t) => t,
             None => {
-                let at = insert_sheet_before_active(cx);
+                let at = insert_sheet_before_active(cx, &sheet_word);
                 new_sheet_at = Some(at);
                 (at, CellRef::new(2, 0))
             }
@@ -180,10 +181,10 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Inserts a new, empty sheet before the active one (Excel's place for a new PivotTable or a
-/// Show Details sheet); returns its index.
-fn insert_sheet_before_active(cx: &mut Ctx) -> usize {
+/// Show Details sheet), named with `word` (`Sheet`, see [`crate::DefaultNames`]); returns its index.
+fn insert_sheet_before_active(cx: &mut Ctx, word: &str) -> usize {
     let at = cx.wb.active_sheet().min(cx.wb.sheets.len());
-    let nm = cx.wb.next_sheet_name();
+    let nm = cx.wb.next_sheet_name_from(word);
     cx.wb.sheets.insert(at, Arc::new(Sheet::new(nm)));
     for n in cx.wb.names.iter_mut() {
         if let Some(sc) = n.scope.as_mut()
@@ -220,8 +221,9 @@ pub(super) fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let count = records.len();
     let mut new_sheet_at: Option<usize> = None;
+    let sheet_word = s.default_names.sheet.clone();
     let res = edit(s, |cx| {
-        let si = insert_sheet_before_active(cx);
+        let si = insert_sheet_before_active(cx, &sheet_word);
         new_sheet_at = Some(si);
         let base = cx.wb.styles.get(StyleId::default()).clone();
         let fmts: Vec<StyleId> = src

@@ -1190,6 +1190,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Percentile" => "Percentil",
         "Formula" => "Fórmula",
         "More Rules…" => "Mais Regras…",
+        // The words new workbooks and sheets are named with (SheetApp::sync_default_names).
+        "Default name|Book" => "Pasta",
+        "Default name|Sheet" => "Planilha",
         _ => return None,
     })
 }

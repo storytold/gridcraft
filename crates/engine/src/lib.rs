@@ -481,6 +481,58 @@ impl Default for Prefs {
     }
 }
 
+/// The words new workbooks and sheets are named with: `Book1`, `Sheet1`. A front end sets them
+/// from its interface language ([`DefaultNames::set`]), so a Portuguese interface makes `Pasta1`
+/// and `Planilha1`. Only new names use them: a sheet already in a workbook keeps its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultNames {
+    pub book: String,
+    pub sheet: String,
+    /// Every language's word for a new sheet, so `Planilha1` still reads as a default name after
+    /// the interface switches back to English ([`DefaultNames::set_known_sheet_words`]).
+    pub known_sheet_words: Vec<String>,
+}
+
+impl Default for DefaultNames {
+    fn default() -> Self {
+        DefaultNames { book: "Book".into(), sheet: "Sheet".into(), known_sheet_words: Vec::new() }
+    }
+}
+
+impl DefaultNames {
+    /// Sets both words; one that can't start a sheet name (empty, too long, or with one of
+    /// `: \ / ? * [ ] '`) keeps the English word instead.
+    pub fn set(&mut self, book: &str, sheet: &str) {
+        let usable = |w: &str| {
+            let w = w.trim();
+            !w.is_empty()
+                && w.chars().count() <= 26
+                && !w.contains([':', '\\', '/', '?', '*', '[', ']', '\''])
+                && !w.ends_with(|c: char| c.is_ascii_digit())
+        };
+        let english = DefaultNames::default();
+        self.book = if usable(book) { book.trim().to_string() } else { english.book };
+        self.sheet = if usable(sheet) { sheet.trim().to_string() } else { english.sheet };
+    }
+
+    /// Records the words other interface languages name new sheets with (`Planilha`, …).
+    pub fn set_known_sheet_words<'a>(&mut self, words: impl IntoIterator<Item = &'a str>) {
+        self.known_sheet_words.clear();
+        for w in words.into_iter().map(str::trim).filter(|w| !w.is_empty()) {
+            if !self.known_sheet_words.iter().any(|k| k == w) {
+                self.known_sheet_words.push(w.to_string());
+            }
+        }
+    }
+
+    /// Whether `name` is a default sheet name: a sheet word followed only by a number
+    /// (`Sheet3`, `Planilha12`), whatever language made it; `Planilha de vendas` is not.
+    pub fn is_default_sheet_name(&self, name: &str) -> bool {
+        let words = ["Sheet", self.sheet.as_str()].into_iter().chain(self.known_sheet_words.iter().map(String::as_str));
+        words.into_iter().any(|w| name.strip_prefix(w).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+    }
+}
+
 /// Requests from commands to the UI (open a dialog, show a message…).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum UiRequest {
@@ -575,6 +627,8 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// The words new workbooks and sheets are named with (`Book1`, `Sheet1`).
+    pub default_names: DefaultNames,
 }
 
 impl Session {
@@ -650,16 +704,19 @@ impl Session {
             }
         }
     }
-    /// A new blank workbook titled `BookN`.
+    /// A new blank workbook titled `BookN`, its sheets named `Sheet1`, `Sheet2`… (in the words of
+    /// [`Session::default_names`]).
     pub fn new_workbook(&mut self) -> usize {
-        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
+        let (book, sheet) = (self.default_names.book.clone(), self.default_names.sheet.clone());
+        let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
+        wb.sheets = vec![Arc::new(gridcraft_model::Sheet::new(format!("{sheet}1")))];
         wb.props.author = self.prefs.user_name.clone();
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
-            let name = wb.next_sheet_name();
+            let name = wb.next_sheet_name_from(&sheet);
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
         }
-        self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
+        self.add_document(DocState::new(wb, None, format!("{book}{n}"), Trust::Local))
     }
 
     /// Journals a command, then trims the oldest entries past either cap. A recording in progress

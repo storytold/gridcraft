@@ -12,6 +12,7 @@ mod csv_export_budget;
 mod ctrl_shift_arrow_active_line;
 mod custom_filter_blanks;
 mod custom_view_freeze;
+mod default_names;
 mod dynamicmetadata;
 mod extreme_selection_moves;
 mod filter_whitespace;
