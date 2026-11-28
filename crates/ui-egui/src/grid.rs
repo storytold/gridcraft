@@ -32,6 +32,7 @@ pub(crate) mod editor;
 mod geo;
 mod interact;
 mod keyboard;
+mod list_picker;
 mod menus;
 mod quadrant;
 mod selection;
@@ -43,9 +44,12 @@ pub(crate) use cell_paint::paint_border;
 pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
 use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
-pub use editor::validation_arrow;
+pub(crate) use list_picker::ListPicker;
+pub use list_picker::validation_arrow;
 #[cfg(test)]
-use editor::{editor_slack, editor_width, list_picker_height};
+use editor::{editor_slack, editor_width};
+#[cfg(test)]
+use list_picker::list_picker_height;
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
@@ -317,6 +321,7 @@ pub struct GridState {
     /// With `ensure_visible`: scroll to the moving end of the selection instead of the active cell
     /// (Shift/Ctrl+Shift+arrows keep the active cell on the anchor while the far corner moves).
     pub reveal_moving_end: bool,
+    pub list_picker: Option<list_picker::ListPicker>,
     /// With `ensure_visible`: the cell an arrow or paging key moved from (the moving end when
     /// extending), set only by those keys. A move from the scrolled rows or columns into the
     /// frozen ones scrolls them back to their top or left.

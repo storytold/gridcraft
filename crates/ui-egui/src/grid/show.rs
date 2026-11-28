@@ -391,7 +391,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     }
     list_search(app, ui, geo, sh);
     filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
-    list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
+    list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker.as_ref().map(|p| p.cell));
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
     fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
@@ -729,7 +729,7 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     }
     // Input message of the active cell's validation, hidden while its list is open: it would cover the items.
     if app.editor.is_none()
-        && app.grid.list_picker != Some(sel.active)
+        && app.grid.list_picker.as_ref().is_none_or(|p| p.cell != sel.active)
         && let Some(dv) = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(sel.active)))
         && dv.show_input
         && !(dv.input_title.is_empty() && dv.input_message.is_empty())

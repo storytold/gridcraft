@@ -69,7 +69,6 @@ mod viewports;
 pub mod widgets;
 mod window_ui;
 pub mod wordart;
-
 pub use window_ui::WindowUi;
 
 use std::collections::HashMap;

@@ -1,3 +1,5 @@
+
+
 use super::cell_paint::ink_on;
 use super::geo::Geo;
 use super::{
@@ -24,10 +26,12 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
         return;
     }
     let cell = ed.cell;
+
     let rect = match sh.merge_at(cell) {
         Some(m) => geo.range_rect(sh, m),
         None => geo.cell_rect(sh, cell),
     };
+
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
@@ -64,8 +68,7 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // but neither the cell nor its helper may paint. Test the cell's own visible quadrant and
     // give the shared editor an empty clip when the cell is hidden: a one-line cell editor's
     // field can be larger than the cell (egui 0.37 gives text fields a minimum height), so its
-    // own max_rect is not a reliable "is the cell on screen" test at the frozen boundary. The
-    // pre-wrap cell rect must also be positive: a hidden row/column has zero height/width, but
+    // own max_rect is not a reliable "is the cell on screen" test at the frozen boundary. The pre-wrap cell rect must also be positive: a hidden row/column has zero height/width, but
     // Wrap Text can expand the editor below/right of it, which must not paint over the next line.
     let cell_visible = rect.width() > 0.0 && rect.height() > 0.0;
     // `erect` and `ui.clip_rect()` are in screen coordinates; `quadrant` is logical until mirrored.
