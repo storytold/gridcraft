@@ -12,7 +12,8 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let freq = freq_arg(a, 5)?;
     let basis = basis_arg(a, 6)?;
     let calc_method = opt_bool(a, 7, true)?;
-    if issue >= settle || rate <= 0.0 || par <= 0.0 {
+    // A first_interest that truncates to serial 0 is not a valid date (#4073).
+    if issue >= settle || first < 1.0 || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
     let anchor = ymd(sys, first)?;
@@ -39,31 +40,43 @@ pub(super) fn accrint(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         }
         Ok(j)
     };
-    let start = if calc_method || settle <= first { issue } else { cd(index_of(settle)?)? };
-    let mut j = index_of(start)?;
-    let mut sum = 0.0;
-    let mut guard = 0;
-    loop {
-        let (p0, p1) = (cd(j)?, cd(j + 1)?);
-        if p0 >= settle {
-            break;
+    // Coupon periods accrued from `start` to `end` (start < end).
+    let periods = |start: f64, end: f64| -> R<f64> {
+        let mut j = index_of(start)?;
+        let mut sum = 0.0;
+        let mut guard = 0;
+        loop {
+            let (p0, p1) = (cd(j)?, cd(j + 1)?);
+            if p0 >= end {
+                break;
+            }
+            let from = p0.max(start);
+            let to = p1.min(end);
+            if to > from {
+                let nl = match basis {
+                    1 => p1 - p0,
+                    3 => 365.0 / freq,
+                    _ => 360.0 / freq,
+                };
+                sum += day_count(sys, from, to, basis)? / nl;
+            }
+            j += 1;
+            guard += 1;
+            if guard > 100_000 {
+                return Err(CellError::Num);
+            }
         }
-        let from = p0.max(start);
-        let to = p1.min(settle);
-        if to > from {
-            let nl = match basis {
-                1 => p1 - p0,
-                3 => 365.0 / freq,
-                _ => 360.0 / freq,
-            };
-            sum += day_count(sys, from, to, basis)? / nl;
-        }
-        j += 1;
-        guard += 1;
-        if guard > 100_000 {
-            return Err(CellError::Num);
-        }
-    }
+        Ok(sum)
+    };
+    let sum = if !calc_method && settle < first && issue < cd(-1)? {
+        // Issue more than a period before first_interest: FALSE accrues from the coupon date before
+        // first_interest, negatively when settlement precedes it (#4075).
+        let prev = cd(-1)?;
+        if settle >= prev { periods(prev, settle)? } else { -periods(settle, prev)? }
+    } else {
+        let start = if calc_method || settle <= first { issue } else { cd(index_of(settle)?)? };
+        periods(start, settle)?
+    };
     num_val(par * rate / freq * sum)
 }
 

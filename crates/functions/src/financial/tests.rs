@@ -537,6 +537,29 @@ fn securities_read_dates_in_the_1904_system() {
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
 
+#[test]
+fn accrint_false_before_a_distant_first_interest_starts_at_the_period_before_it() {
+    // #4075: issue more than a coupon period before first_interest, settlement before it.
+    let a = |iy, fy, sy, flag: Arg| ev("ACCRINT", vec![d(iy, 1, 1), d(fy, 7, 1), d(sy, 2, 1), n(0.05), n(1000.0), n(2.0), n(0.0), flag]);
+    close_tol(a(2022, 2023, 2023, b(false)), 4.166666666666666, 1e-10);
+    close_tol(a(2022, 2023, 2023, n(0.0)), 4.166666666666666, 1e-10);
+    close_tol(a(2021, 2024, 2023, b(false)), -45.83333333333333, 1e-10);
+    close_tol(a(2021, 2024, 2023, n(0.0)), -45.83333333333333, 1e-10);
+    // Controls: TRUE keeps issue-to-settlement accrual; an ordinary first period is unchanged.
+    close_tol(a(2022, 2023, 2023, b(true)), 54.16666666666667, 1e-10);
+    close_tol(a(2021, 2024, 2023, n(1.0)), 104.16666666666667, 1e-10);
+    close_tol(a(2023, 2023, 2023, b(false)), 4.166666666666666, 1e-10);
+    close_tol(a(2023, 2023, 2023, b(true)), 4.166666666666666, 1e-10);
+}
+
+#[test]
+fn accrint_rejects_a_first_interest_that_truncates_to_zero() {
+    // #4073
+    for first in [0.0, 0.5, 0.999] {
+        is_err(ev("ACCRINT", vec![d(2023, 1, 1), n(first), d(2023, 2, 1), n(0.05), n(1000.0), n(2.0), n(0.0)]), CellError::Num);
+    }
+}
+
 /// Excel truncates ACCRINTM's dates to whole days and accrues nothing when issue equals
 /// settlement, in every basis and both date systems; only issue after settlement is #NUM! (#4096).
 #[test]
