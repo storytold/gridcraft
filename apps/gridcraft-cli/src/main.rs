@@ -42,7 +42,7 @@ const USAGE: &str = "usage:
   gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
-                     cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
+                     calc oracle + XLSX round-trip fidelity (exit 1 on failure or unavailable formula oracle)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};

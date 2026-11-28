@@ -158,7 +158,7 @@ pub struct FileReport {
 
 impl FileReport {
     fn is_clean(&self) -> bool {
-        self.error.is_none() && self.calc.mismatched == 0 && self.round_trip.is_clean()
+        self.error.is_none() && self.calc.mismatched == 0 && (self.calc.checked > 0 || self.calc.no_oracle == 0) && self.round_trip.is_clean()
     }
 }
 
@@ -188,7 +188,8 @@ impl Diffs {
 // ---------------------------------------------------------------- entry point
 
 /// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N]`. Exit 0 when every file opens,
-/// every checked formula matches and every round trip is clean; 1 otherwise; 2 on a usage error.
+/// each workbook with non-volatile formulas has a comparison, every compared formula matches,
+/// and every round trip is clean; 1 on failure, 2 on a usage error.
 pub fn main(args: &[String]) -> ExitCode {
     let usage = |e: String| {
         eprintln!("gridcraft-cli: {e}\n{USAGE}");
