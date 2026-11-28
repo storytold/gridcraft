@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod hu;
 mod it;
 mod ja;
 mod ko;
@@ -54,10 +55,11 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Hu,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -77,6 +79,7 @@ impl Language {
         Self::Nl,
         Self::Ro,
         Self::Tr,
+        Self::Hu,
     ];
 
     /// Every language in the order the switcher lists them: English first (the source language),
@@ -110,6 +113,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::Hu => "Magyar",
         }
     }
 
@@ -135,6 +139,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::Hu => "hu",
         }
     }
 
@@ -169,6 +174,7 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            "hu" => Some(Self::Hu),
             _ => None,
         }
     }
@@ -227,6 +233,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::Hu => hu::translate(text),
         }
     }
 
