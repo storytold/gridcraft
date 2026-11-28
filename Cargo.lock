@@ -2899,7 +2899,7 @@ dependencies = [
  "gridcraft-mcp",
  "gridcraft-sandbox",
  "log",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde_json",
  "zip",
 ]
@@ -3092,7 +3092,7 @@ dependencies = [
  "gridcraft-functions",
  "gridcraft-math",
  "gridcraft-model",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "zip",
