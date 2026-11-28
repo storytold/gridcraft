@@ -2955,6 +2955,7 @@ name = "gridcraft-functions"
 version = "0.19.1"
 dependencies = [
  "gridcraft-core",
+ "libm",
  "regex",
 ]
 
