@@ -121,6 +121,10 @@ enum LookIn {
 }
 
 fn look_in(p: &Json) -> Result<LookIn> {
+    // Absent or null keeps the default; any other non-string is as unknown as a misspelt name.
+    if p.get("lookIn").is_some_and(|v| !v.is_string() && !v.is_null()) {
+        return Err(bad("edit.find", "`lookIn` must be a string: use formulas, values, notes or comments"));
+    }
     match str_param(p, "lookIn") {
         None | Some("formulas") => Ok(LookIn::Formulas),
         Some("values") => Ok(LookIn::Values),

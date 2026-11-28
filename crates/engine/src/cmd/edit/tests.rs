@@ -1024,6 +1024,8 @@ fn find_rejects_an_unknown_look_in() {
     s.execute("review.newNote", json!({"cell": "A1", "text": "kiwi", "author": "Ann"})).unwrap();
     assert!(s.execute("edit.find", json!({"what": "kiwi"})).is_ok());
     assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": "everywhere"})).is_err());
+    assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": 7})).is_err(), "a non-string is not the default");
+    assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": null})).is_ok(), "null keeps the default");
     for look in ["notes", "comments"] {
         assert!(s.execute("edit.replace", json!({"what": "kiwi", "with": "fig", "lookIn": look})).is_err(), "{look}");
     }
