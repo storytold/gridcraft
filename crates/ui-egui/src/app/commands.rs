@@ -405,6 +405,23 @@ impl SheetApp {
         self.follow_open_draft();
     }
 
+    /// The workbook format a Save without a file picker hands over: the document's own Excel
+    /// workbook type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`), so a macro-enabled workbook keeps its
+    /// VBA project; `.xlsx` for anything else (a new or imported workbook, CSV).
+    fn own_workbook_format(&self) -> &'static str {
+        let ext = self
+            .session
+            .active()
+            .map(|d| d.display_title())
+            .and_then(|t| std::path::Path::new(&t).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase));
+        match ext.as_deref() {
+            Some("xlsm") => "xlsm",
+            Some("xltx") => "xltx",
+            Some("xltm") => "xltm",
+            _ => "xlsx",
+        }
+    }
+
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
     /// Sheet labels and actions). While a dialog with reference boxes is open, it is the dialog's
     /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
@@ -466,7 +483,7 @@ impl SheetApp {
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
                 } else if self.services.download.is_some()
-                    && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
+                    && let Ok(r) = self.run("file.saveBytes", json!({"format": self.own_workbook_format()}))
                     && let Some(dl) = &self.services.download
                     && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
                 {
