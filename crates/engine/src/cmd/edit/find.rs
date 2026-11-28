@@ -154,10 +154,18 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
             hits.iter().map(|(si, c, t)| json!({"sheet": d.wb.sheet(*si).map(|s| s.name.clone()), "cell": c.a1(), "value": t})).collect();
         return Ok(json!({"count": list.len(), "results": list}));
     }
-    // Next hit after the active cell.
+    // Next hit after the active cell, or with `previous` the last one before it (Shift+Find
+    // Next), wrapping round the sheet, workbook or selection either way.
     let cur = (d.wb.active_sheet(), d.selection.active);
     let key = |si: usize, c: CellRef| if by_cols { (si, c.col, c.row) } else { (si, c.row, c.col) };
-    let next = hits.iter().find(|(si, c, _)| key(*si, *c) > key(cur.0, cur.1)).or_else(|| hits.first()).cloned();
+    let here = key(cur.0, cur.1);
+    let hit_key = |h: &&(usize, CellRef, String)| key(h.0, h.1);
+    let next = if bool_param(p, "previous").unwrap_or(false) {
+        hits.iter().filter(|h| hit_key(h) < here).max_by_key(hit_key).or_else(|| hits.iter().max_by_key(hit_key))
+    } else {
+        hits.iter().filter(|h| hit_key(h) > here).min_by_key(hit_key).or_else(|| hits.iter().min_by_key(hit_key))
+    }
+    .cloned();
     let Some((si, c, t)) = next else { return Err(EngineError::Other("not found".into())) };
     let dd = s.doc_mut()?;
     dd.wb_switch_sheet(si);

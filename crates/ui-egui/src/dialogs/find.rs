@@ -95,7 +95,10 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             d.result = app.run("edit.find", p).ok();
         }
         if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            if let Err(e) = app.run("edit.find", base.clone()) {
+            // As in Excel, Shift+click (or Shift+Enter) finds the previous match.
+            let mut p = base.clone();
+            p["previous"] = json!(ui.input(|i| i.modifiers.shift));
+            if let Err(e) = app.run("edit.find", p) {
                 app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
             }
             app.grid.ensure_visible = true;
