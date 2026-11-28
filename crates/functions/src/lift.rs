@@ -64,13 +64,31 @@ const SCANS: &[&str] = &["VLOOKUP", "HLOOKUP", "LOOKUP", "MATCH", "XLOOKUP", "XM
 /// Past the budget the call is `#NUM!`, as MMULT is past 2e9 multiply-adds. 5e8 keeps the worst
 /// case to a few seconds and still admits 5,000 needles over a 100,000-row table.
 ///
-/// The same budget covers all the work of a lifted call added up across its elements: criteria
-/// aggregates rescanning their ranges, period loops, and array results built per element.
+/// The same budget covers all the work of a lifted call added up across its elements: functions
+/// rereading their non-lifted arrays, period loops, and array results built per element.
 const LIFTED_SCAN_BUDGET: usize = 500_000_000;
 
-/// Criteria aggregates: every call tests each cell of its ranges against its criteria, so a call
-/// lifted over `n` criteria does `n` x (range cells) work, like the [`SCANS`] lookups.
-const CRITERIA: &[&str] = &["COUNTIF", "COUNTIFS", "SUMIF", "SUMIFS", "AVERAGEIF", "AVERAGEIFS", "MAXIFS", "MINIFS"];
+/// Lifted functions that read one entry of their non-lifted arrays per call instead of every
+/// cell, so their arrays add nothing to a call's work. Every other lifted function rereads its
+/// non-lifted arrays on each call (criteria aggregates test every cell; LARGE, PERCENTILE,
+/// TRIMMEAN, RANK, FORECAST, T.TEST, NPV, IRR, the holidays of WORKDAY sort or sum them), so a call
+/// lifted over `n` elements does `n` x (array cells) work.
+const INDEXES: &[&str] = &["INDEX"];
+
+/// Budget units one cell of a non-lifted array costs per call, for functions that do more with
+/// each cell than a scan reads (measured against XMATCH's scan): a full sort, an iterative
+/// solver's passes, or fitting a smoothing model. 1 for every other function.
+const CELL_COSTS: &[(&str, usize)] = &[
+    ("TRIMMEAN PERCENTRANK PERCENTRANK.INC PERCENTRANK.EXC", 8),
+    ("IRR MIRR", 4),
+    ("XIRR", 32),
+    ("FORECAST.ETS FORECAST.ETS.CONFINT FORECAST.ETS.SEASONALITY FORECAST.ETS.STAT", 1024),
+];
+
+/// The [`CELL_COSTS`] of `name`.
+fn cell_cost(name: &str) -> usize {
+    CELL_COSTS.iter().find(|(names, _)| names.split_ascii_whitespace().any(|n| n == name)).map_or(1, |(_, cost)| *cost)
+}
 
 /// Cumulative TVM functions that step through every period from `start_period` (argument 3) to
 /// `end_period` (argument 4) on each call.
@@ -81,13 +99,13 @@ const PERIOD_LOOPS: &[&str] = &["CUMIPMT", "CUMPRINC"];
 const PERIOD_COST: usize = 16;
 
 /// The work every lifted call of `spec` repeats over its non-lifted arguments: the longest vector
-/// a [`SCANS`] lookup searches, or every cell a [`CRITERIA`] aggregate tests. 0 for other
-/// functions.
+/// a [`SCANS`] lookup searches, nothing for the [`INDEXES`], and every cell of its non-lifted
+/// arrays at its [`cell_cost`] for any other function.
 fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
-    let scans = SCANS.contains(&spec.name);
-    if !scans && !CRITERIA.contains(&spec.name) {
+    if INDEXES.contains(&spec.name) {
         return 0;
     }
+    let scans = SCANS.contains(&spec.name);
     // SUMIF and AVERAGEIF read the optional third range only at the coordinates of the first.
     let first = args.first().and_then(|a| if let Value::Array(arr) = &a.value { Some(arr.data.len()) } else { None });
     let lens = args.iter().enumerate().filter(|(i, _)| !spec.is_scalar_arg(*i)).filter_map(|(i, a)| match &a.value {
@@ -96,7 +114,7 @@ fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
         Value::Array(arr) => Some(arr.data.len()),
         _ => None,
     });
-    if scans { lens.max().unwrap_or(0) } else { lens.fold(0, usize::saturating_add) }
+    if scans { lens.max().unwrap_or(0) } else { lens.fold(0, usize::saturating_add).saturating_mul(cell_cost(spec.name)) }
 }
 
 /// The work of one lifted call that depends on its own (lifted) scalar arguments: the number of
@@ -165,8 +183,9 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
     // an array result (built in full, though only its first cell is kept), so lifting a scalar
     // argument can't multiply what one call may do into hours of work:
     // `COUNTIF(big_range, SEQUENCE(1e4))`, `CUMIPMT(0.1, 1e7, 1, 1, SEQUENCE(1e4,,1e7,0), 0)`,
-    // `MUNIT(SEQUENCE(1e4,,3000,0))`.
-    let per_call = scan_len(spec, args).max(1);
+    // `MUNIT(SEQUENCE(1e4,,3000,0))`. One element (a one-cell reference) is the single call the
+    // formula asks for, with nothing repeated, so its scan isn't charged.
+    let per_call = if needles > 1 { scan_len(spec, args).max(1) } else { 1 };
     let mut cell_args: Vec<Arg> = args.to_vec();
     let mut spent = needles.saturating_mul(per_call);
     if needles > MAX_CELLS || spent > budget {
@@ -298,9 +317,47 @@ mod tests {
         assert_eq!(rows_of(&ev("SUMIF", vec![one, tall(501), tall(1_000_000)])).len(), 501);
         let counts = ev("COUNTIF", vec![av(col(&[1.0, 2.0, 2.0])), av(col(&[2.0, 1.0, 5.0]))]);
         assert_eq!(rows_of(&counts), vec![vec![nv(2.0)], vec![nv(1.0)], vec![nv(0.0)]]);
-        for name in super::CRITERIA.iter().chain(super::PERIOD_LOOPS) {
+        for name in super::INDEXES.iter().chain(super::PERIOD_LOOPS) {
             assert!(crate::lookup(name).is_some(), "{name} isn't registered");
         }
+    }
+
+    /// Security: lifted statistical and cash-flow functions reread (and often sort) their whole
+    /// non-lifted array on every call, so elements x array cells past the budget is `#NUM!`
+    /// before any call runs. `LARGE(SEQUENCE(1e6), SEQUENCE(1e6))` used to run for hours and hung
+    /// opening the few-KB file holding it (#4572).
+    #[test]
+    fn lifted_functions_rereading_their_arrays_stop_past_their_work_budget() {
+        use gridcraft_core::Array;
+        let tall = |n: usize| av(Array::filled(n, 1, nv(1.0)).into());
+        // 501 elements over 1,000,000 cells is just past the budget, for each argument layout.
+        for name in ["LARGE", "SMALL", "PERCENTILE.INC", "QUARTILE.EXC", "TRIMMEAN", "PERCENTRANK.INC", "Z.TEST"] {
+            is_err(ev(name, vec![tall(1_000_000), tall(501)]), CellError::Num);
+        }
+        is_err(ev("RANK.EQ", vec![tall(501), tall(1_000_000)]), CellError::Num);
+        is_err(ev("NPV", vec![tall(501), tall(1_000_000)]), CellError::Num);
+        is_err(ev("WORKDAY", vec![tall(501), n(1.0), tall(1_000_000)]), CellError::Num);
+        // Arrays a call reads together count together: two of 250,000 cells.
+        is_err(ev("FORECAST", vec![tall(1001), tall(250_000), tall(250_000)]), CellError::Num);
+        is_err(ev("T.TEST", vec![tall(250_000), tall(250_000), tall(1001), n(1.0)]), CellError::Num);
+        // A call that sorts, iterates or fits a model costs more per cell than a scan, so far fewer
+        // elements reach the budget: 63 sorts or 2 smoothing fits over a million cells.
+        is_err(ev("TRIMMEAN", vec![tall(1_000_000), av(col(&[0.1; 63]))]), CellError::Num);
+        is_err(ev("IRR", vec![tall(1_000_000), av(col(&[0.1; 126]))]), CellError::Num);
+        let timeline: Vec<f64> = (1..=500_000u32).map(f64::from).collect();
+        let targets = av(col(&[500_001.0, 500_002.0]));
+        is_err(ev("FORECAST.ETS", vec![targets, tall(500_000), av(col(&timeline))]), CellError::Num);
+        for name in super::CELL_COSTS.iter().flat_map(|(names, _)| names.split_ascii_whitespace()) {
+            assert!(crate::lookup(name).is_some(), "{name} isn't registered");
+        }
+        // One element (a one-cell reference) is a single call, never refused for its arrays' size.
+        assert!(matches!(ev("TRIMMEAN", vec![tall(1_000_000), rf(col(&[0.1]))]), Value::Number(_)));
+        // Within the budget they lift as before.
+        let data = || av(col(&[4.0, 9.0, 1.0, 7.0]));
+        assert_eq!(rows_of(&ev("LARGE", vec![data(), av(row(&[1.0, 4.0]))])), vec![vec![nv(9.0), nv(1.0)]]);
+        assert_eq!(rows_of(&ev("RANK.EQ", vec![av(col(&[9.0, 1.0])), data()])), vec![vec![nv(1.0)], vec![nv(4.0)]]);
+        // The formula from the report.
+        is_err(ev("LARGE", vec![tall(1_048_576), tall(1_048_576)]), CellError::Num);
     }
 
     /// Security: CUMIPMT and CUMPRINC loop over their periods once per lifted element; the
