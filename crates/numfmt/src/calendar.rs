@@ -31,6 +31,19 @@ const HIJRI_MONTHS: [&str; 12] = [
 /// Arabic weekday names, Sunday first, shown for `ddd` and `dddd` under `B2`.
 const ARABIC_WEEKDAYS: [&str; 7] = ["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
+/// Thai month names, January first, shown for `mmmm` under a Thai locale tag.
+const THAI_MONTHS: [&str; 12] =
+    ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+
+/// The abbreviated Thai month names, shown for `mmm`.
+const THAI_MONTHS_SHORT: [&str; 12] = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];
+
+/// Thai weekday names, Sunday first, shown for `dddd`.
+const THAI_WEEKDAYS: [&str; 7] = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
+
+/// The abbreviated Thai weekday names, shown for `ddd`.
+const THAI_WEEKDAYS_SHORT: [&str; 7] = ["อา.", "จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส."];
+
 /// Year, month and day of a date in a section's calendar, with the month and weekday names.
 pub(crate) struct CalendarDate {
     pub year: i64,
@@ -44,6 +57,21 @@ pub(crate) struct CalendarDate {
     pub day_name: &'static str,
     /// `ddd`.
     pub day_short: &'static str,
+}
+
+impl CalendarDate {
+    /// The same date with Thai month and weekday names (a Gregorian date under a Thai locale tag).
+    pub(crate) fn in_thai(self, dt: &DateTime) -> Self {
+        let month = (dt.month as usize).wrapping_sub(1);
+        let weekday = dt.weekday as usize;
+        CalendarDate {
+            month_name: THAI_MONTHS.get(month).copied().unwrap_or(self.month_name),
+            month_short: THAI_MONTHS_SHORT.get(month).copied().unwrap_or(self.month_short),
+            day_name: THAI_WEEKDAYS.get(weekday).copied().unwrap_or(self.day_name),
+            day_short: THAI_WEEKDAYS_SHORT.get(weekday).copied().unwrap_or(self.day_short),
+            ..self
+        }
+    }
 }
 
 impl Calendar {

@@ -65,8 +65,12 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   in a `B2` section with a weekday and a month name, Excel prints the weekday for
   `mmmm`/`mmmmm` after `ddd`/`dddd`, and the weekday numbered by the month (Saturday from
   month 7) for `ddd`/`dddd` after `mmm`/`mmmm`; a `B2` section showing only the weekday uses
-  the real weekday for serials 0–59 and gives `#VALUE!` for the last days of 9999. Excel's
-  Buddhist-year `b`/`bb`/`bbbb` tokens are not supported.
+  the real weekday for serials 0–59 and gives `#VALUE!` for the last days of 9999. `bb` and
+  `bbbb` show the Buddhist-era year (Gregorian + 543), with or without a locale tag, as Excel
+  documents (`d/m/bbbb` shows 1 January 2000 as `1/1/2543`); other runs of `b` stay text. A
+  Thai locale tag (`[$-th-TH]`, `[$-41E]`, or an LCID such as `D07041E` whose language is Thai)
+  shows Thai month and weekday names (#1233); its Thai-digit and Thai-calendar bytes (`D0`,
+  `07`) are not honoured yet, and other languages' tags still show English names.
 - **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
@@ -145,6 +149,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-25 | minor | Number formats: `bb`/`bbbb` show the Buddhist-era year, and a Thai locale tag (`[$-th-TH]`, `[$-41E]`) shows Thai month and weekday names (`ตุลาคม`, `ต.ค.`, `พุธ`) (#1233) |
 | 2026-11-18 | minor | The fill-handle menus (right-drag menu and Auto Fill Options: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Fill Days, Fill Weekdays, Fill Months, Fill Years, and the button's own name) have a row in all 18 non-English catalogs, and Series…, Down and Up from the Home › Fill menu in the nine catalogs that lacked them; the Ukrainian rows that held English are translated. A test fails when one goes missing (#4458). The translations are AI-assisted and not yet reviewed by native speakers |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |

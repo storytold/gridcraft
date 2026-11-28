@@ -9,6 +9,8 @@ const MAX_SECTIONS: usize = 4;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum DatePart {
     Year(u8),
+    /// `bb` or `bbbb`: the year of the Buddhist era (the Gregorian year + 543).
+    BuddhistYear(u8),
     Month(u8),
     Minute(u8),
     Day(u8),
@@ -31,7 +33,7 @@ impl DatePart {
     }
 
     pub(crate) fn is_calendar(self) -> bool {
-        matches!(self, DatePart::Year(_) | DatePart::Month(_) | DatePart::Day(_))
+        matches!(self, DatePart::Year(_) | DatePart::BuddhistYear(_) | DatePart::Month(_) | DatePart::Day(_))
     }
 }
 
@@ -146,6 +148,8 @@ pub(crate) struct Section {
     /// Date sections: has `AM/PM` or `A/P`, so hours show on the 12-hour clock.
     pub ampm: bool,
     pub calendar: Calendar,
+    /// A Thai locale tag (`[$-th-TH]`, `[$-41E]`): month and weekday names are Thai.
+    pub thai: bool,
     /// Excel rejects the whole code because of this section: a `B` and digit that is not a
     /// calendar prefix, or a prefix before a number format (`B20.00`).
     pub invalid: bool,
@@ -284,6 +288,7 @@ struct Raw {
     prefix: Option<char>,
     /// An unquoted `B` and digit that is not a calendar prefix: Excel rejects the code.
     invalid: bool,
+    thai: bool,
 }
 
 /// Where a section's body starts: after its leading `[...]` tags, read as `tokenize` reads them.
@@ -303,9 +308,23 @@ fn after_leading_brackets(cs: &[char]) -> (usize, bool) {
     (i, locale)
 }
 
+/// Reads the run of `b`s at `i`: `bb` and `bbbb` are the Buddhist-era year, whatever the locale;
+/// other runs stay text. Returns the run's length.
+fn buddhist_year(cs: &[char], i: usize, toks: &mut Vec<Tok>) -> usize {
+    let n = cs.get(i..).unwrap_or(&[]).iter().take_while(|d| d.eq_ignore_ascii_case(&'b')).count().max(1);
+    if matches!(n, 2 | 4) {
+        toks.push(Tok::Date(DatePart::BuddhistYear(n as u8)));
+    } else {
+        let run: String = cs.get(i..i + n).unwrap_or(&[]).iter().collect();
+        push_lit(toks, &run);
+    }
+    n
+}
+
 fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
-    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false, calendar: Calendar::Gregorian, prefix: None, invalid: false };
+    let mut raw =
+        Raw { toks: Vec::new(), color: None, cond: None, currency: false, calendar: Calendar::Gregorian, prefix: None, invalid: false, thai: false };
     let toks = &mut raw.toks;
     // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
     let last_close = cs.iter().rposition(|&c| c == ']');
@@ -331,6 +350,10 @@ fn tokenize(src: &str) -> Raw {
             'B' | 'b' if cs.get(i + 1).is_some_and(char::is_ascii_digit) => {
                 raw.invalid = true;
                 push_lit(toks, c.encode_utf8(&mut [0; 4]));
+            }
+            'B' | 'b' => {
+                i += buddhist_year(&cs, i, toks);
+                continue;
             }
             '"' => {
                 let mut s = String::new();
@@ -378,7 +401,7 @@ fn tokenize(src: &str) -> Raw {
                 let close = if last_close.is_some_and(|l| l > i) { cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) } else { None };
                 if let Some(p) = close {
                     let content: String = cs.get(i + 1..i + 1 + p).unwrap_or(&[]).iter().collect();
-                    bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency), &content);
+                    bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency, &mut raw.thai), &content);
                     i += p + 2;
                 } else {
                     push_lit(toks, "[");
@@ -468,10 +491,29 @@ struct RawParts<'a> {
     color: &'a mut Option<FormatColor>,
     cond: &'a mut Option<Cond>,
     currency: &'a mut bool,
+    thai: &'a mut bool,
 }
 
-fn raw_parts<'a>(toks: &'a mut Vec<Tok>, color: &'a mut Option<FormatColor>, cond: &'a mut Option<Cond>, currency: &'a mut bool) -> RawParts<'a> {
-    RawParts { toks, color, cond, currency }
+fn raw_parts<'a>(
+    toks: &'a mut Vec<Tok>,
+    color: &'a mut Option<FormatColor>,
+    cond: &'a mut Option<Cond>,
+    currency: &'a mut bool,
+    thai: &'a mut bool,
+) -> RawParts<'a> {
+    RawParts { toks, color, cond, currency, thai }
+}
+
+/// Whether the locale of a `[$sym-locale]` tag is Thai: a language tag (`th`, `th-TH`) or a
+/// hexadecimal LCID whose language is Thai (`41E`, and `D07041E` with its digit and calendar
+/// bytes above the LCID).
+fn is_thai_locale(locale: &str) -> bool {
+    let l = locale.trim();
+    let lc = l.to_ascii_lowercase();
+    if lc == "th" || lc.starts_with("th-") {
+        return true;
+    }
+    l.len() <= 8 && u32::from_str_radix(l, 16).is_ok_and(|v| v & 0xFFFF == 0x041E)
 }
 
 /// Handles the content of a `[...]` tag.
@@ -488,6 +530,9 @@ fn bracket(p: &mut RawParts<'_>, content: &str) {
         return;
     }
     if let Some(body) = content.strip_prefix('$') {
+        if let Some((_, locale)) = body.split_once('-') {
+            *p.thai |= is_thai_locale(locale);
+        }
         let sym = body.split('-').next().unwrap_or("");
         if !sym.is_empty() {
             *p.currency = true;
@@ -515,7 +560,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { toks, color, cond, currency, calendar, prefix, invalid } = raw;
+    let Raw { toks, color, cond, currency, calendar, prefix, invalid, thai } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -536,6 +581,7 @@ fn analyze(raw: Raw) -> Section {
         needs_date: false,
         ampm: false,
         calendar,
+        thai,
         invalid,
     };
     if is_date {
