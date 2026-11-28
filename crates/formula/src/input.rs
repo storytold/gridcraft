@@ -9,6 +9,7 @@ pub enum FormulaLocale {
     #[default]
     En,
     Es,
+    Tr,
 }
 
 const SPANISH: &[(&str, &str)] = &[
@@ -31,14 +32,20 @@ const SPANISH: &[(&str, &str)] = &[
 ];
 
 impl FormulaLocale {
+    /// Languages whose number style puts the comma at the decimal point and the semicolon
+    /// between arguments (Excel's tr-TR and es-ES regional formula syntax).
+    fn comma_decimal(self) -> bool {
+        matches!(self, Self::Es | Self::Tr)
+    }
+
     pub fn list_separator(self) -> char {
-        if self == Self::Es { ';' } else { ',' }
+        if self.comma_decimal() { ';' } else { ',' }
     }
     pub fn decimal_separator(self) -> char {
-        if self == Self::Es { ',' } else { '.' }
+        if self.comma_decimal() { ',' } else { '.' }
     }
     pub fn array_column_separator(self) -> char {
-        if self == Self::Es { '\\' } else { ',' }
+        if self.comma_decimal() { '\\' } else { ',' }
     }
     pub fn function_name(self, canonical: &str) -> &str {
         if self == Self::Es {
@@ -60,6 +67,7 @@ impl FormulaLocale {
 /// LET/LAMBDA bindings take precedence over aliases. File and API syntax uses [`crate::parse`].
 pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<Expr, ParseError> {
     let mut expr = parser::parse_syntax(src, locale)?;
+    // Tr needs no alias pass: the lexer already took its separators. Only Es has a name table.
     if locale == FormulaLocale::Es {
         normalize(&mut expr, &known_name, &mut Bindings::default(), 0, false)?;
     }
@@ -95,9 +103,20 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     if locale == FormulaLocale::En {
         return Ok(crate::print(expr));
     }
-    let mut expr = expr.clone();
-    normalize(&mut expr, &known_name, &mut Bindings::default(), 0, true)?;
-    let canonical = crate::print(&expr);
+    // Only Es renames function names and TRUE/FALSE on display; Tr swaps separators, which the
+    // token pass below already does through the locale's separators.
+    let localized;
+    let expr = if locale == FormulaLocale::Es {
+        localized = {
+            let mut e = expr.clone();
+            normalize(&mut e, &known_name, &mut Bindings::default(), 0, true)?;
+            e
+        };
+        &localized
+    } else {
+        expr
+    };
+    let canonical = crate::print(expr);
     let tokens = crate::lexer::tokenize(&canonical).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let mut out = String::new();
     let mut array_depth = 0usize;
