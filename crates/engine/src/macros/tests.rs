@@ -3,6 +3,80 @@ use serde_json::json;
 
 use super::*;
 
+/// A failed macro must not persist a new default zoom for future workbooks.
+#[test]
+fn macro_prefs_rollback_restores_values() {
+    let mut session = crate::Session::new();
+    session.new_workbook();
+
+    session
+        .execute(
+            "macro.save",
+            json!({
+                "macro": {
+                    "name": "ZoomRollback",
+                    "steps": [
+                        {
+                            "command": "view.defaultZoom",
+                            "params": {"percent": 175}
+                        },
+
+                        {
+                            "type": "stop",
+                            "message": "rollback requested",
+                            "rollback": true
+                        }
+                    ]
+                }
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(session.prefs.default_zoom, 100);
+
+    let failed = session.execute("macro.run", json!({"name": "ZoomRollback", "onConflict": "overwrite"}));
+
+    assert!(failed.is_err(), "{failed:?}");
+    assert_eq!(session.prefs.default_zoom, 100);
+}
+
+/// A successful macro retains the default zoom, including after a dry run.
+#[test]
+fn macro_prefs_success_keeps_changes() {
+    let mut session = crate::Session::new();
+    session.new_workbook();
+
+    session
+        .execute(
+            "macro.save",
+            json!({
+                "macro": {
+                    "name": "KeepZoom",
+                    "steps": [
+                        {
+                            "command": "view.defaultZoom",
+                            "params": {"percent": 225}
+                        }
+                    ]
+                }
+            }),
+        )
+        .unwrap();
+
+    // A dry run must not persist preference changes.
+    session.execute("macro.check", json!({"name": "KeepZoom", "onConflict": "overwrite"})).unwrap();
+
+    assert_eq!(session.prefs.default_zoom, 100);
+
+    // A successful run retains the new preference.
+    session.execute("macro.run", json!({"name": "KeepZoom", "onConflict": "overwrite"})).unwrap();
+
+    assert_eq!(session.prefs.default_zoom, 225);
+
+    session.execute("file.new", json!({})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().zoom, 225);
+}
+
 fn sample_macro(name: &str) -> Macro {
     parse_macro(&json!({
         "name": name,
