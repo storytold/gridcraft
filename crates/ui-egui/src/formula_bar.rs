@@ -828,6 +828,13 @@ fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, e
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
         cycle_anchor(ed);
     }
+    if ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, Key::F3)) {
+        app.editor = Some(ed.clone());
+        app.open_dialog("insertFunction", json!({}));
+        if let Some(back) = app.editor.take() {
+            *ed = back;
+        }
+    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F3)) {
         app.open_dialog("pasteName", json!({"shortcut": true}));
     }

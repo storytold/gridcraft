@@ -207,6 +207,10 @@ impl Language {
 
     /// The catalog entry for `text`, if this language has one.
     fn translated(self, text: &str) -> Option<&'static str> {
+        #[cfg(test)]
+        if let Some(t) = TEST_CATALOG.with(|c| c.borrow().iter().find(|(k, _)| *k == text).map(|(_, v)| *v)) {
+            return Some(t);
+        }
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -334,6 +338,16 @@ pub fn unfill<'a>(template: &'a str, text: &'a str) -> Option<Vec<(&'a str, &'a 
         }
     }
     (rest.is_empty() && fill(template, &values) == text).then_some(values)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CATALOG: std::cell::RefCell<Vec<(&'static str, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_catalog(rows: &[(&'static str, &'static str)]) {
+    TEST_CATALOG.with(|c| *c.borrow_mut() = rows.to_vec());
 }
 
 /// English text and its translation, sorted by the English.
