@@ -152,6 +152,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
+| 2026-10-30 | Thai wrapping preserved through upstream grid extraction; the earlier benchmark remains a dated snapshot rather than a measurement of this integration |
+| 2026-10-28 | Thai wrapping benchmark: candidate warm p50/p95 4.0449/5.1826 ms vs pinned upstream 2.4476/2.8611 ms at 100% / 1x for 500 visible cells; slower in all six measured configurations. Fixed run order and host noise limit the comparison; AutoFit and editing remain separate |
 | 2026-10-26 | Excel open check (`packaging/windows/excel-open-check`): saves workbooks with `gridcraft-cli`, opens each in real Excel through COM so a repair counts as a failure, and records pass or the failure per file; 0.12.1 over 18 public fixtures and 7 feature scenarios: 24 of 25 open cleanly, the other is the legacy-formula slowness of #410 |
 | 2026-10-26 | Paste Special ▸ Transpose turns a formula's references with the cell that carries it, as Excel does: the row offset becomes the column offset and the other way round, so `=A3+1` copied from A3:A4 and pasted at C3 reads the cell to its left (`=C3+1`) instead of keeping the offset it had in the column; a reference pinned with `$` is left standing, a whole row or column comes back as a cell range open to the sheet's edge, and one off the grid is `#REF!` (#2450) |
 | 2026-10-25 | Charts: 100% Stacked Line and 100% Stacked Line with Markers (`insert.chart` `{type: "line", subtype: "stacked100"}` and `"stacked100Markers"`), drawn as each value's share of its category's total; XLSX `percentStacked` line charts open as 100% stacked instead of stacked |
@@ -159,6 +161,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
 | 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
 | 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
+| 2026-10-26 | T1 Thai wrapping for committed cells: ICU4X LSTM breaks, exact byte ranges, filter-aware grid layout, font/DPI-scoped bounded cache, and T0/T1 verification; AutoFit row height remains separate |
 | 2026-10-26 | `cargo xtask bench`: ten fixed in-code workbooks (100k rows) time edits, formula entry, Calculate Now, sort and XLSX save/open, check their results and compare with a saved baseline. On an M2 Pro a 100k-dependent edit recalculates in 90–106 ms and 300k formulas in 395–455 ms |
 | 2026-10-25 | Fill handle: from numbers, the right-drag menu offers Linear Trend and Growth Trend, which continue the best-fit line or exponential curve of the source (1, 2 gives 3, 4, 5 or 4, 8, 16) |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
@@ -313,6 +316,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
+| 2026-10-30 | minor | Preserve Thai wrapping through current grid extraction and clarify benchmark provenance; no progress score change |
+| 2026-10-28 | minor | Record post-integration Thai benchmark regression; no progress score change |
+| 2026-10-26 | minor | T1 Thai cell wrapping scope and verification; progress log row; AutoFit remains separate |
 | 2026-10-26 | minor | Progress log: Excel open check |
 | 2026-10-26 | minor | Progress log: PDF reading direction and RTL sheets |
 | 2026-10-26 | minor | Progress log: Arabic PDF text |

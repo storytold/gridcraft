@@ -105,7 +105,7 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
-        craft_ui::fonts::load(ctx, theme::font_definitions_for_language(language));
+        theme::install_fonts(ctx, theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
 

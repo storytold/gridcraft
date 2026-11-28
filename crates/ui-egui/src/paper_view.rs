@@ -132,12 +132,14 @@ pub(crate) struct PagePaintInput<'a> {
     pub(crate) tokens: &'a Tokens,
 }
 
+/// Paints visible worksheet pages and shares one Thai layout budget across their cell regions.
 pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
     let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();
     let Some(pg) = geo.paper.clone() else { return quads };
     p.rect_filled(geo.cells, 0.0, t.desk);
     let cells = p.with_clip_rect(geo.cells);
+    crate::thai_layout::begin_frame_budget(p.ctx());
     let mut painted = 0usize;
     for (i, j) in pages_iter(geo, &pg) {
         let page = screen_rect(geo, pg.page_rect(i, j));

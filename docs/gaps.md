@@ -64,17 +64,16 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF outside Arabic and Arabic UI layout.
-- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
-  editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
-  delivery and PDF output are separate PRs; other script shaping still needs verification.
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF outside Arabic.
-- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
-  Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
-  in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
-  (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari in the UI. PDF now shapes Arabic with licensed glyph outlines, preserves cell reading direction, and mirrors RTL sheets.
+- **Missing:** cross-platform script coverage, Thai cell AutoFit row height, Devanagari and Thai
+  shaping verification, non-Latin PDF coverage beyond Arabic, and Arabic UI layout.
+- **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32). Thai
+  committed-cell wrapping uses craft-text with ICU4X LSTM, greedy measurement, exact UTF-8 byte
+  ranges and an LRU cache; AutoFit row-height measurement remains separate. Arabic shared
+  shaping/bidi, editing and cell Context/LTR/RTL have focused regressions and full gates; Arabic
+  font fallback uses system, fontconfig or craft-fonts faces. PDF shapes Arabic with licensed glyph
+  outlines, preserves cell reading direction and mirrors RTL sheets. #142 (Chinese text) awaits
+  confirmation and #54 tracks symbols as boxes on Fedora.
+- **Performance:** the 2026-10-27 snapshot's 500-visible-cell Windows release benchmark at 100% / 1x measured warm p50/p95 4.0449/5.1826 ms for the Thai candidate versus 2.4476/2.8611 ms on pinned upstream `63038650`. Candidate was slower in all six tested configurations; fixed run order and host noise limit the comparison. Instrumented cold candidate required four renderer passes versus one baseline pass. These results predate the later grid integration; no newer performance measurement is claimed.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
 
@@ -207,6 +206,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-30 | minor | Distinguish the Thai benchmark snapshot from the later upstream grid integration; no parity score change |
+| 2026-10-28 | minor | Record post-integration Thai benchmark regression and scope; no parity score change |
+| 2026-10-26 | minor | §5: Thai line wrapping for committed cells landed (ICU4X LSTM segmenter, greedy measurement, LRU cache) |
 | 2026-10-26 | minor | §1: `packaging/windows/excel-open-check` opens saved workbooks in real Excel and records pass or the exact failure; first run: 24 of 25 open cleanly |
 | 2026-10-26 | minor | §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry. Other script and UI gaps remain. |
 | 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |

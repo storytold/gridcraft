@@ -61,6 +61,7 @@ pub mod selection_glide;
 pub mod tabs;
 pub mod text_box;
 mod text_direction;
+pub mod thai_layout;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
