@@ -81,6 +81,24 @@ fn integer_and_binary_constraints_use_branch_and_bound() {
 }
 
 #[test]
+fn simplex_value_goal_preserves_target_across_large_offset_cancellation() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("A2", "1"), ("B1", "=A1+1000000000000000*(A2-1)")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({"objective": "B1", "goal": "value", "value": 0.3, "variables": "A1:A2", "constraints": ["A1 <= 1", "A2 = 1"], "method": "simplex"}),
+        )
+        .unwrap();
+    assert_eq!(r["status"], "infeasible", "{r}");
+    assert_eq!(r["objective"], serde_json::Value::Null, "an unreliable objective is not reported as a solution: {r}");
+    assert_eq!(r["values"], json!({}), "an unreliable solution is not reported: {r}");
+    assert_eq!(r["changed"], false, "the worksheet is left unchanged: {r}");
+    assert_eq!((n(&s, "A1"), n(&s, "A2"), n(&s, "B1")), (0.0, 1.0, 0.0));
+    assert_eq!((r["model"]["goal"].as_str(), r["model"]["value"].as_f64()), (Some("value"), Some(0.3)));
+}
+
+#[test]
 fn grg_finds_smooth_optima() {
     // Largest rectangle with perimeter at most 20: a 5 × 5 square, area 25.
     let mut s = s();
