@@ -1592,6 +1592,32 @@ fn sumif_sum_range_takes_the_criteria_size() {
 }
 
 #[test]
+fn stacked_prefix_sumif_resizes_the_sum_range() {
+    // A name read from a file may carry stacked `_xlfn.`/`_xlws.` prefixes; the call must work
+    // like the plain one, sum range taking the criteria range's size.
+    let mut t = T::new();
+    for r in 1..=5 {
+        t.set(&format!("A{r}"), &r.to_string());
+        t.set(&format!("B{r}"), &(r * 10).to_string());
+    }
+    t.set("D1", "=_xlws._xlfn.SUMIF(A1:A5,\">0\",B1)");
+    assert_eq!(t.num("D1"), 150.0);
+    t.set("D2", "=_xlws._xlfn.AVERAGEIF(A1:A5,\">0\",B1)");
+    assert_eq!(t.num("D2"), 30.0);
+}
+
+#[test]
+fn stacked_prefix_rand_recalculates_on_an_unrelated_edit() {
+    // A stacked-prefix RAND is volatile like the plain name: an edit elsewhere must draw it
+    // again, not leave the first draw standing.
+    let mut t = T::new();
+    t.set("B1", "=_xlws._xlfn.RAND()");
+    let first = t.num("B1");
+    t.set("A1", "5");
+    assert_ne!(t.num("B1"), first);
+}
+
+#[test]
 fn sumif_resized_sum_range_stops_at_the_sheet_edge() {
     let mut t = T::new();
     t.set("A1", "a");

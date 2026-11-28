@@ -1705,6 +1705,9 @@ fn volatile_series_formulas_are_detected() {
     assert!(has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("=TODAY()"))));
     assert!(has_volatile_series(&wb, 0, &with("=RANDARRAY(5)", None)));
     assert!(has_volatile_series(&wb, 0, &with("=_xlfn.RANDARRAY(5)", None)));
+    // A file may stack the prefixes; the `_XLWS.` a `_XLFN.`-only strip leaves would put a `.`
+    // before the name and hide it from the volatile match.
+    assert!(has_volatile_series(&wb, 0, &with("=_xlws._xlfn.RAND()", None)));
     assert!(!has_volatile_series(&wb, 0, &with("Sheet1!$B$2:$B$9", Some("Sheet1!$B$1"))));
     assert!(!has_volatile_series(&wb, 0, &with("=MYRAND(A1)", None)));
     assert!(!has_volatile_series(&wb, 0, &with("=Sheet1!$NOW", None)));
