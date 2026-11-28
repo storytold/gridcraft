@@ -38,6 +38,7 @@ mod subtotal_filter_roundtrip;
 mod table_resize_overlap;
 mod table_style_looks;
 mod table_total_row_last_row;
+mod three_d_sheet_move;
 mod trace_error;
 mod workbook_author;
 mod wrap_row_height;
