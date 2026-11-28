@@ -497,6 +497,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search"], &["json"])?;
+    a.no_extra(usize::from(a.opt("search").is_none()))?;
     let q = a.opt("search").or(a.positional.first().map(String::as_str)).map(str::to_ascii_lowercase);
     let s = Session::new();
     let list: Vec<_> = s
@@ -530,6 +531,7 @@ fn commands(args: &[String]) -> Result<(), String> {
 
 fn functions(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search", "category"], &["json"])?;
+    a.no_extra(usize::from(a.opt("search").is_none()))?;
     let mut p = json!({});
     if let Some(q) = a.opt("search").or(a.positional.first().map(String::as_str)) {
         p["search"] = json!(q);
@@ -630,6 +632,13 @@ mod tests {
     }
 
     #[test]
+    fn listing_with_explicit_search_rejects_a_positional_argument() {
+        let args = ["--search", "sum", "stray"].map(str::to_string);
+        assert_eq!(commands(&args).unwrap_err(), "unexpected argument `stray`");
+        assert_eq!(functions(&args).unwrap_err(), "unexpected argument `stray`");
+    }
+
+    #[test]
     fn parses_commands() {
         assert_eq!(parse_command("home.bold={\"range\":\"A1\"}").unwrap(), Some(("home.bold".into(), json!({"range": "A1"}))));
         assert_eq!(parse_command("edit.undo").unwrap(), Some(("edit.undo".into(), json!({}))));
@@ -674,6 +683,13 @@ mod tests {
         assert_eq!(value_text(&json!(true)), "TRUE");
         assert_eq!(value_text(&json!({"error": "#DIV/0!"})), "#DIV/0!");
         assert_eq!(value_text(&json!([[1.0, 2.0], [3.0, "x"]])), "1\t2\n3\tx");
+    }
+
+    #[test]
+    fn listing_commands_reject_extra_search_arguments() {
+        let args = ["bold", "ignored"].map(str::to_string);
+        assert_eq!(commands(&args), Err("unexpected argument `ignored`".into()));
+        assert_eq!(functions(&args), Err("unexpected argument `ignored`".into()));
     }
 
     #[test]
