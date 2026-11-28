@@ -85,3 +85,18 @@ fn enter_with_nothing_checked_keeps_the_menu_open() {
     assert!(h.state().grid.filter_menu.is_some(), "the menu stays open");
     assert_eq!(active(&h), "A1");
 }
+
+#[test]
+fn refused_filter_menu_sorts_show_the_reason() {
+    for label in ["↑  Sort Ascending", "↓  Sort Descending"] {
+        let mut h = filter_menu_open();
+        h.state_mut().run("review.protectSheet", json!({"autofilter": true})).unwrap();
+        h.run_steps(2);
+        let before = h.state().session.active().unwrap().wb.clone();
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(h.state().message.as_ref().is_some_and(|(_, message)| message.contains("Sorting isn't allowed on this protected sheet")));
+        assert_eq!(h.state().session.active().unwrap().wb, before, "a refused sort must not change the workbook");
+        assert!(h.state().grid.filter_menu.is_none());
+    }
+}
