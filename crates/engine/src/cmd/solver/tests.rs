@@ -1949,3 +1949,38 @@ fn save_model_counts_areas_outside_quoted_sheet_names() {
         assert!(e.contains("one range"), "{name}: {e}");
     }
 }
+
+#[test]
+fn simplex_infeasible_with_redundant_large_bound() {
+    let mut s = s();
+    set(&mut s, &[("A1", "0"), ("B1", "=A1")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({
+                "objective": "B1",
+                "goal": "min",
+                "variables": "A1",
+                "constraints": ["B1 >= 2", "B1 <= 1", "B1 <= 1000000000"],
+                "method": "simplex",
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["status"], "infeasible", "{r}");
+
+    // Same contradiction with maximization and a large bound on a separate variable.
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("B1", "=A1"), ("C1", "=A2")]);
+    let r = s
+        .execute(
+            "data.solver",
+            json!({
+                "objective": "B1",
+                "goal": "max",
+                "variables": "A1:A2",
+                "constraints": ["B1 >= 2", "B1 <= 1", "C1 <= 1000000000"],
+                "method": "simplex",
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["status"], "infeasible", "{r}");
+}

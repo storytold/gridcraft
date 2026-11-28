@@ -220,9 +220,31 @@ fn phase_one(tableau: &mut Tableau, normalized: &[(Vec<f64>, Sense, f64)], budge
     if matches!(simplex(&mut tableau.rows, &mut tableau.basis, &mut objective, &all, budget), Step::Limit) {
         return Err(Outcome::Limit);
     }
-    let scale = normalized.iter().map(|row| row.2.abs()).fold(1.0f64, f64::max);
-    if -objective.get(tableau.width).copied().unwrap_or(0.0) > 1e-7 * scale {
-        return Err(Outcome::Infeasible);
+    if -objective.get(tableau.width).copied().unwrap_or(0.0) > EPS {
+        let mut y = vec![0.0; tableau.decision_cols];
+        for (i, row) in tableau.rows.iter().enumerate() {
+            if let Some(&basic) = tableau.basis.get(i)
+                && basic < tableau.decision_cols
+                && let Some(slot) = y.get_mut(basic)
+            {
+                *slot = row.get(tableau.width).copied().unwrap_or(0.0);
+            }
+        }
+        // Check each row against its own scale so an unrelated large RHS cannot mask a violation.
+        let infeasible = y.iter().any(|&v| v < -EPS)
+            || normalized.iter().any(|(coeffs, sense, rhs)| {
+                let lhs: f64 = coeffs.iter().zip(&y).map(|(a, v)| a * v).sum();
+                let terms: f64 = coeffs.iter().zip(&y).map(|(a, v)| (a * v).abs()).sum();
+                let viol = match sense {
+                    Sense::Le => lhs - rhs,
+                    Sense::Ge => rhs - lhs,
+                    Sense::Eq => (lhs - rhs).abs(),
+                };
+                viol > 1e-10 * (1.0 + rhs.abs() + terms)
+            });
+        if infeasible {
+            return Err(Outcome::Infeasible);
+        }
     }
     for i in 0..tableau.rows.len() {
         if tableau.basis.get(i).is_none_or(|basic| *basic < tableau.decision_cols + tableau.slack_cols) {
