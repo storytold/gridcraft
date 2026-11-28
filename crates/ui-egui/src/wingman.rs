@@ -93,7 +93,7 @@ impl From<&Agent> for AgentKey {
 struct Thread {
     title: String,
     owner: Option<AgentKey>,
-    // Only complete, protocol-valid turns are replayed. A stopped turn stays visible in the transcript.
+    // Only protocol-complete exchanges are replayed, including receipts saved when a turn stops.
     history: VecDeque<Vec<Value>>,
     log: VecDeque<Line>,
 }
@@ -153,14 +153,13 @@ struct Turn {
     rounds: usize,
     ribbon: workbook::ribbon::Ribbon,
     native_offered: std::collections::BTreeSet<String>,
-    /// End of the last exchange with all tool calls answered (safe to replay on interruption).
-    completed_wire: usize,
     final_answer: bool,
     approval: Approval,
     // Messages from the start of this turn, distinct from older completed history.
     wire: Vec<Value>,
     job: Option<Job>,
     partial: String,
+    // Each accepted call is queued, dispatched externally, or already has a receipt in wire.
     queue: VecDeque<ToolCall>,
     external: Option<mcp::Pending>,
     search: Option<chat::SearchBatch>,
@@ -226,15 +225,18 @@ impl PanelState {
             } else {
                 "Stopped. Previously approved edits, if any, are unchanged."
             };
-            self.recover(t);
+            self.recover(t, "Not applied: the turn was stopped.");
             self.thread.line("Wingman", reason);
         }
     }
 
-    fn recover(&mut self, mut t: Turn) {
-        if t.completed_wire > 0 {
-            t.wire.truncate(t.completed_wire);
-            self.remember(t.wire);
+    fn recover(&mut self, t: Turn, reason: &str) {
+        let external = t.external.map(|mut p| {
+            let outcome = p.poll();
+            interrupted_external(&p.id, outcome)
+        });
+        if let Some(wire) = interrupted_history(t.wire, external, t.queue, reason) {
+            self.remember(wire);
         }
         if !t.partial.is_empty() {
             self.thread.line("Assistant (partial)", t.partial);
@@ -294,10 +296,55 @@ impl PanelState {
     }
 }
 
+// This is bookkeeping only. Never dispatch calls when closing the exchange: the next
+// user message needs the original receipts, not another attempt to perform those edits.
+fn interrupted_history(mut wire: Vec<Value>, external: Option<Value>, queue: VecDeque<ToolCall>, reason: &str) -> Option<Vec<Value>> {
+    wire.extend(external);
+    for call in queue {
+        wire.push(json!({"role":"tool","tool_call_id":call.id,"content":reason}));
+    }
+    // No accepted provider response yet: don't replay the unfulfilled user request.
+    (wire.len() > 1).then_some(wire)
+}
+
+fn interrupted_external(id: &str, outcome: Option<Result<Value, String>>) -> Value {
+    let data = match outcome {
+        Some(Ok(receipt)) => receipt,
+        Some(Err(e)) => json!({"error":e,"outcome":"unknown"}),
+        None => json!({"outcome":"unknown","message":"External call dispatched; no receipt before interruption. Verify before repeating."}),
+    };
+    json!({"role":"tool","tool_call_id":id,"content":data.to_string()})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Services, UiState};
+
+    #[test]
+    fn stopping_a_mixed_batch_preserves_receipts_without_retrying() {
+        let user = json!({"role":"user","content":"apply the changes"});
+        let calls = ["edited", "external", "waiting"].map(|id| json!({"type":"function","id":id,"function":{"name":"tool","arguments":"{}"}}));
+        let assistant = json!({"role":"assistant","tool_calls":calls});
+        let applied = json!({"role":"tool","tool_call_id":"edited","content":"original receipt"});
+        let mut queued = ToolCall::default();
+        queued.id = "waiting".into();
+        let wire = interrupted_history(
+            vec![user.clone(), assistant.clone(), applied.clone()],
+            Some(interrupted_external("external", None)),
+            VecDeque::from([queued]),
+            "Not applied: stopped.",
+        )
+        .unwrap();
+        assert_eq!(wire[..3], [user.clone(), assistant, applied]);
+        assert_eq!(wire[3]["tool_call_id"], "external");
+        assert_eq!(serde_json::from_str::<Value>(wire[3]["content"].as_str().unwrap()).unwrap()["outcome"], "unknown");
+        assert_eq!(wire[4], json!({"role":"tool","tool_call_id":"waiting","content":"Not applied: stopped."}));
+        assert_eq!(wire.len(), 5);
+        assert!(interrupted_history(vec![user], None, VecDeque::new(), "Stopped.").is_none());
+        let receipt = json!({"content":[{"type":"text","text":"complete"}]});
+        assert_eq!(interrupted_external("external", Some(Ok(receipt.clone())))["content"], receipt.to_string());
+    }
 
     #[test]
     fn changing_access_or_leaving_a_thread_revokes_standing_consent() {

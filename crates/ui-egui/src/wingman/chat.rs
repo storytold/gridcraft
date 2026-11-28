@@ -69,7 +69,6 @@ impl PanelState {
             rounds: 0,
             ribbon: Default::default(),
             native_offered: Default::default(),
-            completed_wire: 0,
             final_answer: false,
             approval: if app.synthetic_pending { Approval::Ask } else { self.approval },
             wire: vec![json!({"role":"user","content":content})],
@@ -211,7 +210,7 @@ impl PanelState {
             Ok(true) => self.turn = Some(turn),
             Ok(false) => self.remember(turn.wire),
             Err(message) => {
-                self.recover(turn);
+                self.recover(turn, "Not applied: the turn was interrupted.");
                 self.thread.line("Stopped", message);
             }
         }
@@ -235,9 +234,6 @@ impl PanelState {
             self.thread.line("External tool", format!("{}\n{}", pending.label, data));
             turn.wire.push(json!({"role":"tool","tool_call_id":pending.id,"content":data.to_string()}));
             turn.external = None;
-            if turn.queue.is_empty() {
-                turn.completed_wire = turn.wire.len();
-            }
             if !turn.target.matches(app) {
                 return Err("Workbook target changed during the external call; no follow-up edits were applied.".into());
             }
@@ -258,8 +254,8 @@ impl PanelState {
                         if !reply.content.is_empty() {
                             self.thread.line("Assistant", reply.content);
                         }
-                        turn.wire.push(reply.message);
                         if reply.tool_calls.is_empty() {
+                            turn.wire.push(reply.message);
                             return Ok(false);
                         }
                         if turn.final_answer {
@@ -268,6 +264,8 @@ impl PanelState {
                         if self.mode == Mode::Chat || !turn.agent.supports_tools {
                             return Err("The provider requested a tool in a chat-only turn.".into());
                         }
+                        // Only publish an assistant tool message once its entire batch is accepted.
+                        turn.wire.push(reply.message);
                         turn.queue = reply.tool_calls.into();
                         turn.job = None;
                         break;
@@ -292,7 +290,6 @@ impl PanelState {
             if turn.external.is_some() {
                 return Ok(true);
             }
-            turn.completed_wire = turn.wire.len();
             self.request(turn, ctx)?;
         }
         Ok(true)
@@ -321,12 +318,13 @@ impl PanelState {
 
     fn resolve(&mut self, app: &mut SheetApp, turn: &mut Turn, approve: bool) -> Result<(), String> {
         Self::check_target(app, turn)?;
-        let call = turn.queue.pop_front().ok_or("No tool request is waiting.")?;
+        let call = turn.queue.front().ok_or("No tool request is waiting.")?;
         if let Some(entry) = turn.offered.get(&call.name) {
             if self.mode != Mode::Mcp || !approve {
                 return Err("External tool calls require MCP mode and explicit approval.".into());
             }
-            turn.external = Some(self.mcp.call(entry, call.id, &call.arguments)?);
+            turn.external = Some(self.mcp.call(entry, call.id.clone(), &call.arguments)?);
+            turn.queue.pop_front();
             return Ok(());
         }
         let result = (|| {
@@ -361,10 +359,7 @@ impl PanelState {
             workbook::execute(app, &call.name, &args, writes && approve).map(Some)
         })();
         let (label, data) = match result {
-            Ok(None) => {
-                turn.queue.push_front(call);
-                return Ok(());
-            }
+            Ok(None) => return Ok(()),
             Ok(Some(v)) => (if approve { "Applied edit" } else { "Workbook read" }, json!({"result":v})),
             Err(e) => ("Tool refused", json!({"error":e})),
         };
@@ -393,6 +388,7 @@ impl PanelState {
             self.thread.line(label, format!("{}\n{}", call.name, data));
         }
         turn.wire.push(json!({"role":"tool","tool_call_id":call.id,"content":data.to_string()}));
+        turn.queue.pop_front();
         turn.target = Target::capture(app).ok_or("Workbook closed.")?;
         Ok(())
     }
@@ -403,24 +399,17 @@ impl PanelState {
         }
         let Some(mut t) = self.turn.take() else { return };
         if !approve {
-            // Close every outstanding tool id so later user turns can safely replay the exchange.
-            for call in t.queue.drain(..) {
-                t.wire.push(json!({"role":"tool","tool_call_id":call.id,"content":"Not applied: the user denied the edit and ended the turn."}));
-            }
-            self.remember(t.wire);
+            self.recover(t, "Not applied: the user denied the edit and ended the turn.");
             self.thread.line("Wingman", "Action denied; the turn has ended. Earlier approved actions are unchanged.");
             return;
         }
         match self.resolve(app, &mut t, approve) {
             Ok(()) => {
-                if t.queue.is_empty() && t.external.is_none() {
-                    t.completed_wire = t.wire.len();
-                }
                 self.turn = Some(t);
                 ctx.request_repaint();
             }
             Err(e) => {
-                self.recover(t);
+                self.recover(t, "Not applied: the turn was interrupted.");
                 self.thread.line("Stopped", e);
             }
         }

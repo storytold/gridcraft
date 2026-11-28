@@ -576,11 +576,7 @@ pub(in super::super) fn move_rule_formula(f: &str, first: CellRef, to: CellRef) 
 }
 
 pub(in super::super) fn transpose_rule_formula(f: &str, first: CellRef, source: CellRef, to: CellRef) -> String {
-    map_rule_formula(f, |e| {
-        let at_source =
-            gridcraft_formula::adjust::shift_relative(e, i64::from(source.row) - i64::from(first.row), i64::from(source.col) - i64::from(first.col));
-        gridcraft_formula::adjust::transpose_relative(at_source, source, to)
-    })
+    map_rule_formula(f, |e| gridcraft_formula::adjust::transpose_relative_from(e, first, source, to))
 }
 
 fn map_rule_formula(f: &str, map: impl FnOnce(gridcraft_formula::Expr) -> gridcraft_formula::Expr) -> String {
@@ -638,4 +634,34 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
         }
     }
     Ok(json!({"invalid": bad_cells, "truncated": truncated}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transposing_part_of_a_validation_range_checks_only_the_final_coordinates() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let name = s.doc().unwrap().wb.sheets[0].name.clone();
+        s.execute("data.validation", json!({"range":"A1:B1","type":"decimal","formula1":"=XFD1","formula2":"=A1048576"})).unwrap();
+        s.execute("range.transfer", json!({"sheet":name,"source":"B1","at":"D4","operation":"transpose"})).unwrap();
+        let dest = CellRef::parse("D4").unwrap();
+        let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|v| v.ranges.iter().any(|r| r.contains(dest))).unwrap();
+        // XFD shifted one column would temporarily exceed the sheet, but its transposed
+        // offset fits in the row dimension. The other bound really does exceed the grid.
+        assert_eq!(rule.f1, "D16387");
+        assert_eq!(rule.f2.as_deref(), Some("#REF!"));
+    }
+
+    #[test]
+    fn clipped_rule_keeps_native_mixed_and_whole_axis_transpose_semantics() {
+        let cell = |s| CellRef::parse(s).unwrap();
+        let (first, source, to) = (cell("B1"), cell("D3"), cell("G8"));
+        let rule = "=SUM(2:4,B:D,$A2,C$3,$D$4)";
+        let at_source = move_rule_formula(rule, first, source);
+        let expected = map_rule_formula(&at_source, |e| gridcraft_formula::adjust::transpose_relative(e, source, to));
+        assert_eq!(transpose_rule_formula(rule, first, source, to), expected);
+    }
 }
