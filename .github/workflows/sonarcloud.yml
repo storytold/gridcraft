@@ -20,5 +20,5 @@ jobs:
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       # Match the main CI gate so coverage exercises every glyph-sensitive UI case.
-      fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      fonts-ref: c1db6d1a8ed772191241c3d185e2104be84d8691
     secrets: inherit
