@@ -16,7 +16,18 @@ impl SheetApp {
         r
     }
 
+    /// Routes UI-only commands before forwarding workbook commands to the engine.
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if id == "ui.accountingFormat" {
+            let code = params.get("code").and_then(Json::as_str).ok_or("accounting format code is required")?.to_owned();
+            if !crate::ribbon::is_accounting_format_code(&code) {
+                return Err("unknown accounting format".into());
+            }
+            // The choice is the user's preference even when the selection can't take it (a
+            // protected sheet, no workbook): keep it, then report the formatting error.
+            self.ui.accounting_format = code;
+            return self.run_command("home.numberFormat", params);
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));

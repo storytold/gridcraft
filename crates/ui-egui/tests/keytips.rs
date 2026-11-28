@@ -54,6 +54,26 @@ fn sequence(h: &mut Harness, letters: &[Key], text_first: bool) {
     }
 }
 
+#[test]
+/// Alt+H, A, N applies the remembered non-default currency format, not the dollar default.
+fn accounting_keytip_reapplies_the_selected_currency() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "123.45"})).unwrap();
+    let mut h = harness(session);
+    let code = "_-[$£-809]* #,##0.00_-;-[$£-809]* #,##0.00_-;_-[$£-809]* \"-\"??_-;_-@_-";
+    h.state_mut().ui.accounting_format = code.into();
+    sequence(&mut h, &[Key::H, Key::A, Key::N], false);
+    let doc = h.state().session.active().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    assert_eq!(
+        doc.wb.styles.get(sheet.style_id(CellRef::new(0, 0))).num_fmt.as_str(),
+        code,
+        "journal: {:?}; ui code: {}",
+        h.state().session.journal,
+        h.state().ui.accounting_format
+    );
+}
+
 fn value(h: &Harness, cell: &str) -> Value {
     h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
 }

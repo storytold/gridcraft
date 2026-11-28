@@ -9,7 +9,8 @@ use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
 use crate::widgets::{
-    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button,
+    split_button_symbol, toggle_button,
 };
 
 mod automate;
@@ -34,6 +35,7 @@ use data::data;
 use formulas::formulas;
 pub use home::FONTS;
 use home::home;
+pub(crate) use home::is_accounting_format_code;
 use insert::{draw, insert};
 use page_layout::page_layout;
 use review::review;
