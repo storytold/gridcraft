@@ -1,6 +1,7 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
-use super::text::wrap_lines;
-use super::{Anchor, Baseline, CellRef, Font, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
+use super::text::{TextLine, wrap_lines};
+use super::text_unicode::{draw_shaped_text_with_direction, needs_unicode_text, shaped_width_with_direction, wrap_shaped_with_direction};
+use super::{Anchor, Baseline, CellRef, Font, FontCatalog, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 
@@ -167,7 +168,15 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32, room: u64) -> Option<Decode
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
-pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut PicCache) {
+pub(super) fn draw_objects(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    b: &Block,
+    pics: &mut PicCache,
+) -> Result<(), String> {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
@@ -179,7 +188,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     };
     pg.save();
     pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
-    draw_sparklines(pg, wb, si, sh, b, block);
+    draw_sparklines(pg, catalog, wb, si, sh, b, block)?;
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
         if !visible(r) {
@@ -219,7 +228,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
             }
             continue;
         }
-        draw_shape(pg, wb, shp, b, (x, y, w, h));
+        draw_shape(pg, catalog, wb, shp, b, (x, y, w, h))?;
     }
     for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
@@ -230,16 +239,17 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         // As for pictures, each page gets its own copy of the drawing commands.
         let prims = pics.chart((si, chi), || {
             let data = gridcraft_chart::resolve(wb, si, ch);
-            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure { catalog })
         });
         if let Some(prims) = prims {
-            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+            draw_prims(pg, catalog, prims, Xf { ox: x, oy: y, k: b.k })?;
         }
     }
     pg.restore();
+    Ok(())
 }
 
-fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) {
+fn draw_sparklines(pg: &mut Page, catalog: &FontCatalog, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, block: RangeRef) -> Result<(), String> {
     for sp in &sh.sparklines {
         if !block.contains(sp.cell) {
             continue;
@@ -262,11 +272,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
                 }
             }
         }
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        draw_prims(pg, catalog, &prims, Xf { ox: x, oy: y, k: b.k })?;
     }
+    Ok(())
 }
 
-fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
+fn draw_shape(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    wb: &Workbook,
+    shp: &gridcraft_model::Shape,
+    b: &Block,
+    (x, y, w, h): (f32, f32, f32, f32),
+) -> Result<(), String> {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
     let angle = if shp.rotation.is_finite() { shp.rotation.to_radians() } else { 0.0 };
@@ -308,17 +326,24 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         }
     }
     if shp.text.is_empty() {
-        return;
+        return Ok(());
     }
     use gridcraft_model::{ShapeTextAlign, ShapeTextAnchor};
     let fm = &shp.format;
     let text_box = shp.kind == ShapeKind::TextBox;
     let size = fm.font_size.unwrap_or(11.0).clamp(1.0, 4000.0) * b.scale;
-    let font = Font::styled(Font::family_for(fm.font.as_deref().unwrap_or("")), fm.bold, fm.italic);
+    let family = fm.font.as_deref().unwrap_or("");
+    let font = Font::styled(Font::family_for(family), fm.bold, fm.italic);
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), TextDirection::Auto);
+    let direction = TextDirection::Auto.resolve(&shp.text);
+    let unicode = needs_unicode_text(&shp.text);
+    let lines: Vec<TextLine> = if unicode {
+        wrap_shaped_with_direction(&shp.text, catalog, family, fm.bold, fm.italic, size, (w - 4.0 * b.k).max(size), direction)?
+    } else {
+        wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), direction)
+    };
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -326,7 +351,11 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction);
+        let lw = if unicode {
+            shaped_width_with_direction(catalog, family, fm.bold, fm.italic, &l.text, size, l.direction)?
+        } else {
+            gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction)
+        };
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
@@ -336,7 +365,11 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
             let off = (size * 0.06).max(0.5);
             let [sx, sy] = turn([lx + off, yy + off]);
-            pg.text_rotated_with_direction(Baseline { origin: Point::new(sx, sy), angle }, size, font, sc, &l.text, l.direction);
+            if unicode {
+                draw_shaped_text_with_direction(pg, catalog, sx, sy, size, family, fm.bold, fm.italic, sc, &l.text, angle, l.direction)?;
+            } else {
+                pg.text_rotated_with_direction(Baseline { origin: Point::new(sx, sy), angle }, size, font, sc, &l.text, l.direction);
+            }
         }
         // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
         // directions by half the outline width, under the filled text.
@@ -346,11 +379,20 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
             let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
             for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
                 let [ox, oy] = turn([lx + dx * d, yy + dy * d]);
-                pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, oc, &l.text, l.direction);
+                if unicode {
+                    draw_shaped_text_with_direction(pg, catalog, ox, oy, size, family, fm.bold, fm.italic, oc, &l.text, angle, l.direction)?;
+                } else {
+                    pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, oc, &l.text, l.direction);
+                }
             }
         }
         let [tx, ty] = turn([lx, yy]);
-        pg.text_rotated_with_direction(Baseline { origin: Point::new(tx, ty), angle }, size, font, color, &l.text, l.direction);
+        if unicode {
+            draw_shaped_text_with_direction(pg, catalog, tx, ty, size, family, fm.bold, fm.italic, color, &l.text, angle, l.direction)?;
+        } else {
+            pg.text_rotated_with_direction(Baseline { origin: Point::new(tx, ty), angle }, size, font, color, &l.text, l.direction);
+        }
         yy += size * 1.2;
     }
+    Ok(())
 }

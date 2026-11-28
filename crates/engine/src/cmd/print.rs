@@ -16,7 +16,7 @@ use gridcraft_model::{
     Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
     Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
 };
-use gridcraft_pdf::{Baseline, Font, Page, PdfDoc, Point, Rect, Rgb, TextDirection};
+use gridcraft_pdf::{Baseline, Font, FontCatalog, Page, PdfDoc, PdfFont, Point, Rect, Rgb, TextDirection};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -28,6 +28,7 @@ mod header_footer;
 mod layout;
 mod objects;
 mod text;
+mod text_unicode;
 
 use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
 use header_footer::draw_header_footer;
@@ -69,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export as PDF",
             ["File", "Export"],
             None,
-            "{path?, sheets?: active|all, range?: \"A1:F40\" or several areas \"A1:B5,D1:E5\", one run of pages each (active sheet), fitToPage?: bool} → {pages, bytes, path} or {pages, bytes, base64} when no path. Honours each sheet's Page Setup.",
+            "{path?, sheets?: active|all, range?: \"A1:F40\" or several areas \"A1:B5,D1:E5\", one run of pages each (active sheet), fitToPage?: bool, pdfFonts?: [{base64, faceIndex?}]} → {pages, bytes, path} or {pages, bytes, base64} when no path. Supply licensed TTF/OTF face bytes in `pdfFonts` on Web/WASM; `faceIndex` is 0 for standalone fonts and must exist in a collection. Native exports use the hash-checked craft-fonts manifest. Honours each sheet's Page Setup.",
             has_doc,
             export_pdf
         ),
@@ -78,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print…",
             ["File"],
             Some("Cmd+P"),
-            "{path?, sheets?: active|all, range?, fitToPage?: bool} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog",
+            "{path?, sheets?: active|all, range?, fitToPage?: bool, pdfFonts?: [{base64, faceIndex?}]} → {pages, bytes, base64} — the PDF the UI hands to the system print dialog; Web callers supply licensed font bytes through `pdfFonts`, whose faceIndex is validated against the font file",
             has_doc,
             print
         ),
@@ -119,12 +120,28 @@ const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this P
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
-    render_pdf_with_image_budget(wb, layouts, file, path, gridcraft_pdf::MAX_DOC_IMAGE_BYTES)
+    render_pdf_with_catalog(wb, layouts, file, path, &FontCatalog::bundled())
+}
+
+fn render_pdf_with_catalog(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, catalog: &FontCatalog) -> Result<RenderedPdf> {
+    render_pdf_with_catalog_and_image_budget(wb, layouts, file, path, catalog, gridcraft_pdf::MAX_DOC_IMAGE_BYTES)
 }
 
 /// [`render_pdf`] keeping at most `image_bytes` of picture data in the document (tests lower it
 /// to exercise the cap without building gigabytes of pictures).
+#[cfg(test)]
 fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, image_bytes: u64) -> Result<RenderedPdf> {
+    render_pdf_with_catalog_and_image_budget(wb, layouts, file, path, &FontCatalog::bundled(), image_bytes)
+}
+
+fn render_pdf_with_catalog_and_image_budget(
+    wb: &Workbook,
+    layouts: &[SheetLayout],
+    file: &str,
+    path: &str,
+    catalog: &FontCatalog,
+    image_bytes: u64,
+) -> Result<RenderedPdf> {
     let mut doc = PdfDoc::new();
     doc.set_image_budget(image_bytes);
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
@@ -160,7 +177,7 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf, &mut pics);
+                    draw_block(pg, catalog, &b, lay.settings.gridlines, &mut cf, &mut pics).map_err(EngineError::Other)?;
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock {
                         page: page_index,
@@ -183,7 +200,7 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
                 y += seg_size(sh, *rs, true) * k;
             }
             if let Some(b) = &body {
-                draw_objects(pg, wb, lay.sheet, sh, b, &mut pics);
+                draw_objects(pg, catalog, wb, lay.sheet, sh, b, &mut pics).map_err(EngineError::Other)?;
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
@@ -200,7 +217,7 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
                 date: date.clone(),
                 time: time.clone(),
             };
-            draw_header_footer(pg, lay, lay.settings.hf_page(pi == 0, page_no), &cx);
+            draw_header_footer(pg, catalog, lay, lay.settings.hf_page(pi == 0, page_no), &cx).map_err(EngineError::Other)?;
         }
     }
     for link in pending_links {
@@ -219,12 +236,46 @@ fn render_pdf_with_image_budget(wb: &Workbook, layouts: &[SheetLayout], file: &s
 
 // ---------------------------------------------------------------- commands
 
+fn checked_pdf_font_total(total_bytes: usize, font_bytes: usize) -> std::result::Result<usize, &'static str> {
+    if font_bytes > 32 * 1024 * 1024 {
+        return Err("a supplied PDF font exceeds the 32 MiB decoded limit");
+    }
+    let total_bytes = total_bytes.checked_add(font_bytes).ok_or("supplied font data size overflow")?;
+    if total_bytes > 64 * 1024 * 1024 {
+        return Err("supplied PDF font data exceeds the 64 MiB total limit");
+    }
+    Ok(total_bytes)
+}
+
 fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
+    let mut catalog = FontCatalog::bundled();
+    if let Some(fonts) = p.get("pdfFonts").and_then(Json::as_array) {
+        if fonts.len() > 8 {
+            return Err(bad(cmd, "`pdfFonts` accepts at most 8 font faces"));
+        }
+        let mut total_bytes = 0usize;
+        for font in fonts {
+            let encoded = font.get("base64").and_then(Json::as_str).ok_or_else(|| bad(cmd, "each `pdfFonts` entry needs base64 font data"))?;
+            if encoded.len() > 48 * 1024 * 1024 {
+                return Err(bad(cmd, "a supplied PDF font exceeds the 48 MiB encoded limit"));
+            }
+            let bytes = crate::io::base64_decode(encoded).ok_or_else(|| bad(cmd, "`pdfFonts` contains invalid base64"))?;
+            total_bytes = checked_pdf_font_total(total_bytes, bytes.len()).map_err(|message| bad(cmd, message))?;
+            let index = match font.get("faceIndex") {
+                None => 0,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|index| u32::try_from(index).ok())
+                    .ok_or_else(|| bad(cmd, "`faceIndex` must be a non-negative 32-bit integer"))?,
+            };
+            catalog.add_font(bytes, index).map_err(|message| bad(cmd, message))?;
+        }
+    }
+    let pdf = render_pdf_with_catalog(&d.wb, &lays, &d.display_title(), &path, &catalog)?;
     if pdf.missing_arabic_font {
         s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
     }
