@@ -589,8 +589,8 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
     gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
         gridcraft_core::Value::Number(n) if n.is_finite() => {
             let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
-            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
-                Some(((date, time), d)) => iso(&d, date, time),
+            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)).and_then(|((date, time), d)| iso(&d, date, time)) {
+                Some(s) => s,
                 None => n.to_string(),
             }
         }
@@ -601,17 +601,23 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
 }
 
 /// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.
-fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
+/// Returns `None` when a calendar date is needed but is not a valid Gregorian date (such as
+/// Excel's fictitious 1900-02-29 at serial 60 or 1900-01-00 at serial 0), so the caller falls
+/// back to the raw serial number.
+fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> Option<String> {
+    if (date || !time) && !gridcraft_core::date::is_valid_gregorian_date(d.year, d.month, d.day) {
+        return None;
+    }
     let day = format!("{:04}-{:02}-{:02}", d.year, d.month, d.day);
     let mut clock = format!("{:02}:{:02}:{:02}", d.hour, d.minute, d.second);
     if d.milli != 0 {
         clock.push_str(&format!(".{:03}", d.milli));
     }
-    match (date, time) {
+    Some(match (date, time) {
         (true, true) => format!("{day}T{clock}"),
         (false, true) => clock,
         _ => day,
-    }
+    })
 }
 
 pub(crate) fn esc(s: &str) -> String {
