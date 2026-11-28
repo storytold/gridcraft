@@ -24,9 +24,15 @@ pub(super) struct Item {
 }
 
 impl Item {
-    /// The value shown: the custom name, else the item's value.
+    /// The value shown: the custom name, `"(blank)"` for empty items, else the item's value.
     pub(super) fn shown_value(&self) -> Value {
-        self.caption.as_deref().map(Value::text).unwrap_or_else(|| self.value.clone())
+        if let Some(c) = self.caption.as_deref() {
+            Value::text(c)
+        } else if matches!(self.value, Value::Empty) {
+            Value::text("(blank)")
+        } else {
+            self.value.clone()
+        }
     }
     pub(super) fn shown_label(&self) -> &str {
         self.caption.as_deref().unwrap_or(&self.label)
@@ -60,7 +66,7 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, date: b
         rank: None,
     };
     match v {
-        Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 5, 0.0, false)),
+        Value::Empty => ("b".into(), it(Value::Empty, "(blank)".into(), 5, 0.0, false)),
         Value::Number(n) => {
             if group != PivotDateGroup::None
                 && let Some(dt) = datetime_from_serial(wb.date_system, *n)

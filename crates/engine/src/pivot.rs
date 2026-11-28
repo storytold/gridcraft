@@ -13,7 +13,7 @@ pub use gridcraft_core::quote_sheet;
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, number_to_text, split_sheet};
 use gridcraft_model::{
     BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotItemRef, PivotLayout, PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    PivotIndexError, PivotItemRef, PivotLayout, PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -373,21 +373,20 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
 /// to learn the layout, and the result is accepted when every label and header cell of that
 /// layout equals the stored cell at the same place. A source changed since the last refresh gives
 /// a different layout, so there is no trustworthy index and the lookup fails until a refresh.
-pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, String> {
-    const STALE: &str = "The stored report no longer matches the source. Refresh the PivotTable.";
-    let report = pt.last_range.ok_or("The PivotTable has no report.")?;
-    let out = compute(wb, pt, sheet)?;
-    let sh = wb.sheet(sheet).ok_or("There's no such sheet.")?;
+pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, PivotIndexError> {
+    let report = pt.last_range.ok_or_else(|| PivotIndexError::Other("The PivotTable has no report.".into()))?;
+    let out = compute(wb, pt, sheet).map_err(PivotIndexError::Other)?;
+    let sh = wb.sheet(sheet).ok_or_else(|| PivotIndexError::Other("There's no such sheet.".into()))?;
     let rows = u64::from(report.end.row) - u64::from(report.start.row) + 1;
     let cols = u64::from(report.end.col) - u64::from(report.start.col) + 1;
     if rows != u64::from(out.height().max(1)) || cols != u64::from(out.width.max(1)) {
-        return Err(STALE.into());
+        return Err(PivotIndexError::Stale);
     }
     let labels = [CellKind::Header, CellKind::RowLabel, CellKind::ColLabel, CellKind::Filter];
     for (r, row) in out.grid.iter().enumerate() {
         for (c, oc) in row.iter().enumerate() {
             if labels.contains(&oc.kind) && sh.value(CellRef::new(report.start.row + r as u32, report.start.col + c as u32)) != oc.value {
-                return Err(STALE.into());
+                return Err(PivotIndexError::Stale);
             }
         }
     }

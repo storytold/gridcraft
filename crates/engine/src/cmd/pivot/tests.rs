@@ -1181,6 +1181,35 @@ fn getpivotdata_matches_numeric_items_by_value_before_label() {
     s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000)"#})).unwrap();
     assert_eq!(val(&s, "K1"), Value::Number(20.0));
     assert_eq!(val(&s, "K2"), Value::Number(10.0));
+    // Near-equal numeric item (`0.9999999999995`) preceding exact `1` (both formatted as `"1"`):
+    // querying `1` returns `1`'s total, while querying `1 + 6e-13` matches `1` via tolerance.
+    let mut s = two_column_pivot(["Key", "Sales"], json!([[0.999_999_999_999_5, 10], [1, 20]]), Some("0"));
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",1)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",0.9999999999995)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K3", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",1+6E-13)"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K2"), Value::Number(10.0));
+    assert_eq!(val(&s, "K3"), Value::Number(20.0));
+}
+
+#[test]
+fn getpivotdata_separates_literal_blank_text_and_empty_cells() {
+    let mut s = two_column_pivot(["Group", "Sales"], json!([["(blank)", 100], [null, 7]]), None);
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Group","")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Group",)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K3", "input": r#"=GETPIVOTDATA("Sales",A3,"Group","(blank)")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(7.0));
+    assert_eq!(val(&s, "K2"), Value::Number(7.0));
+    assert_eq!(val(&s, "K3"), Value::Number(100.0));
+
+    // Only literal `"(blank)"` text present: blank queries return `#REF!`, literal query returns 100.
+    let mut s = two_column_pivot(["Group", "Sales"], json!([["(blank)", 100]]), None);
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Group","")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Group",)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K3", "input": r#"=GETPIVOTDATA("Sales",A3,"Group","(blank)")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Error(CellError::Ref));
+    assert_eq!(val(&s, "K2"), Value::Error(CellError::Ref));
+    assert_eq!(val(&s, "K3"), Value::Number(100.0));
 }
 
 #[test]
@@ -2086,4 +2115,476 @@ fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
     s.execute("pivot.refresh", json!({})).unwrap();
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}
+
+#[test]
+fn getpivotdata_renamed_axis_field_works_with_source_and_caption_before_and_after_refresh() {
+    use std::io::Read;
+
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    edit_pt(&mut s, |p| p.rows[0].caption = Some("Area".into()));
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+
+    // Patch OOXML `<rowItems>`/`<colItems>` into pivotTable1.xml as Excel writes them,
+    // keeping `<pivotField name="Area">` on cache field `"Region"`.
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&raw)).unwrap();
+    let mut parts: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).unwrap();
+        parts.insert(f.name().unwrap().into_owned(), b);
+    }
+    let pt_xml = String::from_utf8(parts["xl/pivotTables/pivotTable1.xml"].clone()).unwrap();
+    assert!(pt_xml.contains(r#"name="Area""#), "pivotField caption written: {pt_xml}");
+    let injected = r#"<rowItems count="4"><i><x v="0"/></i><i><x v="1"/></i><i><x v="2"/></i><i t="grand"><x/></i></rowItems><colItems count="1"><i><x/></i></colItems>"#;
+    let patched_pt = pt_xml.replace("<dataFields", &format!("{injected}<dataFields"));
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), patched_pt.into_bytes());
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "x.xlsx", "base64": crate::io::base64_encode(buf.get_ref())})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    let eval_gp = |s: &mut Session, cell: &str, f: &str| {
+        s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+        val(s, cell)
+    };
+    // Freshly opened from XML (before refresh): BOTH source name ("Region") and caption ("Area") work.
+    assert!(pt(&reopened).data_index.cells().is_some(), "OOXML data_index populated on open");
+    assert_eq!(eval_gp(&mut reopened, "G1", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#), Value::Number(415.0));
+    assert_eq!(eval_gp(&mut reopened, "G2", r#"=GETPIVOTDATA("Sales",$A$3,"Area","East")"#), Value::Number(415.0));
+    // After pivot.refresh: BOTH continue to work identically.
+    reopened.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(eval_gp(&mut reopened, "G3", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#), Value::Number(415.0));
+    assert_eq!(eval_gp(&mut reopened, "G4", r#"=GETPIVOTDATA("Sales",$A$3,"Area","East")"#), Value::Number(415.0));
+}
+
+#[test]
+fn getpivotdata_renamed_item_and_numeric_date_parity_before_and_after_refresh() {
+    use std::io::Read;
+
+    type ZipParts = std::collections::HashMap<String, Vec<u8>>;
+    let repack = |raw: &[u8], patch: &dyn Fn(&mut ZipParts)| -> Vec<u8> {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(raw)).unwrap();
+        let mut parts: ZipParts = ZipParts::new();
+        for i in 0..z.len() {
+            let mut f = z.by_index(i).unwrap();
+            let mut b = Vec::new();
+            f.read_to_end(&mut b).unwrap();
+            parts.insert(f.name().unwrap().into_owned(), b);
+        }
+        patch(&mut parts);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zw = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            for (name, data) in &parts {
+                zw.start_file(name, opts).unwrap();
+                std::io::Write::write_all(&mut zw, data).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        buf.into_inner()
+    };
+    let eval_gp = |s: &mut Session, cell: &str, f: &str| {
+        s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+        val(s, cell)
+    };
+
+    // 1. Renamed item `<item n="Eastern" x="0"/>`: `"East"` must work identically before and after `pivot.refresh`.
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    edit_pt(&mut s, |p| p.rows[0].item_captions = vec![("East".into(), "Eastern".into())]);
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let patched = repack(&raw, &|parts| {
+        let pt_xml = String::from_utf8(parts["xl/pivotTables/pivotTable1.xml"].clone()).unwrap();
+        assert!(pt_xml.contains(r#"n="Eastern""#), "item caption written: {pt_xml}");
+        let injected = r#"<rowItems count="4"><i><x v="0"/></i><i><x v="1"/></i><i><x v="2"/></i><i t="grand"><x/></i></rowItems><colItems count="1"><i><x/></i></colItems>"#;
+        parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.replace("<dataFields", &format!("{injected}<dataFields")).into_bytes());
+    });
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "x.xlsx", "base64": crate::io::base64_encode(&patched)})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert!(pt(&reopened).data_index.cells().is_some(), "OOXML data_index populated on open");
+    assert_eq!(eval_gp(&mut reopened, "G1", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#), Value::Number(415.0));
+    assert_eq!(eval_gp(&mut reopened, "G2", r#"=GETPIVOTDATA("Sales",$A$3,"Region","Eastern")"#), Value::Error(CellError::Ref));
+    reopened.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(eval_gp(&mut reopened, "G3", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#), Value::Number(415.0));
+    assert_eq!(eval_gp(&mut reopened, "G4", r#"=GETPIVOTDATA("Sales",$A$3,"Region","Eastern")"#), Value::Error(CellError::Ref));
+
+    // 2. Formatted numeric and date items: numeric serial and raw numeric text match identically before and after refresh.
+    let s = two_column_pivot(["Day", "Sales"], json!([[45000, 10], [45001, 25]]), Some("m/d/yyyy"));
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let patched = repack(&raw, &|parts| {
+        let pt_xml = String::from_utf8(parts["xl/pivotTables/pivotTable1.xml"].clone()).unwrap();
+        let injected =
+            r#"<rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems><colItems count="1"><i><x/></i></colItems>"#;
+        parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.replace("<dataFields", &format!("{injected}<dataFields")).into_bytes());
+    });
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "d.xlsx", "base64": crate::io::base64_encode(&patched)})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert!(pt(&reopened).data_index.cells().is_some());
+    assert_eq!(eval_gp(&mut reopened, "G1", r#"=GETPIVOTDATA("Sales",$A$3,"Day",45000)"#), Value::Number(10.0));
+    assert_eq!(eval_gp(&mut reopened, "G2", r#"=GETPIVOTDATA("Sales",$A$3,"Day","45000")"#), Value::Number(10.0));
+    reopened.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(eval_gp(&mut reopened, "G3", r#"=GETPIVOTDATA("Sales",$A$3,"Day",45000)"#), Value::Number(10.0));
+    assert_eq!(eval_gp(&mut reopened, "G4", r#"=GETPIVOTDATA("Sales",$A$3,"Day","45000")"#), Value::Number(10.0));
+}
+
+#[test]
+fn getpivotdata_range_pr_group_without_grand_total_returns_ref() {
+    use std::io::Read;
+
+    let mut s = two_column_pivot(["Amount", "Sales"], json!([[5, 100], [15, 250]]), None);
+    edit_pt(&mut s, |p| {
+        p.grand_totals_rows = false;
+        p.grand_totals_cols = false;
+    });
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&raw)).unwrap();
+    let mut parts: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).unwrap();
+        parts.insert(f.name().unwrap().into_owned(), b);
+    }
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B3" sheet="Sheet1"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Amount" numFmtId="0">
+      <sharedItems containsNumber="1" count="2"><n v="5"/><n v="15"/></sharedItems>
+      <fieldGroup base="0">
+        <rangePr startNum="0" endNum="20" groupInterval="10"/>
+        <groupItems count="2"><s v="0-10"/><s v="10-20"/></groupItems>
+      </fieldGroup>
+    </cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    let pt_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" colGrandTotals="0" rowGrandTotals="0" dataCaption="Values">
+  <location ref="A3:B5" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="2"><i><x v="0"/></i><i><x v="1"/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.as_bytes().to_vec());
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "r.xlsx", "base64": crate::io::base64_encode(buf.get_ref())})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert!(pt(&reopened).data_index.cells().is_some());
+    reopened.execute("cell.set", json!({"cell": "G1", "input": r#"=GETPIVOTDATA("Sum of Sales",$A$3)"#})).unwrap();
+    reopened.execute("cell.set", json!({"cell": "G2", "input": r#"=GETPIVOTDATA("Sum of Sales",$A$3,"Amount","0-10")"#})).unwrap();
+    assert_eq!(val(&reopened, "G1"), Value::Error(CellError::Ref), "grand totals off must return #REF!, not first bucket");
+    assert_eq!(val(&reopened, "G2"), Value::Number(100.0));
+}
+
+#[test]
+fn getpivotdata_displayed_date_and_number_labels_before_and_after_refresh() {
+    use std::io::Read;
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "values": [
+                ["Day", "Amount", "Rate", "Sales"],
+                [45000, 1000, 0.05, 120],
+                [45001, 2500, 0.12, 340]
+            ]
+        }),
+    )
+    .unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2:A3", "code": "m/d/yyyy"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2:B3", "code": "#,##0"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "C2:C3", "code": "0%"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Day", "Amount", "Rate"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.layout", json!({"layout": "tabular"})).unwrap();
+    s.execute("pivot.subtotals", json!({"mode": "none"})).unwrap();
+
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&raw)).unwrap();
+    let mut parts: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).unwrap();
+        parts.insert(f.name().unwrap().into_owned(), b);
+    }
+
+    // Patch Excel-authored `pivotCacheDefinition1.xml` (with `numFmtId="14"` / `"3"` / `"9"`
+    // and `<d v="2023-03-15T00:00:00"/>` / `<n v="1000"/>` / `<n v="0.05"/>`) and `<rowItems>`/`<colItems>`.
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:D3" sheet="Sheet1"/></cacheSource>
+  <cacheFields count="4">
+    <cacheField name="Day" numFmtId="14"><sharedItems containsDate="1" count="2"><d v="2023-03-15T00:00:00"/><d v="2023-03-16T00:00:00"/></sharedItems></cacheField>
+    <cacheField name="Amount" numFmtId="3"><sharedItems containsNumber="1" count="2"><n v="1000"/><n v="2500"/></sharedItems></cacheField>
+    <cacheField name="Rate" numFmtId="9"><sharedItems containsNumber="1" count="2"><n v="0.05"/><n v="0.12"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+
+    let pt_xml = String::from_utf8(parts["xl/pivotTables/pivotTable1.xml"].clone()).unwrap();
+    let injected = r#"<rowItems count="3"><i><x v="0"/><x v="0"/><x v="0"/></i><i><x v="1"/><x v="1"/><x v="1"/></i><i t="grand"><x/></i></rowItems><colItems count="1"><i><x/></i></colItems>"#;
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.replace("<dataFields", &format!("{injected}<dataFields")).into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "fmt.xlsx", "base64": crate::io::base64_encode(buf.get_ref())})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert!(pt(&reopened).data_index.cells().is_some(), "OOXML data_index populated on open");
+
+    let check_all = |s: &mut Session, col: &str| {
+        let formulas = [
+            r#"=GETPIVOTDATA("Sales",$A$3,"Day","3/15/2023","Amount","1,000","Rate","5%")"#,
+            r#"=GETPIVOTDATA("Sales",$A$3,"Day",DATE(2023,3,15),"Amount",1000,"Rate",0.05)"#,
+            r#"=GETPIVOTDATA("Sales",$A$3,"Day","3/15/2023","Amount",1000,"Rate","5%")"#,
+            r#"=GETPIVOTDATA("Sales",$A$3,"Day",45000,"Amount","1,000","Rate",0.05)"#,
+        ];
+        for (i, f) in formulas.iter().enumerate() {
+            let cell = format!("{col}{}", i + 1);
+            s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+            assert_eq!(val(s, &cell), Value::Number(120.0), "{f}");
+        }
+        let cell2 = format!("{col}5");
+        s.execute("cell.set", json!({"cell": cell2, "input": r#"=GETPIVOTDATA("Sales",$A$3,"Day","3/16/2023","Amount","2,500","Rate","12%")"#}))
+            .unwrap();
+        assert_eq!(val(s, &cell2), Value::Number(340.0));
+    };
+
+    // Before pivot.refresh (OOXML index): displayed labels AND numeric/DATE serials all hit.
+    check_all(&mut reopened, "G");
+    // After pivot.refresh (engine index): identical hits.
+    reopened.execute("pivot.refresh", json!({})).unwrap();
+    check_all(&mut reopened, "H");
+}
+
+#[test]
+fn getpivotdata_hostile_overlong_numfmt_falls_back_to_general_without_hanging() {
+    use std::io::Read;
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "values": [
+                ["Amount", "Sales"],
+                [1000, 120],
+                [1001, 340]
+            ]
+        }),
+    )
+    .unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Amount"], "values": ["Sales"]})).unwrap();
+
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&raw)).unwrap();
+    let mut parts: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).unwrap();
+        parts.insert(f.name().unwrap().into_owned(), b);
+    }
+
+    // Custom `<numFmt formatCode>` >100 KiB (well beyond `4 * MAX_FORMAT_CODE_CHARS`):
+    // `read_plain` uses `display::parsed(code)` so every item falls back to General in O(1).
+    let huge_code = "#,##0;".repeat(20_000);
+    assert!(huge_code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS);
+    let styles_xml = String::from_utf8(parts["xl/styles.xml"].clone()).unwrap();
+    let numfmt_el = format!(r#"<numFmt numFmtId="164" formatCode="{huge_code}"/>"#);
+    let patched_styles = if styles_xml.contains("<numFmts") {
+        styles_xml.replacen("</numFmts>", &format!("{numfmt_el}</numFmts>"), 1)
+    } else {
+        styles_xml.replacen("<fonts", &format!(r#"<numFmts count="1">{numfmt_el}</numFmts><fonts"#), 1)
+    };
+    parts.insert("xl/styles.xml".into(), patched_styles.into_bytes());
+
+    let n_items = 500usize;
+    let shared_nums: String = (0..n_items).map(|i| format!(r#"<n v="{}"/>"#, 1000 + i)).collect();
+    let cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="{n_items}">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B3" sheet="Sheet1"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Amount" numFmtId="164"><sharedItems containsNumber="1" count="{n_items}">{shared_nums}</sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let pf_items: String = (0..n_items).map(|i| format!(r#"<item x="{i}"/>"#)).collect();
+    let row_items: String = (0..n_items).map(|i| format!(r#"<i><x v="{i}"/></i>"#)).collect();
+    let pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" colGrandTotals="0" rowGrandTotals="0" dataCaption="Values">
+  <location ref="A3:B{}" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" numFmtId="164" showAll="0"><items count="{n_items}">{pf_items}</items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="{n_items}">{row_items}</rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#,
+        3 + n_items
+    );
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.into_bytes());
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "huge-numfmt.xlsx", "base64": crate::io::base64_encode(buf.get_ref())})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    let index = &pt(&reopened).data_index;
+    assert!(index.cells().is_some(), "OOXML data_index populated");
+    let first = index.find("Sales", &[("Amount", "1000", false)]).expect("General-formatted label 1000 indexed");
+    assert_eq!(first.items[0].value, Value::Number(1000.0));
+    let last = index.find("Sales", &[("Amount", "1499", false)]).expect("General-formatted label 1499 indexed");
+    assert_eq!(last.items[0].value, Value::Number(1499.0));
+    assert!(index.find("Sales", &[("Amount", "1,000", false)]).is_none(), "overlong formatCode fell back to General, not #,##0");
+}
+
+#[test]
+fn getpivotdata_ooxml_missing_and_literal_blank_before_and_after_refresh() {
+    use std::io::Read;
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "values": [
+                ["Group", "Sales"],
+                ["(blank)", 100],
+                [null, 7],
+                ["Alpha", 42]
+            ]
+        }),
+    )
+    .unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Group"], "values": ["Sales"]})).unwrap();
+
+    let raw = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&raw)).unwrap();
+    let mut parts: std::collections::HashMap<String, Vec<u8>> = std::collections::HashMap::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut b = Vec::new();
+        f.read_to_end(&mut b).unwrap();
+        parts.insert(f.name().unwrap().into_owned(), b);
+    }
+
+    // Patch Excel-authored `pivotCacheDefinition1.xml` with literal `<s v="(blank)"/>`, `<m/>`
+    // (missing/empty), and `<s v="Alpha"/>`, plus matching `<rowItems>`/`<colItems>` so the
+    // literal `"(blank)"` item precedes the genuinely empty `<m/>` item in the stored layout.
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="3">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Sheet1"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Group" numFmtId="0"><sharedItems containsBlank="1" count="3"><s v="(blank)"/><s v="Alpha"/><m/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+
+    let pt_xml = String::from_utf8(parts["xl/pivotTables/pivotTable1.xml"].clone()).unwrap();
+    let injected = r#"<rowItems count="4"><i><x v="0"/></i><i><x v="1"/></i><i><x v="2"/></i><i t="grand"><x/></i></rowItems><colItems count="1"><i><x/></i></colItems>"#;
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.replace("<dataFields", &format!("{injected}<dataFields")).into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let mut reopened = Session::new();
+    reopened.execute("file.open", json!({"name": "blank-items.xlsx", "base64": crate::io::base64_encode(buf.get_ref())})).unwrap();
+    reopened.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert!(pt(&reopened).data_index.cells().is_some(), "OOXML data_index populated on open");
+
+    let check_all = |s: &mut Session, col: &str| {
+        let cases = [
+            (r#"=GETPIVOTDATA("Sales",$A$3,"Group","")"#, 7.0),
+            (r#"=GETPIVOTDATA("Sales",$A$3,"Group",)"#, 7.0),
+            (r#"=GETPIVOTDATA("Sales",$A$3,"Group",Z1)"#, 7.0),
+            (r#"=GETPIVOTDATA("Sales",$A$3,"Group","(blank)")"#, 100.0),
+            (r#"=GETPIVOTDATA("Sales",$A$3,"Group","Alpha")"#, 42.0),
+        ];
+        for (i, (f, expected)) in cases.iter().enumerate() {
+            let cell = format!("{col}{}", i + 1);
+            s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+            assert_eq!(val(s, &cell), Value::Number(*expected), "{f}");
+        }
+    };
+
+    // Before pivot.refresh (OOXML index): `<m/>` blank queries hit 7, literal `"(blank)"` hits 100.
+    check_all(&mut reopened, "G");
+    // After pivot.refresh (engine index): identical separation.
+    reopened.execute("pivot.refresh", json!({})).unwrap();
+    check_all(&mut reopened, "H");
 }

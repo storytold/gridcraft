@@ -237,9 +237,18 @@ pub struct PivotDataCell {
     pub col: u32,
 }
 
+/// Failure building a PivotTable's GETPIVOTDATA index from its source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PivotIndexError {
+    /// The stored report no longer matches the source; lookup must return `#REF!` until refresh.
+    Stale,
+    /// The source could not be resolved or computed (e.g. external workbook or missing report).
+    Other(String),
+}
+
 /// Builds a PivotTable's value cells from its source (`sheet` is the pivot's sheet). The engine
 /// sets it; the model can't compute reports.
-pub type PivotIndexer = fn(&crate::Workbook, usize, &PivotTable) -> Result<Vec<PivotDataCell>, String>;
+pub type PivotIndexer = fn(&crate::Workbook, usize, &PivotTable) -> Result<Vec<PivotDataCell>, PivotIndexError>;
 pub static PIVOT_INDEXER: std::sync::OnceLock<PivotIndexer> = std::sync::OnceLock::new();
 
 fn norm(s: &str) -> String {

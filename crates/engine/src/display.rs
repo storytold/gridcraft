@@ -7,15 +7,21 @@ use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
 use gridcraft_numfmt::{Formatted, NumberFormat, format_value, format_value_full};
 
+/// Process-wide cache of parsed number formats, keyed by format code.
+static PARSED_CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
 /// Parsed number formats are cached by code.
 pub(crate) fn parsed(code: &str) -> NumberFormat {
-    static CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    parsed_in(&PARSED_CACHE, code)
+}
+
+fn parsed_in(cache: &Mutex<HashMap<String, NumberFormat>>, code: &str) -> NumberFormat {
     // A code of more bytes than 4 × the character limit can't be within it: it shows as General
     // without being hashed or scanned again for every cell that shares it.
     if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
         return NumberFormat::parse("General");
     }
-    let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let lock = || cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(f) = lock().get(code) {
         return f.clone();
     }
@@ -284,5 +290,31 @@ mod tests {
         assert!(f.is_general());
         assert_eq!(f.code(), code);
         assert_ne!(f, number_format("General"));
+    }
+
+    /// `parsed` returns a plain `General` early for codes over `4 * MAX_FORMAT_CODE_CHARS`
+    /// without copying the overlong code (unlike `number_format`) or inserting into the cache.
+    #[test]
+    fn parsed_overlong_code_returns_general_without_caching() {
+        let overlong = format!("#,##0;{}", "\"x\"".repeat(4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS));
+        assert!(overlong.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS);
+
+        let local_cache: Mutex<HashMap<String, NumberFormat>> = Mutex::new(HashMap::new());
+        let f = parsed_in(&local_cache, &overlong);
+        assert!(f.is_general());
+        assert_eq!(f.code(), "General");
+        assert_eq!(f, NumberFormat::parse("General"));
+        assert_eq!(local_cache.lock().unwrap().len(), 0, "overlong code must not be cached");
+
+        // Positive control: a normal code is cached and increases cache length.
+        let normal = parsed_in(&local_cache, "0.00");
+        assert_eq!(normal.code(), "0.00");
+        assert_eq!(local_cache.lock().unwrap().len(), 1);
+
+        // Overlong call against the process-wide `parsed()` cache also returns `General` without inserting.
+        let global = parsed(&overlong);
+        assert!(global.is_general());
+        assert_eq!(global.code(), "General");
+        assert!(!PARSED_CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&overlong));
     }
 }

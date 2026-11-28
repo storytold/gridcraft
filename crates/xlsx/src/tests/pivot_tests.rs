@@ -1031,3 +1031,1322 @@ fn count_without_the_gridcraft_extension_reads_as_count() {
     assert_eq!(func(&marked("")), PivotFunc::Sum);
     assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }
+
+#[test]
+fn ooxml_row_col_items_build_getpivotdata_index_and_page_field_uses_pivot_item_order() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let raw = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&raw);
+
+    // Patch pivotCacheDefinition1.xml to give field 0 (Region) sharedItems [East, West, North],
+    // field 1 (Product) sharedItems [Apples, Pears], and field 2 (Type) sharedItems [Alpha, Beta].
+    // Reorder field 2's `<pivotField><items>` so `item="1"` points to `x="0"` ("Alpha"), not
+    // cache index 1 ("Beta"), and add `<rowItems>` + `<colItems>` matching a 2-row + grand report.
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:D4" sheet="Data"/></cacheSource>
+  <cacheFields count="4">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Product" numFmtId="0"><sharedItems count="2"><s v="Apples"/><s v="Pears"/></sharedItems></cacheField>
+    <cacheField name="Type" numFmtId="0"><sharedItems count="2"><s v="Alpha"/><s v="Beta"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+
+    let pt_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A3:D7" firstHeaderRow="1" firstDataRow="2" firstDataCol="1" rowPageCount="1" colPageCount="1"/>
+  <pivotFields count="4">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="1"/><item x="0"/><item t="default"/></items></pivotField>
+    <pivotField axis="axisCol" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField axis="axisPage" showAll="0"><items count="3"><item x="1"/><item x="0"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3">
+    <i><x v="0"/></i>
+    <i><x v="1"/></i>
+    <i t="grand"><x/></i>
+  </rowItems>
+  <colFields count="1"><field x="1"/></colFields>
+  <colItems count="3">
+    <i><x v="0"/></i>
+    <i><x v="1"/></i>
+    <i t="grand"><x/></i>
+  </colItems>
+  <pageFields count="1"><pageField fld="2" item="1" hier="-1"/></pageFields>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="3"/></dataFields>
+</pivotTableDefinition>"#;
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.as_bytes().to_vec());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+    let (back, _) = read_xlsx(buf.get_ref()).unwrap();
+    let pt = &back.sheet(1).unwrap().pivots[0];
+
+    // `pageField item="1"` must resolve via `<pivotField><items>`[1] (`x="0"`) -> "Alpha", not "Beta".
+    let page = pt.filters.iter().find(|f| f.source_col == "Type").expect("page filter read");
+    assert_eq!(page.selected.as_deref(), Some(&["Alpha".to_string()][..]));
+
+    // `<rowItems>`/`<colItems>` must populate `data_index` directly on read, with `above = 2`
+    // (`rowPageCount=1` + spacer) + `firstDataRow=2` => data starts at relative row 4, col 1.
+    assert!(pt.data_index.cells().is_some());
+    let west_apples = pt.data_index.find("Sales", &[("Region", "West", false), ("Product", "Apples", false)]).unwrap();
+    assert_eq!((west_apples.row, west_apples.col), (4, 1));
+    let east_pears = pt.data_index.find("Sum of Sales", &[("Region", "East", false), ("Product", "Pears", false)]).unwrap();
+    assert_eq!((east_pears.row, east_pears.col), (5, 2));
+    let grand = pt.data_index.find("Sales", &[]).unwrap();
+    assert_eq!((grand.row, grand.col), (6, 3));
+}
+
+fn repack_pivot1(wb: &Workbook, cache_xml: &str, pt_xml: &str) -> Workbook {
+    let raw = write_xlsx(wb).unwrap();
+    let mut parts = unzip(&raw);
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.as_bytes().to_vec());
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+    read_xlsx(buf.get_ref()).unwrap().0
+}
+
+#[test]
+fn ooxml_bottom_subtotals_and_subtotals_off_skip_blank_item_headers() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:C4" sheet="Data"/></cacheSource>
+  <cacheFields count="3">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Product" numFmtId="0"><sharedItems count="2"><s v="Apples"/><s v="Pears"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+
+    // 1. Outline/compact layout with bottom subtotals (`subtotalTop="0"`):
+    // row 0: blank East header, row 1: East/Apples, row 2: East/Pears, row 3: East Total, row 4: Grand Total.
+    // `firstDataRow="1"`, `rowPageCount="0"` => relative rows are 1, 2, 3, 4, 5.
+    let bottom_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="3">
+    <pivotField axis="axisRow" subtotalTop="0" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="2"><field x="0"/><field x="1"/></rowFields>
+  <rowItems count="5">
+    <i><x v="0"/></i>
+    <i r="1"><x v="0"/></i>
+    <i r="1"><x v="1"/></i>
+    <i t="default"><x v="0"/></i>
+    <i t="grand"><x/></i>
+  </rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="2"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, bottom_pt);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    // East subtotal MUST point to rel row 4 (the `<i t="default">` row), NOT rel row 1 (blank header)!
+    let east_sub = pt.data_index.find("Sales", &[("Region", "East", false)]).expect("East subtotal indexed");
+    assert_eq!((east_sub.row, east_sub.col), (4, 1));
+    let east_apples = pt.data_index.find("Sales", &[("Region", "East", false), ("Product", "Apples", false)]).unwrap();
+    assert_eq!((east_apples.row, east_apples.col), (2, 1));
+    let grand = pt.data_index.find("Sales", &[]).unwrap();
+    assert_eq!((grand.row, grand.col), (5, 1));
+
+    // 2. Outline/compact layout with subtotals OFF (`defaultSubtotal="0"`):
+    // row 0: blank East header, row 1: East/Apples, row 2: East/Pears, row 3: Grand Total.
+    let no_sub_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B5" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="3">
+    <pivotField axis="axisRow" defaultSubtotal="0" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="2"><field x="0"/><field x="1"/></rowFields>
+  <rowItems count="4">
+    <i><x v="0"/></i>
+    <i r="1"><x v="0"/></i>
+    <i r="1"><x v="1"/></i>
+    <i t="grand"><x/></i>
+  </rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="2"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, no_sub_pt);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    // Subtotals are OFF, so Region=East MUST NOT resolve to the blank header row (returns #REF!).
+    assert!(pt.data_index.find("Sales", &[("Region", "East", false)]).is_none());
+    let east_pears = pt.data_index.find("Sales", &[("Region", "East", false), ("Product", "Pears", false)]).unwrap();
+    assert_eq!((east_pears.row, east_pears.col), (3, 1));
+
+    // 3. Top subtotals ON (default `subtotalTop="1"`, `defaultSubtotal="1"`):
+    // row 0 holds the top subtotal for East, so Region=East MUST resolve to rel row 1.
+    let top_sub_pt = bottom_pt.replace(r#"subtotalTop="0""#, "");
+    let back = repack_pivot1(&wb, cache_xml, &top_sub_pt.replace("<i t=\"default\"><x v=\"0\"/></i>", ""));
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    let east_top = pt.data_index.find("Sales", &[("Region", "East", false)]).expect("top subtotal indexed");
+    assert_eq!((east_top.row, east_top.col), (1, 1));
+}
+
+#[test]
+fn ooxml_values_on_rows_skips_blank_item_header_row() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:C4" sheet="Data"/></cacheSource>
+  <cacheFields count="3">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+    <cacheField name="Units" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    // Σ Values (`-2`) on rows with 2 data fields (`Sum of Sales`, `Sum of Units`):
+    // row 0 (rel 1): blank East header `<i><x v="0"/></i>` (no @i)
+    // row 1 (rel 2): East / Sum of Sales `<i r="1"><x/></i>`
+    // row 2 (rel 3): East / Sum of Units `<i r="1" i="1"><x v="1"/></i>`
+    // row 3 (rel 4): Grand Total Sum of Sales
+    // row 4 (rel 5): Grand Total Sum of Units
+    let pt_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataOnRows="1" dataCaption="Values">
+  <location ref="A1:B6" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="3">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="2"><field x="0"/><field x="-2"/></rowFields>
+  <rowItems count="5">
+    <i><x v="0"/></i>
+    <i r="1"><x/></i>
+    <i r="1" i="1"><x v="1"/></i>
+    <i t="grand"><x/></i>
+    <i t="grand" i="1"><x/></i>
+  </rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="2">
+    <dataField name="Sum of Sales" fld="1"/>
+    <dataField name="Sum of Units" fld="2"/>
+  </dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, pt_xml);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    let east_sales = pt.data_index.find("Sum of Sales", &[("Region", "East", false)]).expect("Sales row indexed");
+    assert_eq!((east_sales.row, east_sales.col), (2, 1), "must hit Sales row (2), not blank header (1)");
+    let east_units = pt.data_index.find("Sum of Units", &[("Region", "East", false)]).expect("Units row indexed");
+    assert_eq!((east_units.row, east_units.col), (3, 1));
+    assert_eq!(pt.data_index.find("Sum of Sales", &[]).unwrap().row, 4);
+    assert_eq!(pt.data_index.find("Sum of Units", &[]).unwrap().row, 5);
+}
+
+#[test]
+fn ooxml_renamed_axis_field_uses_source_col_and_malformed_items_bail_out() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Data"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+
+    // M1: `<pivotField name="Area">` on cache field `"Region"` must store `"Region"` in `PivotItemRef.field`.
+    let renamed_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField name="Area" axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, renamed_pt);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    assert_eq!(pt.rows[0].source_col, "Region");
+    assert_eq!(pt.rows[0].caption.as_deref(), Some("Area"));
+    let east = pt.data_index.find("Sales", &[("Region", "East", false)]).expect("source name resolves");
+    assert_eq!((east.row, east.col), (1, 1));
+
+    // M2: axis `<pivotField>` without `<items>` must return `None` from `build_ooxml_data_index`
+    // instead of pushing truncated keys that claim the Grand Total!
+    let missing_items_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"/>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, missing_items_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "missing <items> must bail out cleanly");
+
+    // L6: invalid/negative `@r` or `@v` must bail out cleanly rather than defaulting to 0.
+    let bad_attr_pt = renamed_pt.replace("<i><x v=\"0\"/></i>", "<i r=\"-1\"><x v=\"0\"/></i>");
+    let back = repack_pivot1(&wb, cache_xml, &bad_attr_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "negative @r must bail out");
+
+    // L1: a skipped `<dataField>` (OOB `fld="99"`) must NOT fall back to `pt_values[0]`.
+    let skipped_df_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:C4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colFields count="1"><field x="-2"/></colFields>
+  <colItems count="2"><i><x v="0"/></i><i i="1"><x v="1"/></i></colItems>
+  <dataFields count="2">
+    <dataField name="Broken" fld="99"/>
+    <dataField name="Sum of Sales" fld="1"/>
+  </dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, skipped_df_pt);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    let east = pt.data_index.find("Sum of Sales", &[("Region", "East", false)]).expect("valid dataField indexed");
+    assert_eq!((east.row, east.col), (1, 2), "skipped dataField 0 must not claim col 1");
+}
+
+#[test]
+fn ooxml_hostile_axis_bounds_and_iteration_cap_bail_out() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Data"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+
+    // 1. Multiple `-2` (Values) fields on one axis (both 2 and 200 entries) must bail out cleanly.
+    for dup_values in [2usize, 200] {
+        let fields: String = (0..dup_values).map(|_| r#"<field x="-2"/>"#).collect();
+        let xs: String = (0..dup_values).map(|_| r#"<x v="0"/>"#).collect();
+        let pt_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="{dup_values}">{fields}</rowFields>
+  <rowItems count="1"><i>{xs}</i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#
+        );
+        let back = repack_pivot1(&wb, cache_xml, &pt_xml);
+        assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "{dup_values} Values (-2) fields on one axis must bail out");
+    }
+
+    // 2. Axis deeper than MAX_AXIS_FIELDS (33 single-axis, or 17 row + 16 col = 33 combined) must bail out cleanly.
+    let deep_cache_fields: String =
+        (0..34).map(|i| format!(r#"<cacheField name="F{i}" numFmtId="0"><sharedItems count="1"><s v="A"/></sharedItems></cacheField>"#)).collect();
+    let deep_cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:AH2" sheet="Data"/></cacheSource>
+  <cacheFields count="34">{deep_cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let deep_pfs: String = (0..33)
+        .map(|_| r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#)
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .collect();
+    let deep_row_fields: String = (0..33).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let deep_xs: String = (0..33).map(|_| r#"<x v="0"/>"#).collect();
+    let deep_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="34">{deep_pfs}</pivotFields>
+  <rowFields count="33">{deep_row_fields}</rowFields>
+  <rowItems count="1"><i>{deep_xs}</i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of F33" fld="33"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let back = repack_pivot1(&wb, &deep_cache_xml, &deep_pt_xml);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "33-deep single axis must bail out");
+
+    let split_pfs: String = (0..17)
+        .map(|_| r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#)
+        .chain((0..16).map(|_| r#"<pivotField axis="axisCol" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#))
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .collect();
+    let split_rows: String = (0..17).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let split_cols: String = (17..33).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let split_rxs: String = (0..17).map(|_| r#"<x v="0"/>"#).collect();
+    let split_cxs: String = (0..16).map(|_| r#"<x v="0"/>"#).collect();
+    let split_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="34">{split_pfs}</pivotFields>
+  <rowFields count="17">{split_rows}</rowFields>
+  <rowItems count="1"><i>{split_rxs}</i></rowItems>
+  <colFields count="16">{split_cols}</colFields>
+  <colItems count="1"><i>{split_cxs}</i></colItems>
+  <dataFields count="1"><dataField name="Sum of F33" fld="33"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let back = repack_pivot1(&wb, &deep_cache_xml, &split_pt_xml);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "17 row + 16 col = 33 combined axis fields must bail out");
+    // 3. Large duplicate + skipped row * col product (> 1_000_000 iterations) must bail out cleanly.
+    let dup_rows: String = (0..1005).map(|_| r#"<i t="grand"><x/></i>"#).collect();
+    let dup_and_blank_cols: String = (0..1005).map(|i| if i % 2 == 0 { r#"<i t="grand"><x/></i>"# } else { r#"<i t="blank"/>"# }).collect();
+    let huge_product_pt = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:AMQ1050" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="1005">{dup_rows}</rowItems>
+  <colItems count="1005">{dup_and_blank_cols}</colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let back = repack_pivot1(&wb, cache_xml, &huge_product_pt);
+    assert!(
+        back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(),
+        "row * col iteration cap must bail out even with duplicate keys and blank cols"
+    );
+}
+
+#[test]
+fn ooxml_missing_axis_items_with_non_empty_axis_fields_bails_out() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Data"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+
+    // Non-empty `<rowFields>` with absent `<rowItems>` must return `None` instead of synthesizing an empty row entry.
+    let missing_row_items = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, missing_row_items);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "missing <rowItems> with <rowFields> must bail out");
+
+    // Symmetric check: non-empty `<colFields>` with absent `<colItems>` must also return `None`.
+    let missing_col_items = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:C3" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisCol" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowItems count="1"><i><x/></i></rowItems>
+  <colFields count="1"><field x="0"/></colFields>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, missing_col_items);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "missing <colItems> with <colFields> must bail out");
+}
+
+#[test]
+fn ooxml_range_pr_group_is_not_stripped_as_manual_parent() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Data"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Amount" numFmtId="0">
+      <sharedItems containsNumber="1" count="2"><n v="5"/><n v="15"/></sharedItems>
+      <fieldGroup base="0">
+        <rangePr startNum="0" endNum="20" groupInterval="10"/>
+        <groupItems count="2"><s v="0-10"/><s v="10-20"/></groupItems>
+      </fieldGroup>
+    </cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    let pt_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" colGrandTotals="0" rowGrandTotals="0" dataCaption="Values">
+  <location ref="A1:B3" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="2"><item x="0"/><item x="1"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="2"><i><x v="0"/></i><i><x v="1"/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, pt_xml);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    assert!(pt.data_index.find("Sum of Sales", &[]).is_none(), "rangePr field must not be stripped into a fake Grand Total");
+    let bucket0 = pt.data_index.find("Sum of Sales", &[("Amount", "0-10", false)]).expect("first bucket indexed");
+    assert_eq!((bucket0.row, bucket0.col), (1, 1));
+}
+
+#[test]
+fn ooxml_hostile_long_strings_byte_budget_bails_out() {
+    // 32 axis fields (16 row + 16 col) with 64 KiB field names and 64 KiB `<s v>` item strings
+    // across 1,000 × 1,000 axis items: without `MAX_TABLE_WORK_BYTES` (128 MiB),
+    // `MAX_RETAINED_INDEX_BYTES` (64 MiB), and `MAX_WORKBOOK_WORK_BYTES` (2 GiB), this would try
+    // to allocate terabytes; with the work/retained budgets it bails out cleanly and rapidly.
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let long_name = "F".repeat(64 * 1024);
+    let long_val = "V".repeat(64 * 1024);
+    let cache_fields: String = (0..32)
+        .map(|i| {
+            format!(r#"<cacheField name="{i}_{long_name}" numFmtId="0"><sharedItems count="1"><s v="{i}_{long_val}"/></sharedItems></cacheField>"#)
+        })
+        .chain(std::iter::once(r#"<cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+        .collect();
+    let cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:AG2" sheet="Data"/></cacheSource>
+  <cacheFields count="33">{cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let pfs: String = (0..16)
+        .map(|_| r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#)
+        .chain((0..16).map(|_| r#"<pivotField axis="axisCol" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#))
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .collect();
+    let row_fields: String = (0..16).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let col_fields: String = (16..32).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let xs16: String = (0..16).map(|_| r#"<x v="0"/>"#).collect();
+    let one_i = format!("<i>{xs16}</i>");
+    let row_items = one_i.repeat(1000);
+    let col_items = one_i.repeat(1000);
+    let pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:AMQ1050" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{pfs}</pivotFields>
+  <rowFields count="16">{row_fields}</rowFields>
+  <rowItems count="1000">{row_items}</rowItems>
+  <colFields count="16">{col_fields}</colFields>
+  <colItems count="1000">{col_items}</colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="32"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let back = repack_pivot1(&wb, &cache_xml, &pt_xml);
+    assert!(
+        back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(),
+        "hostile 64 KiB names/items across 1000x1000 grid must bail out under MAX_TABLE_WORK_BYTES"
+    );
+}
+
+#[test]
+fn ooxml_numfmt_formats_date_and_number_item_labels_and_keeps_raw_serial() {
+    let fmt_opts = crate::ReadOptions {
+        format_value: Some(|v, code, sys| gridcraft_numfmt::format_value(v, &gridcraft_numfmt::NumberFormat::parse(code), sys).text),
+        ..Default::default()
+    };
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let raw = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&raw);
+
+    // Add custom numFmtId="164" (`yyyy-mm-dd`) in styles.xml to test custom `<numFmts>` override on `<pivotField>`.
+    let styles_xml = String::from_utf8(parts["xl/styles.xml"].clone()).unwrap();
+    let patched_styles = if styles_xml.contains("<numFmts") {
+        styles_xml.replacen("</numFmts>", r#"<numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts>"#, 1)
+    } else {
+        styles_xml.replacen("<fonts", r#"<numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy-mm-dd"/></numFmts><fonts"#, 1)
+    };
+    parts.insert("xl/styles.xml".into(), patched_styles.into_bytes());
+
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:E2" sheet="Data"/></cacheSource>
+  <cacheFields count="5">
+    <cacheField name="Day" numFmtId="14"><sharedItems containsDate="1" count="1"><d v="2023-03-15T00:00:00"/></sharedItems></cacheField>
+    <cacheField name="Amount" numFmtId="3"><sharedItems containsNumber="1" count="1"><n v="1000"/></sharedItems></cacheField>
+    <cacheField name="Rate" numFmtId="9"><sharedItems containsNumber="1" count="1"><n v="0.05"/></sharedItems></cacheField>
+    <cacheField name="CustomDay" numFmtId="14"><sharedItems containsDate="1" count="1"><d v="2023-03-15T00:00:00"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+    let pt_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:E4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="5">
+    <pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>
+    <pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>
+    <pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>
+    <pivotField axis="axisRow" numFmtId="164" showAll="0"><items count="1"><item x="0"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="4"><field x="0"/><field x="1"/><field x="2"/><field x="3"/></rowFields>
+  <rowItems count="1"><i><x v="0"/><x v="0"/><x v="0"/><x v="0"/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="4"/></dataFields>
+</pivotTableDefinition>"#;
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.as_bytes().to_vec());
+
+    let zip_parts = |parts: &HashMap<String, Vec<u8>>| -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+        buf.into_inner()
+    };
+
+    // 1900 date system: serial for 2023-03-15 is 45000.
+    let (back_1900, _) = crate::read_xlsx_with(&zip_parts(&parts), fmt_opts).unwrap();
+    let pt_1900 = &back_1900.sheet(1).unwrap().pivots[0];
+    let cell = pt_1900
+        .data_index
+        .find("Sales", &[("Day", "3/15/2023", false), ("Amount", "1,000", false), ("Rate", "5%", false), ("CustomDay", "2023-03-15", false)])
+        .expect("displayed date/number labels indexed");
+    assert_eq!(cell.items[0].value, Value::Number(45000.0));
+    assert_eq!(cell.items[1].value, Value::Number(1000.0));
+    assert_eq!(cell.items[2].value, Value::Number(0.05));
+    assert_eq!(cell.items[3].value, Value::Number(45000.0));
+
+    // 1904 date system (`date1904="1"`): serial for 2023-03-15 is 43538, still formats as "3/15/2023".
+    let wb_xml = String::from_utf8(parts["xl/workbook.xml"].clone()).unwrap();
+    let wb_1904 = if wb_xml.contains("<workbookPr") {
+        wb_xml.replacen("<workbookPr", r#"<workbookPr date1904="1""#, 1)
+    } else {
+        wb_xml.replacen("<sheets", r#"<workbookPr date1904="1"/><sheets"#, 1)
+    };
+    parts.insert("xl/workbook.xml".into(), wb_1904.into_bytes());
+    let (back_1904, _) = crate::read_xlsx_with(&zip_parts(&parts), fmt_opts).unwrap();
+    let pt_1904 = &back_1904.sheet(1).unwrap().pivots[0];
+    let cell_1904 = pt_1904
+        .data_index
+        .find("Sales", &[("Day", "3/15/2023", false), ("Amount", "1,000", false), ("Rate", "5%", false), ("CustomDay", "2023-03-15", false)])
+        .expect("date1904 displayed labels indexed");
+    assert_eq!(cell_1904.items[0].value, Value::Number(43538.0));
+    assert_eq!(cell_1904.items[3].value, Value::Number(43538.0));
+}
+
+#[test]
+fn ooxml_hostile_short_string_struct_budget_and_rel_target_dedup() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+
+    let row_items_shared: String = (0..200).map(|i| format!(r#"<s v="r{i}"/>"#)).collect();
+    let col_items_shared: String = (0..200).map(|i| format!(r#"<s v="c{i}"/>"#)).collect();
+    let cache_fields: String = (0..32)
+        .map(|i| match i {
+            0 => format!(r#"<cacheField name="f0" numFmtId="0"><sharedItems count="200">{row_items_shared}</sharedItems></cacheField>"#),
+            16 => format!(r#"<cacheField name="f16" numFmtId="0"><sharedItems count="200">{col_items_shared}</sharedItems></cacheField>"#),
+            _ => format!(r#"<cacheField name="f{i}" numFmtId="0"><sharedItems count="1"><s v="x"/></sharedItems></cacheField>"#),
+        })
+        .chain(std::iter::once(r#"<cacheField name="S" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+        .collect();
+    let cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:AG2" sheet="Data"/></cacheSource>
+  <cacheFields count="33">{cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let pf_items_200: String = (0..200).map(|i| format!(r#"<item x="{i}"/>"#)).collect();
+    let pfs: String = (0..16)
+        .map(|i| {
+            if i == 0 {
+                format!(r#"<pivotField axis="axisRow" showAll="0"><items count="200">{pf_items_200}</items></pivotField>"#)
+            } else {
+                r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#.to_string()
+            }
+        })
+        .chain((16..32).map(|i| {
+            if i == 16 {
+                format!(r#"<pivotField axis="axisCol" showAll="0"><items count="200">{pf_items_200}</items></pivotField>"#)
+            } else {
+                r#"<pivotField axis="axisCol" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#.to_string()
+            }
+        }))
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#.to_string()))
+        .collect();
+    let row_fields: String = (0..16).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let col_fields: String = (16..32).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let tail15: String = (0..15).map(|_| r#"<x v="0"/>"#).collect();
+    let distinct_is = |n: usize| -> String { (0..n).map(|i| format!(r#"<i><x v="{i}"/>{tail15}</i>"#)).collect() };
+
+    // 1. Short-string 16x16 grid (200x200 = 40,000 distinct cells): string+key bytes stay ~16 MiB,
+    //    but charging `size_of::<PivotItemRef>()` + `size_of::<PivotDataCell>()` (~95.5 MiB retained)
+    //    trips the 64 MiB retained cap and emits a warning.
+    let dense_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="DensePivot" cacheId="1" dataCaption="Values">
+  <location ref="A1:HV250" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{pfs}</pivotFields>
+  <rowFields count="16">{row_fields}</rowFields>
+  <rowItems count="200">{}</rowItems>
+  <colFields count="16">{col_fields}</colFields>
+  <colItems count="200">{}</colItems>
+  <dataFields count="1"><dataField name="S" fld="32"/></dataFields>
+</pivotTableDefinition>"#,
+        distinct_is(200),
+        distinct_is(200)
+    );
+    let raw = write_xlsx(&wb).unwrap();
+    let mut dense_parts = unzip(&raw);
+    dense_parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+    dense_parts.insert("xl/pivotTables/pivotTable1.xml".into(), dense_pt_xml.into_bytes());
+    let zip_parts = |parts: &HashMap<String, Vec<u8>>| -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+        buf.into_inner()
+    };
+    let (back, report) = read_xlsx(&zip_parts(&dense_parts)).unwrap();
+    assert!(
+        back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(),
+        "dense short-string 16x16 grid must bail out under struct-size + string MAX_RETAINED_INDEX_BYTES"
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("DensePivot") && w.contains("retained budget")),
+        "retained-budget bailout must emit a warning, got: {:?}",
+        report.warnings
+    );
+
+    // 2. Duplicate pivotTable rels pointing at the same `pivotTable1.xml` part are deduplicated
+    //    in `read_pivots` so the part is parsed and indexed only once.
+    let medium_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:AZ50" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{pfs}</pivotFields>
+  <rowFields count="16">{row_fields}</rowFields>
+  <rowItems count="25">{}</rowItems>
+  <colFields count="16">{col_fields}</colFields>
+  <colItems count="25">{}</colItems>
+  <dataFields count="1"><dataField name="S" fld="32"/></dataFields>
+</pivotTableDefinition>"#,
+        distinct_is(25),
+        distinct_is(25)
+    );
+    let mut dup_parts = unzip(&raw);
+    dup_parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.as_bytes().to_vec());
+    dup_parts.insert("xl/pivotTables/pivotTable1.xml".into(), medium_pt_xml.into_bytes());
+    let rels_key = dup_parts
+        .iter()
+        .find(|(k, v)| k.starts_with("xl/worksheets/_rels/") && String::from_utf8_lossy(v).contains("pivotTable1.xml"))
+        .map(|(k, _)| k.clone())
+        .expect("sheet rels referencing pivotTable1.xml");
+    let rels_xml = String::from_utf8(dup_parts[&rels_key].clone()).unwrap();
+    let extra_rels: String = (2..=30)
+        .map(|k| {
+            let target = if k % 2 == 0 { "/xl/pivotTables/pivotTable1.xml" } else { "../pivotTables/pivotTable1.xml" };
+            format!(
+                r#"<Relationship Id="rIdDup{k}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="{target}"/>"#
+            )
+        })
+        .collect();
+    dup_parts.insert(rels_key, rels_xml.replacen("</Relationships>", &format!("{extra_rels}</Relationships>"), 1).into_bytes());
+    let (dedup_wb, dedup_report) = read_xlsx(&zip_parts(&dup_parts)).unwrap();
+    let pivots = &dedup_wb.sheet(1).unwrap().pivots;
+    assert_eq!(pivots.len(), 1, "duplicate rel.target entries must be deduplicated in read_pivots");
+    assert!(pivots[0].data_index.cells().is_some(), "deduplicated pivot is indexed");
+    assert!(dedup_report.warnings.is_empty(), "deduplicated pivot emits no warnings, got: {:?}", dedup_report.warnings);
+}
+
+struct OoxmlBudgetFixture {
+    base_raw: Vec<u8>,
+    cache_xml: String,
+    pfs: String,
+    row_fields: String,
+    col_fields: String,
+    tail15: String,
+}
+
+impl OoxmlBudgetFixture {
+    fn new() -> Self {
+        let mut wb = workbook();
+        wb.sheet_mut(1).unwrap().pivots.truncate(1);
+        let row_items_shared: String = (0..200).map(|i| format!(r#"<s v="r{i}"/>"#)).collect();
+        let col_items_shared: String = (0..200).map(|i| format!(r#"<s v="c{i}"/>"#)).collect();
+        let cache_fields: String = (0..32)
+            .map(|i| match i {
+                0 => format!(r#"<cacheField name="f0" numFmtId="0"><sharedItems count="200">{row_items_shared}</sharedItems></cacheField>"#),
+                16 => format!(r#"<cacheField name="f16" numFmtId="0"><sharedItems count="200">{col_items_shared}</sharedItems></cacheField>"#),
+                _ => format!(r#"<cacheField name="f{i}" numFmtId="0"><sharedItems count="1"><s v="x"/></sharedItems></cacheField>"#),
+            })
+            .chain(std::iter::once(r#"<cacheField name="S" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+            .collect();
+        let cache_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:AG2" sheet="Data"/></cacheSource>
+  <cacheFields count="33">{cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+        );
+        let pf_items_200: String = (0..200).map(|i| format!(r#"<item x="{i}"/>"#)).collect();
+        let pfs: String = (0..16)
+            .map(|i| {
+                if i == 0 {
+                    format!(r#"<pivotField axis="axisRow" showAll="0"><items count="200">{pf_items_200}</items></pivotField>"#)
+                } else {
+                    r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#.to_string()
+                }
+            })
+            .chain((16..32).map(|i| {
+                if i == 16 {
+                    format!(r#"<pivotField axis="axisCol" showAll="0"><items count="200">{pf_items_200}</items></pivotField>"#)
+                } else {
+                    r#"<pivotField axis="axisCol" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#.to_string()
+                }
+            }))
+            .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#.to_string()))
+            .collect();
+        let row_fields: String = (0..16).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+        let col_fields: String = (16..32).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+        let tail15: String = (0..15).map(|_| r#"<x v="0"/>"#).collect();
+        let base_raw = write_xlsx(&wb).unwrap();
+        Self { base_raw, cache_xml, pfs, row_fields, col_fields, tail15 }
+    }
+
+    fn distinct_is(&self, n: usize) -> String {
+        (0..n).map(|i| format!(r#"<i><x v="{i}"/>{}</i>"#, self.tail15)).collect()
+    }
+
+    fn make_pt(&self, name: &str, n: usize, loc: &str, items_xml: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="{name}" cacheId="1" dataCaption="Values">
+  <location ref="{loc}" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{}</pivotFields>
+  <rowFields count="16">{}</rowFields>
+  <rowItems count="{n}">{items_xml}</rowItems>
+  <colFields count="16">{}</colFields>
+  <colItems count="{n}">{items_xml}</colItems>
+  <dataFields count="1"><dataField name="S" fld="32"/></dataFields>
+</pivotTableDefinition>"#,
+            self.pfs, self.row_fields, self.col_fields
+        )
+    }
+
+    fn build_multi(&self, tables: Vec<(String, String)>) -> Vec<u8> {
+        let mut parts = unzip(&self.base_raw);
+        parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), self.cache_xml.as_bytes().to_vec());
+        let rels_key = parts
+            .iter()
+            .find(|(k, v)| k.starts_with("xl/worksheets/_rels/") && String::from_utf8_lossy(v).contains("pivotTable1.xml"))
+            .map(|(k, _)| k.clone())
+            .expect("sheet rels referencing pivotTable1.xml");
+        let pt1_rels = parts["xl/pivotTables/_rels/pivotTable1.xml.rels"].clone();
+        let mut extra_rels = String::new();
+        for (idx, (_, xml)) in tables.into_iter().enumerate() {
+            let n = idx + 1;
+            parts.insert(format!("xl/pivotTables/pivotTable{n}.xml"), xml.into_bytes());
+            if n > 1 {
+                parts.insert(format!("xl/pivotTables/_rels/pivotTable{n}.xml.rels"), pt1_rels.clone());
+                extra_rels.push_str(&format!(
+                    r#"<Relationship Id="rIdPt{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable{n}.xml"/>"#
+                ));
+            }
+        }
+        let rels_xml = String::from_utf8(parts[&rels_key].clone()).unwrap();
+        parts.insert(rels_key, rels_xml.replacen("</Relationships>", &format!("{extra_rels}</Relationships>"), 1).into_bytes());
+        let mut buf = std::io::Cursor::new(Vec::new());
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+        buf.into_inner()
+    }
+}
+
+#[test]
+fn ooxml_split_retained_and_work_budgets_rollback_failed_table_and_warn() {
+    let fx = OoxmlBudgetFixture::new();
+
+    // A. Four legitimate medium pivots (~1.5 MiB retained each), then one oversized pivot
+    //    (200x200 distinct = ~95.5 MiB retained -> trips 64 MiB cap and rolls back retained),
+    //    followed by two more legitimate medium pivots: all six legitimate pivots are indexed
+    //    and only the oversized pivot emits a warning.
+    let med_items = fx.distinct_is(25);
+    let big_items = fx.distinct_is(200);
+    let mut tables = Vec::new();
+    for i in 1..=4 {
+        let name = format!("MedBefore{i}");
+        tables.push((name.clone(), fx.make_pt(&name, 25, "A1:AZ50", &med_items)));
+    }
+    tables.push(("OversizedPivot".into(), fx.make_pt("OversizedPivot", 200, "A1:HV250", &big_items)));
+    for i in 1..=2 {
+        let name = format!("MedAfter{i}");
+        tables.push((name.clone(), fx.make_pt(&name, 25, "A1:AZ50", &med_items)));
+    }
+    let (wb_a, report_a) = read_xlsx(&fx.build_multi(tables)).unwrap();
+    let pivots_a = &wb_a.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_a.len(), 7);
+    for idx in [0, 1, 2, 3, 5, 6] {
+        assert!(
+            pivots_a[idx].data_index.cells().is_some(),
+            "legitimate pivot {} ({}) must be indexed even after an oversized pivot failed",
+            idx,
+            pivots_a[idx].name
+        );
+    }
+    assert!(pivots_a[4].data_index.cells().is_none(), "oversized pivot must bail out");
+    assert_eq!(report_a.warnings.len(), 1, "only the oversized pivot should warn, got: {:?}", report_a.warnings);
+    assert!(report_a.warnings[0].contains("OversizedPivot"), "warning should name OversizedPivot: {:?}", report_a.warnings);
+
+    // B. Many distinct medium pivots exhausting the shared 64 MiB retained budget:
+    //    46 tables x ~1.5 MiB retained (~69 MiB) -> early pivots indexed, last pivot bails out with warning.
+    let many_tables: Vec<(String, String)> = (1..=46)
+        .map(|i| {
+            let name = format!("Med{i}");
+            (name.clone(), fx.make_pt(&name, 25, "A1:AZ50", &med_items))
+        })
+        .collect();
+    let (wb_b, report_b) = read_xlsx(&fx.build_multi(many_tables)).unwrap();
+    let pivots_b = &wb_b.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_b.len(), 46);
+    assert!(pivots_b[0].data_index.cells().is_some(), "early pivots fit in 64 MiB retained budget");
+    assert!(pivots_b[45].data_index.cells().is_none(), "later distinct pivots must bail out past 64 MiB retained budget");
+    assert!(
+        report_b.warnings.iter().any(|w| w.contains("Med46") && w.contains("retained budget")),
+        "over-budget pivot must emit warning, got: {:?}",
+        report_b.warnings
+    );
+
+    // C. Duplicate-key work bombing (250x250 = 62,500 identical 32-field cells -> 1 retained cell,
+    //    but ~170 MiB per-table work) still bails out under the 128 MiB per-table work budget with
+    //    a warning, and because work bytes are per-table, later pivots (`MedAfter1`/`MedAfter2`)
+    //    are unaffected.
+    let dup_i = format!(r#"<i><x v="0"/>{}</i>"#, fx.tail15);
+    let dup_items = dup_i.repeat(250);
+    let work_bomb = vec![
+        ("WorkBomb".into(), fx.make_pt("WorkBomb", 250, "A1:JZ300", &dup_items)),
+        ("MedAfter1".into(), fx.make_pt("MedAfter1", 25, "A1:AZ50", &med_items)),
+        ("MedAfter2".into(), fx.make_pt("MedAfter2", 25, "A1:AZ50", &med_items)),
+    ];
+    let (wb_c, report_c) = read_xlsx(&fx.build_multi(work_bomb)).unwrap();
+    let pivots_c = &wb_c.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_c.len(), 3);
+    assert!(pivots_c[0].data_index.cells().is_none(), "duplicate-key bombing must trip 128 MiB per-table work budget");
+    assert!(pivots_c[1].data_index.cells().is_some(), "MedAfter1 must stay indexed after WorkBomb");
+    assert!(pivots_c[2].data_index.cells().is_some(), "MedAfter2 must stay indexed after WorkBomb");
+    assert_eq!(report_c.warnings.len(), 1, "only WorkBomb should warn, got: {:?}", report_c.warnings);
+    assert!(
+        report_c.warnings[0].contains("WorkBomb") && report_c.warnings[0].contains("work budget"),
+        "work-budget bailout must emit warning, got: {:?}",
+        report_c.warnings
+    );
+
+    // D. Two oversized pivots placed FIRST before two legitimate medium pivots: each oversized
+    //    pivot bails on the 64 MiB retained cap and rolls back its retained bytes, while its
+    //    per-table work budget is discarded on bailout, so neither starves `MedAfter1`/`MedAfter2`.
+    let oversized_first = vec![
+        ("OversizedFirst1".into(), fx.make_pt("OversizedFirst1", 200, "A1:HV250", &big_items)),
+        ("OversizedFirst2".into(), fx.make_pt("OversizedFirst2", 200, "A1:HV250", &big_items)),
+        ("MedAfter1".into(), fx.make_pt("MedAfter1", 25, "A1:AZ50", &med_items)),
+        ("MedAfter2".into(), fx.make_pt("MedAfter2", 25, "A1:AZ50", &med_items)),
+    ];
+    let (wb_d, report_d) = read_xlsx(&fx.build_multi(oversized_first)).unwrap();
+    let pivots_d = &wb_d.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_d.len(), 4);
+    assert!(pivots_d[0].data_index.cells().is_none(), "OversizedFirst1 must bail out");
+    assert!(pivots_d[1].data_index.cells().is_none(), "OversizedFirst2 must bail out");
+    assert!(pivots_d[2].data_index.cells().is_some(), "MedAfter1 must stay indexed after two oversized pivots");
+    assert!(pivots_d[3].data_index.cells().is_some(), "MedAfter2 must stay indexed after two oversized pivots");
+    assert_eq!(report_d.warnings.len(), 2, "both oversized pivots must warn, got: {:?}", report_d.warnings);
+    assert!(report_d.warnings[0].contains("OversizedFirst1") && report_d.warnings[0].contains("retained budget"));
+    assert!(report_d.warnings[1].contains("OversizedFirst2") && report_d.warnings[1].contains("retained budget"));
+}
+
+#[test]
+fn ooxml_tall_pivot_work_budget_and_workbook_iteration_cap() {
+    let fx = OoxmlBudgetFixture::new();
+    let med_items = fx.distinct_is(25);
+
+    // E. Cumulative workbook iteration cap (`MAX_WORKBOOK_INDEX_ITERATIONS = 16_000_000`) counts
+    //    BOTH decoded axis `<i>` entries and row x col cell-loop iterations across all tables:
+    //    16 tables of 998 rows x 1000 cols (1 data col + 999 blank cols) consume
+    //    998 + 1,000 + 998,000 = 999,998 iterations each (15,999,968 total, <= 16M).
+    //    The 17th table has only 50 row `<i>` entries x 1 col (would fit if axis entries were not
+    //    counted, since 16 * 998,000 + 50 < 16M), so it proves axis decoding is charged and bails
+    //    at 16,000,000 with a "workbook iteration limit" warning.
+    let row_998 = r#"<i><x v="0"/></i>"#.repeat(998);
+    let col_1000 = format!(r#"<i><x v="0"/></i>{}"#, r#"<i t="blank"/>"#.repeat(999));
+    let make_iter_pt = |name: &str, r_count: usize, r_xml: &str, c_count: usize, c_xml: &str| -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="{name}" cacheId="1" dataCaption="Values">
+  <location ref="A1:AML1000" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{}</pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="{r_count}">{r_xml}</rowItems>
+  <colFields count="1"><field x="16"/></colFields>
+  <colItems count="{c_count}">{c_xml}</colItems>
+  <dataFields count="1"><dataField name="S" fld="32"/></dataFields>
+</pivotTableDefinition>"#,
+            fx.pfs
+        )
+    };
+    let mut iter_tables: Vec<(String, String)> = (1..=16)
+        .map(|i| {
+            let name = format!("IterPt{i}");
+            (name.clone(), make_iter_pt(&name, 998, &row_998, 1000, &col_1000))
+        })
+        .collect();
+    let row_50 = r#"<i><x v="0"/></i>"#.repeat(50);
+    iter_tables.push(("IterPt17".into(), make_iter_pt("IterPt17", 50, &row_50, 1, r#"<i><x v="0"/></i>"#)));
+    let (wb_e, report_e) = read_xlsx(&fx.build_multi(iter_tables)).unwrap();
+    let pivots_e = &wb_e.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_e.len(), 17);
+    for (idx, pt) in pivots_e.iter().enumerate().take(16) {
+        assert!(pt.data_index.cells().is_some(), "IterPt{} fits in 16M workbook iteration cap", idx + 1);
+    }
+    assert!(pivots_e[16].data_index.cells().is_none(), "IterPt17 must bail out at MAX_WORKBOOK_INDEX_ITERATIONS");
+    assert!(
+        report_e.warnings.iter().any(|w| w.contains("IterPt17") && w.contains("workbook iteration limit")),
+        "workbook iteration cap bailout must emit warning, got: {:?}",
+        report_e.warnings
+    );
+
+    // F. Tall 1-field ~320K-row pivot placed FIRST before two legitimate medium pivots: the tall
+    //    pivot exceeds the per-table 128 MiB work budget and bails with a warning, while both
+    //    subsequent tables (`MedAfter1`/`MedAfter2`) stay indexed because work bytes reset per table.
+    let tall_rows = r#"<i><x v="0"/></i>"#.repeat(320_000);
+    let tall_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="TallPivot" cacheId="1" dataCaption="Values">
+  <location ref="A1:C320005" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="33">{}</pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="320000">{tall_rows}</rowItems>
+  <colFields count="1"><field x="16"/></colFields>
+  <colItems count="1"><i><x v="0"/></i></colItems>
+  <dataFields count="1"><dataField name="S" fld="32"/></dataFields>
+</pivotTableDefinition>"#,
+        fx.pfs
+    );
+    let tall_first = vec![
+        ("TallPivot".into(), tall_pt_xml),
+        ("MedAfter1".into(), fx.make_pt("MedAfter1", 25, "A1:AZ50", &med_items)),
+        ("MedAfter2".into(), fx.make_pt("MedAfter2", 25, "A1:AZ50", &med_items)),
+    ];
+    let (wb_f, report_f) = read_xlsx(&fx.build_multi(tall_first)).unwrap();
+    let pivots_f = &wb_f.sheet(1).unwrap().pivots;
+    assert_eq!(pivots_f.len(), 3);
+    assert!(pivots_f[0].data_index.cells().is_none(), "TallPivot must bail out on per-table 128 MiB work budget");
+    assert!(pivots_f[1].data_index.cells().is_some(), "MedAfter1 must stay indexed after TallPivot");
+    assert!(pivots_f[2].data_index.cells().is_some(), "MedAfter2 must stay indexed after TallPivot");
+    assert_eq!(report_f.warnings.len(), 1, "only TallPivot should warn, got: {:?}", report_f.warnings);
+    assert!(
+        report_f.warnings[0].contains("TallPivot") && report_f.warnings[0].contains("work budget"),
+        "TallPivot bailout must warn about work budget, got: {:?}",
+        report_f.warnings
+    );
+}
+
+#[test]
+fn ooxml_32_real_axis_fields_plus_values_placeholder_is_allowed() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_fields: String = (0..32)
+        .map(|i| format!(r#"<cacheField name="F{i}" numFmtId="0"><sharedItems count="1"><s v="A"/></sharedItems></cacheField>"#))
+        .chain(std::iter::once(r#"<cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+        .chain(std::iter::once(r#"<cacheField name="Units" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+        .collect();
+    let cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:AH2" sheet="Data"/></cacheSource>
+  <cacheFields count="34">{cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let pfs: String = (0..16)
+        .map(|_| r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#)
+        .chain((0..16).map(|_| r#"<pivotField axis="axisCol" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#))
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .collect();
+    // 16 real row fields + `-2` Values placeholder + 16 real col fields = 32 real axis fields (exact cap).
+    let row_fields: String = (0..16).map(|i| format!(r#"<field x="{i}"/>"#)).chain(std::iter::once(r#"<field x="-2"/>"#.to_string())).collect();
+    let col_fields: String = (16..32).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let rxs0: String = (0..16).map(|_| r#"<x v="0"/>"#).chain(std::iter::once(r#"<x v="0"/>"#)).collect();
+    let rxs1: String = (0..16).map(|_| r#"<x v="0"/>"#).chain(std::iter::once(r#"<x v="1"/>"#)).collect();
+    let cxs: String = (0..16).map(|_| r#"<x v="0"/>"#).collect();
+    let pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:D5" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="34">{pfs}</pivotFields>
+  <rowFields count="17">{row_fields}</rowFields>
+  <rowItems count="2"><i>{rxs0}</i><i>{rxs1}</i></rowItems>
+  <colFields count="16">{col_fields}</colFields>
+  <colItems count="1"><i>{cxs}</i></colItems>
+  <dataFields count="2"><dataField name="Sum of Sales" fld="32"/><dataField name="Sum of Units" fld="33"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let back = repack_pivot1(&wb, &cache_xml, &pt_xml);
+    let pt = &back.sheet(1).unwrap().pivots[0];
+    assert!(pt.data_index.cells().is_some(), "32 real axis fields + -2 Values placeholder must be allowed");
+    let query: Vec<(String, &str, bool)> = (0..32).map(|i| (format!("F{i}"), "A", false)).collect();
+    let qrefs: Vec<(&str, &str, bool)> = query.iter().map(|(f, l, b)| (f.as_str(), *l, *b)).collect();
+    assert_eq!(pt.data_index.find("Sum of Sales", &qrefs).map(|c| (c.row, c.col)), Some((1, 1)));
+    assert_eq!(pt.data_index.find("Sum of Units", &qrefs).map(|c| (c.row, c.col)), Some((2, 1)));
+}
+
+#[test]
+fn ooxml_workbook_work_bytes_ceiling_across_20_sheets() {
+    // 20 worksheets each linking the same long-string WorkBomb PivotTable part (~128 MiB transient
+    // work per sheet -> ~2.56 GiB cumulative): earlier sheets bail on the 128 MiB per-table work
+    // budget, and once cumulative workbook work reaches `MAX_WORKBOOK_WORK_BYTES` (2 GiB), later
+    // sheets bail immediately with "workbook work limit reached" and stay `None`.
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    for k in 2..=21 {
+        wb.sheets.push(Arc::new(Sheet::new(format!("Report{k}"))));
+    }
+    let raw = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&raw);
+
+    let long_name = "F".repeat(64 * 1024);
+    let long_val = "V".repeat(64 * 1024);
+    let cache_fields: String = (0..16)
+        .map(|i| {
+            format!(r#"<cacheField name="{i}_{long_name}" numFmtId="0"><sharedItems count="1"><s v="{i}_{long_val}"/></sharedItems></cacheField>"#)
+        })
+        .chain(std::iter::once(r#"<cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>"#.to_string()))
+        .collect();
+    let cache_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="1">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:Q2" sheet="Data"/></cacheSource>
+  <cacheFields count="17">{cache_fields}</cacheFields>
+</pivotCacheDefinition>"#
+    );
+    let pfs: String = (0..16)
+        .map(|_| r#"<pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField>"#)
+        .chain(std::iter::once(r#"<pivotField dataField="1" showAll="0"/>"#))
+        .collect();
+    let row_fields: String = (0..16).map(|i| format!(r#"<field x="{i}"/>"#)).collect();
+    let xs16: String = (0..16).map(|_| r#"<x v="0"/>"#).collect();
+    // 65 row items x 16 fields x (64 KiB name + 64 KiB value) = ~130 MiB > MAX_TABLE_WORK_BYTES (128 MiB).
+    let row_items = format!("<i>{xs16}</i>").repeat(65);
+    let pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="WorkBomb" cacheId="1" dataCaption="Values">
+  <location ref="A1:C100" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="17">{pfs}</pivotFields>
+  <rowFields count="16">{row_fields}</rowFields>
+  <rowItems count="65">{row_items}</rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="16"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    let small_pt_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="SmallAfter" cacheId="1" dataCaption="Values">
+  <location ref="A1:C5" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="17">{pfs}</pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="1"><i><x v="0"/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="16"/></dataFields>
+</pivotTableDefinition>"#
+    );
+    parts.insert("xl/pivotCache/pivotCacheDefinition1.xml".into(), cache_xml.into_bytes());
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), pt_xml.into_bytes());
+    parts.insert("xl/pivotTables/pivotTable2.xml".into(), small_pt_xml.into_bytes());
+    let pt1_rels = parts["xl/pivotTables/_rels/pivotTable1.xml.rels"].clone();
+    parts.insert("xl/pivotTables/_rels/pivotTable2.xml.rels".into(), pt1_rels);
+
+    let sheet2_rels = parts["xl/worksheets/_rels/sheet2.xml.rels"].clone();
+    for sheet_num in 3..=21 {
+        parts.insert(format!("xl/worksheets/_rels/sheet{sheet_num}.xml.rels"), sheet2_rels.clone());
+    }
+    let small_sheet_rels = String::from_utf8(sheet2_rels).unwrap().replace("pivotTable1.xml", "pivotTable2.xml");
+    parts.insert("xl/worksheets/_rels/sheet22.xml.rels".into(), small_sheet_rels.into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    let mut zw = zip::ZipWriter::new(&mut buf);
+    let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in &parts {
+        zw.start_file(name, opts).unwrap();
+        std::io::Write::write_all(&mut zw, data).unwrap();
+    }
+    zw.finish().unwrap();
+    let bytes = buf.into_inner();
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    for idx in 1..=20 {
+        let pivots = &back.sheet(idx).unwrap().pivots;
+        assert_eq!(pivots.len(), 1, "sheet {idx} should link WorkBomb");
+        assert!(pivots[0].data_index.cells().is_none(), "sheet {idx} WorkBomb must stay None");
+    }
+    let trailing = &back.sheet(21).unwrap().pivots;
+    assert_eq!(trailing.len(), 1, "sheet 21 should link SmallAfter");
+    assert!(trailing[0].data_index.cells().is_none(), "SmallAfter must stay None once workbook 2 GiB work limit is reached");
+    assert!(
+        report.warnings.iter().any(|w| w.contains("WorkBomb") && w.contains("table work budget exceeded")),
+        "early WorkBomb sheets must trip per-table work budget, got: {:?}",
+        report.warnings
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("WorkBomb") && w.contains("workbook work limit reached")),
+        "later WorkBomb sheets must trip workbook work limit, got: {:?}",
+        report.warnings
+    );
+    assert!(
+        report.warnings.iter().any(|w| w.contains("SmallAfter") && w.contains("workbook work limit reached")),
+        "trailing small pivot must hit pre-check workbook work limit, got: {:?}",
+        report.warnings
+    );
+}
+
+#[test]
+fn ooxml_sentinel_1048832_and_out_of_bounds_axis_items_bail_cleanly() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" refreshOnLoad="0" recordCount="2">
+  <cacheSource type="worksheet"><worksheetSource ref="A1:B4" sheet="Data"/></cacheSource>
+  <cacheFields count="2">
+    <cacheField name="Region" numFmtId="0"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField>
+    <cacheField name="Sales" numFmtId="0"><sharedItems containsNumber="1" count="0"/></cacheField>
+  </cacheFields>
+</pivotCacheDefinition>"#;
+
+    // 1a. `<item x="1048832"/>` sentinel must bail cleanly (`None`), never publishing a partial index.
+    let sentinel_item_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1048832"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, sentinel_item_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "item x=1048832 must bail cleanly");
+
+    // 1b. `<x v="1048832"/>` sentinel in `<rowItems>` (including on `-2` Values axis) must bail cleanly.
+    let sentinel_row_x_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:C4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1048832"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, sentinel_row_x_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "rowItems <x v=1048832> must bail cleanly");
+
+    let sentinel_values_x_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:C4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colFields count="1"><field x="-2"/></colFields>
+  <colItems count="2"><i><x v="0"/></i><i><x v="1048832"/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, sentinel_values_x_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "Values axis <x v=1048832> must bail cleanly");
+
+    // 2a. `<rowItems>` running past `<location>` (`A1:B3` with `firstDataRow="1"` holds only 2 data rows,
+    //     while `<rowItems>` has 3 entries) must bail cleanly instead of publishing a partial index.
+    let oob_row_items_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B3" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="1"><i><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, oob_row_items_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "rowItems past location must bail cleanly");
+
+    // 2b. `<colItems>` running past `<location>` (`A1:B4` with `firstDataCol="1"` holds only 1 data col,
+    //     while `<colItems>` has 2 entries) must bail cleanly instead of publishing a partial index.
+    let oob_col_items_pt = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="PivotTable1" cacheId="1" dataCaption="Values">
+  <location ref="A1:B4" firstHeaderRow="1" firstDataRow="1" firstDataCol="1" rowPageCount="0" colPageCount="0"/>
+  <pivotFields count="2">
+    <pivotField axis="axisRow" showAll="0"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField>
+    <pivotField dataField="1" showAll="0"/>
+  </pivotFields>
+  <rowFields count="1"><field x="0"/></rowFields>
+  <rowItems count="3"><i><x v="0"/></i><i><x v="1"/></i><i t="grand"><x/></i></rowItems>
+  <colItems count="2"><i><x/></i><i t="grand"><x/></i></colItems>
+  <dataFields count="1"><dataField name="Sum of Sales" fld="1"/></dataFields>
+</pivotTableDefinition>"#;
+    let back = repack_pivot1(&wb, cache_xml, oob_col_items_pt);
+    assert!(back.sheet(1).unwrap().pivots[0].data_index.cells().is_none(), "colItems past location must bail cleanly");
+}

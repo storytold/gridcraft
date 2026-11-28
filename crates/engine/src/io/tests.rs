@@ -1122,3 +1122,18 @@ fn json_without_sheets_keeps_its_text_defaults() -> std::result::Result<(), Box<
     assert_eq!(wb.macros, saved.macros);
     Ok(())
 }
+
+#[test]
+fn pivot_item_number_format_uses_display_parsed_for_overlong_codes() {
+    let overlong = format!("#,##0;{}", "\"x\"".repeat(4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS));
+    assert!(overlong.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS);
+
+    let f = pivot_item_number_format(&overlong);
+    assert!(f.is_general());
+    assert_eq!(f.code(), "General", "read_plain must route through display::parsed, not display::number_format");
+    assert_eq!(f, gridcraft_numfmt::NumberFormat::parse("General"));
+
+    // Positive control: normal format code is preserved.
+    let normal = pivot_item_number_format("0.00");
+    assert_eq!(normal.code(), "0.00");
+}
