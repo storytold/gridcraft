@@ -368,7 +368,11 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
-    let origin = s.doc()?.selection.active;
+    // Relative references adjust from the cell the input is typed in: the active cell when it is
+    // in the target (Ctrl+Enter), else the target's first cell, as when a script names a range.
+    let active = s.doc()?.selection.active;
+    let typed_in_active = sheet == s.doc()?.wb.active_sheet() && ranges.iter().any(|r| r.contains(active));
+    let origin = if typed_in_active { active } else { ranges.first().map(|r| r.start).unwrap_or(active) };
     edit(s, |cx| {
         // Each cell gets what typing the input there gives: the automatic number format where
         // it's General, its own format otherwise, text where it's Text. That depends only on
