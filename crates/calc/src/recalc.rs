@@ -560,6 +560,7 @@ impl Calc {
         if !full {
             self.standing = Standing::default();
         }
+        let mut priority: HashMap<Key, usize> = HashMap::default();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -579,8 +580,8 @@ impl Calc {
                     }
                 }
             }
-            // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
-            dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
+            // Suppressed readers run deepest-first before active spill owners in the follow-up round, then row-major.
+            dirty.sort_by_key(|k| (std::cmp::Reverse(priority.get(k).copied().unwrap_or(0)), k.0, k.1.row, k.1.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
@@ -594,7 +595,7 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, suppressed) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
@@ -607,7 +608,7 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.suppressed)
             };
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
@@ -621,7 +622,8 @@ impl Calc {
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            priority.clear();
+            let mut spill_changes = self.write_back(wb, &dirty, results, &spills, &suppressed, &mut priority);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
@@ -656,6 +658,8 @@ impl Calc {
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
+        suppressed: &HashMap<Key, HashMap<Key, usize>>,
+        priority: &mut HashMap<Key, usize>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
@@ -678,6 +682,12 @@ impl Calc {
             let old = sheet.spill_ranges.get(&key.1).copied();
             if old.is_none() && new.is_none() {
                 continue;
+            }
+            if let Some(readers) = suppressed.get(key) {
+                for (&reader, &depth) in readers {
+                    spill_changes.push(reader);
+                    priority.entry(reader).and_modify(|d| *d = (*d).max(depth)).or_insert(depth);
+                }
             }
             // An unchanged spill does not alter any values its dependents read.
             if let (Some(range), Some(array)) = (old, new)

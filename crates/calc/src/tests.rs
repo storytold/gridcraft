@@ -3297,3 +3297,123 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+#[test]
+fn self_overlapping_spill_matches_full_recalc_after_incremental_edits() {
+    let mut t = T::new();
+    t.set("G14", "=G12:H19");
+    assert_eq!(t.get("G16"), Value::Error(CellError::Circ));
+    assert_eq!(t.get("G18"), Value::Number(0.0));
+
+    // Touching spilled cells or a precedent cell triggers an incremental recalculation of G14
+    // while its previous spill is still on the sheet (#4646).
+    let touched: Vec<(usize, CellRef)> = (14..=20).map(|row| (0, CellRef { row, col: 6 })).collect();
+    t.calc.cells_changed(&mut t.wb, &touched);
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for row in 13..=20 {
+        for col in 6..=7 {
+            let cell = CellRef { row, col };
+            assert_eq!(t.wb.sheet(0).unwrap().value(cell), fresh.sheet(0).unwrap().value(cell));
+        }
+    }
+
+    t.set("G12", "5");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("G12"), Value::Number(5.0));
+    assert_eq!(t.get("G14"), Value::Number(5.0));
+    assert_eq!(t.get("G16"), Value::Error(CellError::Circ));
+    assert_eq!(t.get("G18"), Value::Number(0.0));
+    assert_eq!(t.get("G18"), fresh.sheet(0).unwrap().value(c("G18")));
+}
+
+#[test]
+fn spill_feedback_loop_converges_consistently() {
+    let mut t = T::new();
+    t.set("Z1", "1");
+    t.set("C1", "=SEQUENCE(3)");
+    t.set("A1", "=C2+Z1");
+    t.set("C1", "=IF(A1>0,SEQUENCE(3),1)");
+    assert_eq!(t.get("A1"), Value::Number(3.0));
+
+    t.set("Z1", "2");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("A1"), Value::Number(4.0));
+    assert_eq!(t.get("A1"), fresh.sheet(0).unwrap().value(c("A1")));
+}
+
+#[test]
+fn active_owner_suppressed_reader_recalculates_after_owner_completes() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("B1", "=SUM(A2:A3)");
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+
+    t.set("A1", "=IF(B1>=0,SEQUENCE(3),1)");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+    assert_eq!(t.get("B1"), fresh.sheet(0).unwrap().value(c("B1")));
+}
+
+#[test]
+fn deep_spill_owner_chain_suppressed_reader_settles_without_round_exhaustion() {
+    let mut t = T::new();
+    let cols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+    for col in cols {
+        t.set(&format!("{col}1"), "=SEQUENCE(3)");
+    }
+    t.set("J1", "=SUM(I2:I3)");
+    assert_eq!(t.get("J1"), Value::Number(5.0));
+
+    for i in (0..cols.len()).rev() {
+        let cur = cols[i];
+        let formula = if i == cols.len() - 1 {
+            "=IF(J1+SUM(H2:H3)>=0,SEQUENCE(3),1)".to_string()
+        } else if i == 0 {
+            "=IF(B1>=0,SEQUENCE(3),1)".to_string()
+        } else {
+            let prev = cols[i - 1];
+            let next = cols[i + 1];
+            format!("=IF({next}1+SUM({prev}2:{prev}3)>=0,SEQUENCE(3),1)")
+        };
+        t.set(&format!("{cur}1"), &formula);
+    }
+
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("J1"), Value::Number(5.0));
+    assert_eq!(t.get("J1"), fresh.sheet(0).unwrap().value(c("J1")));
+}
+
+#[test]
+fn active_ancestor_stale_spill_is_hidden_during_on_demand_read() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("B1", "=SUM(A2:A3)");
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+
+    t.set("A1", "=SEQUENCE(MAX(1,B1+SUM(A2:A3)))");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("A2"), Value::Empty);
+    assert_eq!(t.get("B1"), Value::Number(0.0));
+    assert_eq!(t.wb.sheet(0).unwrap().spill_ranges.get(&c("A1")), fresh.sheet(0).unwrap().spill_ranges.get(&c("A1")));
+}
+
+#[test]
+fn range_values_hides_stale_spill_when_contained_anchor_stops_spilling() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(2)");
+    t.set("B1", "=INDEX(A1:A2,2,1)");
+    assert_eq!(t.get("B1"), Value::Number(2.0));
+
+    t.set("A1", "=42");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("B1"), Value::Number(0.0));
+    assert_eq!(t.get("B1"), fresh.sheet(0).unwrap().value(c("B1")));
+}
