@@ -520,6 +520,8 @@ fn apply_craft_view(v: &craft_xlsx::SheetView, sheet: &mut Sheet) {
     sheet.show_headings = v.show_row_col_headers.unwrap_or(true);
     sheet.show_formulas = v.show_formulas.unwrap_or(false);
     sheet.show_zeros = v.show_zeros.unwrap_or(true);
+    sheet.show_ruler = v.show_ruler.unwrap_or(true);
+    sheet.show_white_space = v.show_white_space.unwrap_or(true);
     sheet.show_outline_symbols = v.show_outline_symbols.unwrap_or(true);
     sheet.right_to_left = v.right_to_left.unwrap_or(false);
     sheet.view = v.view.as_deref().and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();

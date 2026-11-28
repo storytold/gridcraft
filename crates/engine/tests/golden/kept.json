@@ -184,6 +184,8 @@
       "show_gridlines": true,
       "show_headings": true,
       "show_outline_symbols": true,
+      "show_ruler": true,
+      "show_white_space": true,
       "show_zeros": true,
       "slicers": [],
       "sparklines": [],

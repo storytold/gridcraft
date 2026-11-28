@@ -90,6 +90,8 @@
       "show_headings": true,
       "show_formulas": false,
       "show_zeros": true,
+      "show_ruler": true,
+      "show_white_space": true,
       "show_outline_symbols": true,
       "summary_below": true,
       "summary_right": true,
