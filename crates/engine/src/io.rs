@@ -620,9 +620,24 @@ pub(crate) fn esc(s: &str) -> String {
 
 /// [`esc`], or `None` once the escaped text would pass `limit` bytes (nothing larger is built).
 fn esc_within(s: &str, limit: usize) -> Option<String> {
+    esc_text_within(s, limit, false)
+}
+
+/// A line break inside a cell, as Excel's Web Page export writes it: the style tells Excel, reading
+/// the page back, that the break stays in the cell rather than starting a row (#4357).
+const HTML_CELL_BREAK: &str = "<br style=\"mso-data-placement:same-cell\">";
+
+/// [`esc_within`] for a cell's text: a line feed in the cell becomes [`HTML_CELL_BREAK`], since the
+/// cell's `white-space:nowrap` (and HTML itself) would show it as a space.
+fn esc_cell_within(s: &str, limit: usize) -> Option<String> {
+    esc_text_within(s, limit, true)
+}
+
+fn esc_text_within(s: &str, limit: usize, line_breaks: bool) -> Option<String> {
     let mut out = String::with_capacity(s.len().min(limit));
     for c in s.chars() {
         match c {
+            '\n' if line_breaks => out.push_str(HTML_CELL_BREAK),
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
@@ -922,7 +937,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                     })
                     .unwrap_or_default();
                 // The text is escaped only as far as the page still has room for it.
-                let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
+                let Some(escaped) = esc_cell_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
                 let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
                 if out.len() > HTML_EXPORT_MAX_BYTES {
                     return Err(html_too_big());
