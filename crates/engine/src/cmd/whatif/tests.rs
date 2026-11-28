@@ -341,3 +341,25 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+#[test]
+fn a_protected_sheet_refuses_replacing_or_deleting_its_scenarios() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "High", "changing": "A1", "values": [30]})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "Low", "changing": "A1", "values": [5]})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let e = s.execute("data.scenarioAdd", json!({"name": "High", "changing": "A1", "values": [10], "replace": true})).unwrap_err();
+    assert!(e.to_string().contains("protected"), "{e}");
+    assert!(s.execute("data.scenarioDelete", json!({"name": "Low"})).is_err());
+    let list = s.execute("data.scenarioManager", json!({})).unwrap();
+    assert_eq!(list["scenarios"][0]["values"], json!([30]), "{list}");
+    assert_eq!(list["scenarios"][1]["name"], "Low", "{list}");
+    // Unprotected, both go through.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "High", "changing": "A1", "values": [10], "replace": true})).unwrap();
+    s.execute("data.scenarioDelete", json!({"name": "Low"})).unwrap();
+    let list = s.execute("data.scenarioManager", json!({})).unwrap();
+    assert_eq!(list["scenarios"].as_array().unwrap().len(), 1, "{list}");
+}
