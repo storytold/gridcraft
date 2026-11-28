@@ -57,6 +57,16 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 }
             }
         }
+        "fromClipboard" => {
+            let delimiter = match d.values.get("separator").and_then(Json::as_str) {
+                Some("semicolon") => ";",
+                Some("tab") => "\t",
+                Some("space") => " ",
+                Some("other") => d.values.get("other").and_then(Json::as_str).unwrap_or_default(),
+                _ => ",",
+            };
+            v = json!({ "text": d.values.get("text"), "delimiter": delimiter, "at": d.values.get("at") });
+        }
         "textToColumns" => {
             let mut delims = Vec::new();
             for (k, c) in [("tab", "\t"), ("semicolon", ";"), ("comma", ","), ("space", " ")] {
@@ -634,7 +644,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         };
                         take_first_focus(d, &r);
                         if r.changed() {
-                            d.values.insert(key.into(), json!(s));
+                            d.set_value(key, json!(s));
                         }
                         if let Some(pick) = d.pick.as_mut().filter(|pick| pick.key == key) {
                             track_pick(pick, &r, r.changed());

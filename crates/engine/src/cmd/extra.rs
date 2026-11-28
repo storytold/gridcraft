@@ -207,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "From Text/CSV",
             ["Data", "Get & Transform Data"],
             None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
+            "{path | text, delimiter?: one character (comma, semicolon or tab picked by the text without it; a JSON array of objects is read as records only without it), sheet?: new sheet name, at?: cell, `Sheet!`-qualified or on the active sheet} → imports into a new sheet as a table, or with `at` pastes the columns there (no table), keeping the number formats the reader gives dates, percents and currency",
             has_doc,
             from_csv
         ),

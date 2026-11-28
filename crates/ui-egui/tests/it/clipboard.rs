@@ -559,3 +559,96 @@ fn ribbon_paste_prefers_clipboard_text_over_a_picture() {
     assert_eq!(value_at(&h, "D2"), Some(Value::from("words")));
     assert!(pictures(&h).is_empty());
 }
+
+#[test]
+fn get_data_from_clipboard_splits_the_clipboard_text_at_the_chosen_separator() {
+    // Semicolon-separated, as Excel writes CSV where a comma is the decimal separator.
+    let (clipboard, services) = system_clipboard("Name;City\r\n\"Smith; John\";Oslo\r\nAda;42\r\n");
+    let mut h = harness(services);
+    let sheets = |h: &Harness| h.state().session.active().unwrap().wb.sheets.len();
+    let separator = |h: &Harness| h.state().dialog.as_ref().and_then(|d| d.values.get("separator")?.as_str().map(str::to_string));
+    let before = sheets(&h);
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.run_steps(2);
+    let open_from_clipboard = |h: &mut Harness| {
+        h.get_by_role_and_label(Role::Button, "Get Data (Text/CSV) options").click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::Button, "From Clipboard…").click();
+        h.run_steps(3);
+    };
+
+    // The dialog starts on the separator the text uses, and OK imports that text into a new
+    // sheet, even when the clipboard has moved on.
+    open_from_clipboard(&mut h);
+    assert_eq!(separator(&h).as_deref(), Some("semicolon"));
+    clipboard.borrow_mut().0 = "copied later".into();
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(sheets(&h), before + 1, "the text goes into a new sheet");
+    assert_eq!(value_at(&h, "A2"), Some(Value::from("Smith; John")), "a quoted separator stays in its field");
+    assert_eq!(value_at(&h, "B2"), Some(Value::from("Oslo")));
+    assert_eq!(value_at(&h, "B3"), Some(Value::number(42.0)));
+
+    // Typing a separator in Other chooses it.
+    clipboard.borrow_mut().0 = "a|b,c\n".into();
+    open_from_clipboard(&mut h);
+    assert_eq!(separator(&h).as_deref(), Some("comma"));
+    h.get_by_role_and_label(Role::TextInput, "Other separator:").click();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Text("|".into()));
+    h.run_steps(2);
+    assert_eq!(separator(&h).as_deref(), Some("other"));
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    assert_eq!(sheets(&h), before + 2);
+    assert_eq!(value_at(&h, "A1"), Some(Value::from("a")));
+    assert_eq!(value_at(&h, "B1"), Some(Value::from("b,c")));
+
+    // With no text on the clipboard it says so and opens no dialog.
+    clipboard.borrow_mut().0 = " \n".into();
+    open_from_clipboard(&mut h);
+    let message = format!("{:?}", h.state().message);
+    assert!(message.contains("no text on the clipboard"), "{message}");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(sheets(&h), before + 2);
+}
+
+#[test]
+fn paste_data_in_the_cell_menu_splits_the_clipboard_text_into_columns_at_the_cell() {
+    let (_, services) = system_clipboard("x;y\r\n1;\"a; b\"\r\n");
+    let mut h = harness(services);
+    let sheets = h.state().session.active().unwrap().wb.sheets.len();
+    h.state_mut().run("selection.set", json!({"cell": "C3"})).unwrap();
+    h.run_steps(2);
+    let app = h.state();
+    let sh = app.session.active().unwrap().wb.active().unwrap();
+    let geo = grid::Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let pos = geo.cell_rect(sh, CellRef::parse("C3").unwrap()).center();
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    }
+    assert!(h.state().grid.context_menu.is_some());
+    h.get_by_role_and_label(Role::Button, "Paste Data…").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.title.as_str()), Some("Paste Data"));
+    // By OK its sheet is renamed and another sheet, now active, has its old name (the sheet tabs
+    // and the control channel work while the dialog is open).
+    h.state_mut().session.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    h.state_mut().session.execute("home.insertSheet", json!({"name": "Sheet1"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let wb = &h.state().session.active().unwrap().wb;
+    assert_eq!(wb.sheets.len(), sheets + 1, "no sheet of its own");
+    assert_eq!(wb.active().unwrap().name, "Renamed", "the paste goes to the sheet it was asked on");
+    assert!(wb.active().unwrap().tables.is_empty(), "no table either");
+    assert_eq!(value_at(&h, "C3"), Some(Value::from("x")));
+    assert_eq!(value_at(&h, "D3"), Some(Value::from("y")));
+    assert_eq!(value_at(&h, "C4"), Some(Value::number(1.0)));
+    assert_eq!(value_at(&h, "D4"), Some(Value::from("a; b")));
+}

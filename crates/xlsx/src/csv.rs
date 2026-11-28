@@ -40,9 +40,10 @@ pub(crate) fn sep_line(text: &str, quote: char) -> Option<(Option<char>, usize)>
     }
 }
 
-/// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
+/// [`craft_csv::parse_records`] with a record kept to one field past the grid's [`MAX_COLS`], so a
+/// wider record can be told from one that fits; readers use the first `MAX_COLS`.
 fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
-    craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
+    craft_csv::parse_records(text, delim, quote, MAX_COLS as usize + 1, on_record);
 }
 
 /// The delimiter and quote character to read `text` with. craft-csv always splits and unquotes, so
@@ -351,10 +352,16 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
     let mut too_many = false;
+    let mut widest = 0;
     parse_records(body, delim, quote, |rec| {
         if row >= MAX_ROWS {
+            report.truncated = true;
             return false;
         }
+        if rec.len() > MAX_COLS as usize {
+            report.truncated = true;
+        }
+        widest = widest.max(rec.len().min(MAX_COLS as usize));
         // A blank line is an empty row.
         for (col, f) in rec.into_iter().enumerate() {
             if col as u32 >= MAX_COLS {
@@ -401,6 +408,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
+    report.records = row;
+    report.fields = u32::try_from(widest).unwrap_or(MAX_COLS);
     Ok((wb, report))
 }
 

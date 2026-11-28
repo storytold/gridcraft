@@ -1196,3 +1196,9 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests;
+
+/// The separator delimited text uses: comma, semicolon or tab, picked as the CSV reader picks it
+/// when none is given (consistent field counts over its first records; comma when none fits).
+pub fn guess_separator(text: &str) -> char {
+    char::from(craft_csv::sniff_delimiter(text, '"'))
+}

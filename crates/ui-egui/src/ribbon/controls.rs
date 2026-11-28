@@ -274,6 +274,7 @@ fn combo_popup(
 }
 
 pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, serde_json::Value)]) {
+    let mut buttons = Vec::new();
     for (label, id, p) in items {
         if *label == "-" {
             ui.separator();
@@ -285,6 +286,13 @@ pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, 
             keytip(app, ui, sequence, pos2(response.rect.right() - 10.0, response.rect.center().y));
         }
         if response.clicked() {
+            // Enter on a focused item clicks it without a pointer click to close the menu, and the
+            // same press must not also confirm the dialog or message the item opens.
+            ui.close();
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Space);
+            });
             if let Some(d) = id.strip_prefix("dialog:") {
                 app.open_dialog(d, p.clone());
             } else if *id == "edit.paste" {
@@ -293,6 +301,36 @@ pub(super) fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, 
                 act(app, id, p.clone());
             }
         }
+        buttons.push(response);
+    }
+    menu_focus(app, ui, &buttons);
+}
+
+/// Up and Down in a menu, as in Excel's: in one that key tips opened (Alt, H, V), the first press
+/// ends key tips and moves keyboard focus onto the first or last item; egui then moves it between
+/// items, Enter runs the focused one and Esc closes the menu. Focus wraps at the ends rather than
+/// leaving the open menu.
+fn menu_focus(app: &mut SheetApp, ui: &Ui, buttons: &[egui::Response]) {
+    let (Some(first), Some(last)) = (buttons.first(), buttons.last()) else { return };
+    if let Some(key) = app.keytips.take_menu_arrow() {
+        app.keytips.clear();
+        let target = if key == egui::Key::ArrowUp { last } else { first };
+        target.request_focus();
+        // egui read the arrow before key tips took it: with a widget focused, it would move on
+        // from the item just focused.
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        return;
+    }
+    let focused = buttons.iter().position(egui::Response::has_focus);
+    let wrap = ui.input(|i| match focused {
+        Some(0) if i.key_pressed(egui::Key::ArrowUp) => Some(last),
+        Some(n) if n + 1 == buttons.len() && i.key_pressed(egui::Key::ArrowDown) => Some(first),
+        _ => None,
+    });
+    if let Some(target) = wrap {
+        target.request_focus();
+        // Instead of the move egui would make, out of the menu.
+        ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
 }
 

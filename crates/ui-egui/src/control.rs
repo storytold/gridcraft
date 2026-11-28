@@ -262,6 +262,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("app.checkForUpdates", "Check for Updates…", ""),
+                (
+                    "data.fromClipboard",
+                    "From Clipboard",
+                    "{delimiter?, at?} → as data.fromTextCsv {text, delimiter?, at?} with the text on the system clipboard: into a new sheet, or at the cell `at`",
+                ),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 (
                     "view.expandFormulaBar",

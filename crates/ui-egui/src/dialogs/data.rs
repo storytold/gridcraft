@@ -3,6 +3,44 @@ use super::show::build_params;
 use super::show::{form_fields, ok_cancel};
 use super::{Dialog, Field, Json, SheetApp, json, vec2};
 
+/// Data › Get Data › From Clipboard…, and the cell menu's Paste Data… with the cell `at`: the
+/// separator to split the clipboard text at, starting on the one the text seems to use. The text
+/// read now is the text OK imports, whatever the clipboard holds by then. With no text to import
+/// that is said now, not after OK.
+pub(super) fn from_clipboard_form(app: &mut SheetApp, at: Option<&str>) -> Option<Dialog> {
+    use Field::{Choice, Note, Ref, Text};
+    let text = match app.clipboard_text_to_import() {
+        Ok(text) => text,
+        Err(e) => {
+            app.alert(e);
+            return None;
+        }
+    };
+    let separator = match gridcraft_engine::io::guess_separator(&text) {
+        '\t' => "tab",
+        ';' => "semicolon",
+        _ => "comma",
+    };
+    // From Paste Data… the columns go in at the cell; from Get Data, into a new sheet. As a
+    // reference box the cell means the sheet the dialog opened on, whichever is shown by OK.
+    let mut fields = Vec::new();
+    if at.is_some() {
+        fields.push(Note("The columns replace what is there.".into()));
+        fields.push(Ref { key: "at", label: "Paste at:" });
+    }
+    fields.extend([
+        Choice {
+            key: "separator",
+            label: "Separator",
+            // Keyed as Text to Columns keys it: the separator, not the Comma cell style.
+            options: vec![("comma", "Text to Columns|Comma"), ("semicolon", "Semicolon"), ("tab", "Tab"), ("space", "Space"), ("other", "Other")],
+        },
+        Text { key: "other", label: "Other separator:" },
+    ]);
+    let title = if at.is_some() { "Paste Data" } else { "Import from Clipboard" };
+    Some(Dialog::form("fromClipboard", title, "data.fromTextCsv", fields, json!({"separator": separator, "other": "", "at": at, "text": text})))
+}
+
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
 pub(super) fn validation_defaults(app: &SheetApp) -> Json {
