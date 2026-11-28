@@ -19,6 +19,8 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
         app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
+    ui.add_space(14.0);
+    new_workbook_width_option(app, ui, lang);
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
@@ -53,6 +55,55 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
+/// Set the column width for future blank workbooks without changing open files.
+fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
+    let width = app.session.prefs.new_workbook_column_width();
+    let separator = lang.ui_decimal_separator();
+    let display_width = width.to_string().replace('.', &separator.to_string());
+    ui.horizontal(|ui| {
+        let label = ui.label(lang.tr("Default column width for new workbooks (pixels)"));
+        let id = ui.make_persistent_id("backstage_new_workbook_default_width");
+        let draft_id = id.with("draft");
+        let edited_id = id.with("edited");
+        let mut text = ui.data_mut(|d| d.get_temp::<String>(draft_id)).unwrap_or_else(|| display_width.clone());
+        let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(80.0)).labelled_by(label.id);
+        let edited = ui.data_mut(|d| d.get_temp::<bool>(edited_id)).unwrap_or(false) || response.changed();
+        if response.lost_focus() {
+            ui.data_mut(|d| {
+                d.remove::<String>(draft_id);
+                d.remove::<bool>(edited_id);
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) || !edited {
+                return;
+            }
+            let trimmed = text.trim();
+            let parsed = if separator == ',' && trimmed.contains('.') {
+                None
+            } else {
+                trimmed.replace(separator, ".").parse::<f64>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w))
+            };
+            match parsed {
+                Some(w) if (w as f32) != width => {
+                    app.run_or_alert("options.newWorkbookColumnWidth", json!({"width": w}));
+                }
+                Some(_) => {}
+                None => refuse(app, ui, "Default column width must be a number from 0 to 1800 pixels."),
+            }
+        } else if response.has_focus() {
+            ui.data_mut(|d| {
+                d.insert_temp(draft_id, text);
+                if edited {
+                    d.insert_temp(edited_id, true);
+                }
+            });
+        } else {
+            ui.data_mut(|d| {
+                d.remove::<String>(draft_id);
+                d.remove::<bool>(edited_id);
+            });
+        }
+    });
+}
 /// The display theme and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {

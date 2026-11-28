@@ -26,6 +26,7 @@ pub enum Policy {
 const DENIED_PREFIXES: &[(&str, &str)] = &[
     ("file.", "macros don't open, save, close or create workbooks"),
     ("app.", "macros don't change the app"),
+    ("options.", "macros don't change the app"),
     ("window.", "macros don't switch windows"),
     ("automate.", "macros don't record or run scripts or other macros"),
     ("macro.", "macros don't record or run other macros"),
@@ -92,6 +93,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Verifies macro execution deny, permission, and allow classifications across commands.
     #[test]
     fn the_deny_and_permission_lists() {
         let none = json!({});
@@ -103,6 +105,7 @@ mod tests {
             "file.close",
             "file.new",
             "app.commands",
+            "options.newWorkbookColumnWidth",
             "window.activate",
             "automate.runScript",
             "automate.recordActions",
