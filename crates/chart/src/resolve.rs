@@ -39,6 +39,28 @@ pub fn series_color(theme: &Theme, i: usize) -> Rgba {
     [r, g, b, 0xFF]
 }
 
+/// Excel reference colours for explicit styles 1 and 9.
+///
+/// These palettes cover measured default-theme examples.
+/// Other counts still use the existing theme-based fallback.
+fn chart_style_series_color(theme: &Theme, style: u32, index: usize, count: usize) -> Rgba {
+    if !matches!(style, 1 | 9) {
+        return series_color(theme, index);
+    }
+
+    const SMALL: [u8; 4] = [0x61, 0xB3, 0x81, 0x50];
+    const MEDIUM: [u8; 8] = [0x55, 0x9E, 0x72, 0x46, 0x83, 0xC1, 0x9A, 0xC8];
+    const LARGE: [u8; 16] = [0x4F, 0x93, 0x6A, 0x40, 0x7A, 0xB4, 0x61, 0xB3, 0x81, 0x50, 0x95, 0xDA, 0xAF, 0xD2, 0xBA, 0xAA];
+
+    let shades: &[u8] = match count {
+        1..=4 => &SMALL,
+        5..=8 => &MEDIUM,
+        9..=16 => &LARGE,
+        _ => return series_color(theme, index),
+    };
+
+    shades.get(index).map_or_else(|| series_color(theme, index), |shade| [*shade, *shade, *shade, 0xFF])
+}
 /// The first `n` series colours for `theme`.
 pub fn default_palette(theme: &Theme, n: usize) -> Vec<Rgba> {
     (0..n.min(4096)).map(|i| series_color(theme, i)).collect()
@@ -360,7 +382,7 @@ fn category_label(wb: &Workbook, src: Option<(&gridcraft_model::Sheet, RangeRef)
 /// the outer levels of a multi-level axis: a category range wider than a column of values (or
 /// taller than a row of values) groups its innermost labels, year beside month. Each outer level
 /// has one entry per category, non-empty where a group starts, as the cells are.
-fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limit: usize) -> (Vec<String>, Vec<Vec<String>>) {
+fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limit: usize, innermost: bool) -> (Vec<String>, Vec<Vec<String>>) {
     let cells: Option<(usize, RangeRef)> = parse_ref(wb, sheet, formula);
     let value_range = parse_ref(wb, sheet, values).map(|(_, r)| r);
     // Bound the category dimension by `limit` and read only the cells the levels use (the
@@ -419,12 +441,21 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, limi
     let at = |row: usize, col: usize| texts.get(row * w + col).cloned().unwrap_or_default();
     let column = |c: usize| (0..h).map(|row| at(row, c)).collect::<Vec<String>>();
     let row = |rr: usize| (0..w).map(|c| at(rr, c)).collect::<Vec<String>>();
-    let outer = levels.outer as usize;
-    if levels.by_columns {
+    let value_count = eval_list_in(wb, sheet, values, limit, 0).len();
+    let by_columns = if value_count == h && w > 1 && h != w {
+        true
+    } else if value_count == w && h > 1 && h != w {
+        false
+    } else {
+        levels.by_columns
+    };
+    let outer = if by_columns { w.saturating_sub(1).min(3) } else { h.saturating_sub(1).min(3) };
+    let result = if by_columns {
         (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
     } else {
         (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
-    }
+    };
+    if innermost { (result.0, vec![]) } else { result }
 }
 
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
@@ -448,32 +479,6 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     t.to_string()
 }
 
-pub(crate) fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
-    match (chart_kind, series_kind) {
-        (ChartKind::Combo, Some(k)) if k != ChartKind::Combo => k,
-        (ChartKind::Combo, _) => {
-            if i == 0 {
-                ChartKind::ColumnClustered
-            } else {
-                ChartKind::Line
-            }
-        }
-        (_, Some(k)) if k != ChartKind::Combo => k,
-        (k, _) => k,
-    }
-}
-
-/// The kind series `i` is drawn as: its own kind in a combo chart (first series a column, the
-/// rest lines when it has none), else the chart's. The one rule shared by resolving and drawing.
-pub(crate) fn plot_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
-    if chart_kind == ChartKind::Combo { effective_kind(chart_kind, series_kind, i) } else { chart_kind }
-}
-
-/// The kind series `i` of `chart` is drawn as: its own kind in a combo chart, else the chart's.
-pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
-    plot_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i)
-}
-
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X
 /// values (scatter/bubble), bubble sizes, number formats and colours (explicit, else the
 /// default palette derived from the workbook theme accents).
@@ -487,9 +492,13 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values, limit);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let color =
-            s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
-        let kind = effective_kind(chart.kind, s.kind, i);
+        let color = s
+            .color
+            .as_ref()
+            .and_then(|c| c.resolve(&wb.theme))
+            .map(|[r, g, b]| [r, g, b, 0xFF])
+            .unwrap_or_else(|| chart_style_series_color(&wb.theme, chart.style, i, chart.series.len().min(MAX_SERIES)));
+        let kind = chart.series_kind(i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
@@ -500,7 +509,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         if categories.is_none()
             && let Some(f) = &s.categories
         {
-            let (mut c, outer) = category_table(wb, sheet, f, &s.values, limit);
+            let (mut c, outer) = category_table(wb, sheet, f, &s.values, limit, s.innermost_categories);
             c.truncate(limit);
             if !c.is_empty() {
                 categories = Some(c);
@@ -528,13 +537,57 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
-            number_format: ref_format(wb, sheet, &s.values),
+            number_format: match &s.number_format {
+                Some(code) if s.values.trim_start().starts_with('{') => code.clone(),
+                _ => ref_format(wb, sheet, &s.values),
+            },
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
-    let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
+    let palette = if matches!(chart.style, 1 | 9) {
+        (0..n.min(PALETTE_CYCLE)).map(|i| chart_style_series_color(&wb.theme, chart.style, i, n)).collect()
+    } else {
+        default_palette(&wb.theme, n.min(PALETTE_CYCLE))
+    };
     ChartData { categories, category_levels, series, palette }
+}
+
+#[cfg(test)]
+mod explicit_style_palette_tests {
+    use super::*;
+
+    /// Verifies grayscale palette selection and fallback boundaries for explicit styles 1 and 9.
+    #[test]
+    fn explicit_style_palette_boundaries() {
+        let theme = Workbook::default().theme;
+
+        for style in [1, 9] {
+            for count in [0, 17, 255] {
+                for index in [0, 1, 4, 8, 16] {
+                    assert_eq!(chart_style_series_color(&theme, style, index, count), series_color(&theme, index));
+                }
+            }
+
+            for (count, expected_first) in [(1, 0x61), (4, 0x61), (5, 0x55), (8, 0x55), (9, 0x4F), (16, 0x4F)] {
+                assert_eq!(
+                    chart_style_series_color(&theme, style, 0, count),
+                    [expected_first, expected_first, expected_first, 255],
+                    "style {style}, count {count}",
+                );
+
+                assert_eq!(
+                    chart_style_series_color(&theme, style, 16, count),
+                    series_color(&theme, 16),
+                    "out-of-range index for style {style}, count {count}",
+                );
+            }
+        }
+
+        for style in [0, 2, 10, 48] {
+            assert_eq!(chart_style_series_color(&theme, style, 0, 4), series_color(&theme, 0));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -547,7 +600,7 @@ mod label_budget_tests {
     #[test]
     fn category_labels_share_one_byte_budget() {
         let wb = Workbook::new();
-        let (texts, _) = super::category_table(&wb, 0, r#"=IF(SEQUENCE(100000),REPT("x",32767))"#, "", super::MAX_POINTS);
+        let (texts, _) = super::category_table(&wb, 0, r#"=IF(SEQUENCE(100000),REPT("x",32767))"#, "", super::MAX_POINTS, false);
         assert_eq!(texts.len(), 100_000);
         assert_eq!(texts.first().map(String::len), Some(super::MAX_LABEL_CHARS));
         assert!(texts.iter().map(String::len).sum::<usize>() <= super::MAX_CATEGORY_BYTES);
@@ -570,7 +623,7 @@ mod label_budget_tests {
             }
         }
         // Five columns: column A is a fourth outer level and is discarded.
-        let (inner, outer) = super::category_table(&wb, 0, "=A1:E8000", "", super::MAX_POINTS);
+        let (inner, outer) = super::category_table(&wb, 0, "=A1:E8000", "", super::MAX_POINTS, false);
         assert_eq!(outer.len(), 3);
         assert_eq!(inner.last().map(String::len), Some(super::MAX_LABEL_CHARS));
         assert_eq!(outer.first().and_then(|l| l.last()).map(String::len), Some(super::MAX_LABEL_CHARS));

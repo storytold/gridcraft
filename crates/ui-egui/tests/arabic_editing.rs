@@ -13,14 +13,17 @@ fn editing(text: &str, formula_bar: bool) -> egui_kittest::Harness<'static, Shee
     let mut session = Session::new();
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(vec2(1200.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
     h.run_steps(4);
     if formula_bar {
         h.get_by_label(text).click();

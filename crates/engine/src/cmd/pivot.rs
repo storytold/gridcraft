@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Field",
             [],
             None,
-            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
+            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|distinctCount|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
             has_doc,
             add_field
         ),
@@ -118,7 +118,15 @@ pub fn specs() -> Vec<CommandSpec> {
             value_settings
         ),
         cmd!("pivot.filter", "Filter Items", [], None, "{pivot?, field, selected: [\"East\", ..] | null (all), replace?}", has_doc, filter),
-        cmd!("pivot.sort", "Sort Field", [], None, "{pivot?, field, order: asc|desc|none, replace?}", has_doc, sort),
+        cmd!(
+            "pivot.sort",
+            "Sort Field",
+            [],
+            None,
+            "{pivot?, field, order: asc|desc|none, by?: \"Sum of Sales\" (sort by a value field), replace?}",
+            has_doc,
+            sort
+        ),
         cmd!(
             "pivot.group",
             "Group Field",

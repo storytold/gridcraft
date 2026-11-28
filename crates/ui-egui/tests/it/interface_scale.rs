@@ -16,11 +16,11 @@ fn interface_size_applies_persists_and_clamps() {
         },
         crate::common::app(session),
     );
-    h.run_steps(2);
+    crate::support::frames(&mut h, 2);
     assert_eq!(h.ctx.zoom_factor(), 1.0);
 
     h.state_mut().run("view.interfaceScale", json!({"percent": 125})).unwrap();
-    h.run_steps(2);
+    crate::support::frames(&mut h, 2);
     assert_eq!(h.ctx.zoom_factor(), 1.25);
     let saved: UiState = serde_json::from_str(&serde_json::to_string(&h.state().ui).unwrap()).unwrap();
     assert_eq!(saved.interface_scale, 125);
@@ -31,7 +31,7 @@ fn interface_size_applies_persists_and_clamps() {
     assert!(h.state_mut().run("view.interfaceScale", json!({})).is_err(), "no value is an error, not a dialog");
     assert!(h.state_mut().run("view.interfaceScale", json!({"percent": "huge"})).is_err());
     h.state_mut().run("view.interfaceScale", json!({"percent": "auto"})).unwrap();
-    h.run_steps(2);
+    crate::support::frames(&mut h, 2);
     assert_eq!(h.ctx.zoom_factor(), 1.0);
 
     // A malformed or out-of-range ui.json keeps the other preferences.

@@ -48,11 +48,71 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Which anchors held a spill when the current calculation started (see [`Standing`]).
+    standing: Standing,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
     /// freed spill area may unblock doesn't walk every formula or window of cells. Filled in
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+}
+
+/// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
+/// PR #2483) lets the spill that already exists keep its cells, whichever anchor comes first;
+/// the other formula shows `#SPILL!`, and clearing the winner lets it spill. The rule here, for
+/// each cell both want:
+///
+/// 1. the anchor whose spill held that cell before this calculation keeps it, so an array that
+///    grows into another's area is `#SPILL!` even when it held a spill of its own;
+/// 2. otherwise an anchor that held a spill before this calculation outranks one that did not;
+/// 3. otherwise the anchor first in reading order (row, then column) wins.
+///
+/// Rule 3 alone decides when nothing is remembered, so the result never depends on hash order
+/// or evaluation order. A full recalculation remembers the layout the sheet held before it
+/// started, so it agrees with the incremental one; a workbook that is calculated for the first
+/// time has no such layout (rule 3 only). The xlsx reader restores the area each dynamic array
+/// was saved spilling over, so a workbook opened from a file keeps the layout it was saved with.
+#[derive(Clone, Debug, Default)]
+struct Standing {
+    /// `true`: `keys` are the anchors that held a spill (full recalculation, which lays every
+    /// spill out afresh). `false`: `keys` are the formulas that held none (incremental).
+    held: bool,
+    keys: HashSet<Key>,
+    /// The area each anchor that held a spill filled before this calculation, for the anchors the
+    /// calculation lays out again (full: all of them; incremental: the formulas it recalculates).
+    /// Any other anchor still fills the area the sheet shows.
+    areas: HashMap<Key, RangeRef>,
+}
+
+impl Standing {
+    fn had_spill(&self, k: Key) -> bool {
+        self.keys.contains(&k) == self.held
+    }
+
+    /// Whether `a` takes cells from `b` when both want them and neither held them (rules 2, 3).
+    fn outranks(&self, a: Key, b: Key) -> bool {
+        match (self.had_spill(a), self.had_spill(b)) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => (a.1.row, a.1.col) < (b.1.row, b.1.col),
+        }
+    }
+
+    /// Whether `k`'s spill held `cell` before this calculation; `now` is the area the sheet
+    /// shows for `k`.
+    fn held_cell(&self, k: Key, now: Option<RangeRef>, cell: CellRef) -> bool {
+        self.had_spill(k) && self.areas.get(&k).copied().or(now).is_some_and(|r| r.contains(cell))
+    }
+
+    /// Whether `a` takes `cell` from `b` when both want it (rule 1, then [`Self::outranks`]). Each
+    /// anchor comes with the area the sheet shows for it.
+    fn outranks_at(&self, (a, a_now): (Key, Option<RangeRef>), (b, b_now): (Key, Option<RangeRef>), cell: CellRef) -> bool {
+        match (self.held_cell(a, a_now, cell), self.held_cell(b, b_now, cell)) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => self.outranks(a, b),
+        }
+    }
 }
 
 /// A set of cells by row, each row's columns in their own set: a window of rows and columns is
@@ -101,6 +161,7 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
+            standing: Standing::default(),
             spill_errors: SpillErrors::default(),
         }
     }
@@ -269,6 +330,20 @@ impl Calc {
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
         self.rebuild(wb);
+        // The layout the sheets hold now decides who keeps cells two arrays both want.
+        // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
+        let mut areas: HashMap<Key, RangeRef> = HashMap::default();
+        for i in 0..wb.sheets.len() {
+            if let Some(sh) = wb.sheet(i) {
+                areas.extend(
+                    sh.spill_ranges
+                        .iter()
+                        .filter(|(a, _)| sh.cell(**a).is_some_and(|c| c.formula.is_some() || c.py.is_some()))
+                        .map(|(a, r)| ((i, *a), *r)),
+                );
+            }
+        }
+        let held = areas.keys().copied().collect();
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -280,7 +355,9 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
+        self.standing = Standing { held: true, keys: held, areas };
         self.run(wb, all, true);
+        self.standing = Standing::default();
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -391,6 +468,13 @@ impl Calc {
                 }
             }
         }
+        // So can the area a removed formula spilled over.
+        for (si, r) in &cleared {
+            match emptied.iter_mut().find(|x| x.0 == *si) {
+                Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
+                None => emptied.push((*si, r.end)),
+            }
+        }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
         for (si, end) in emptied {
             seeds.extend(self.unblock_candidates(wb, si, end));
@@ -472,9 +556,28 @@ impl Calc {
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
+        let mut seen: HashSet<Key> = HashSet::default();
+        if !full {
+            self.standing = Standing::default();
+        }
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
+            }
+            if !full {
+                // What each formula held before this calculation touched it.
+                for &k in &dirty {
+                    if seen.insert(k) {
+                        match wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
+                            Some(r) => {
+                                self.standing.areas.insert(k, *r);
+                            }
+                            None => {
+                                self.standing.keys.insert(k);
+                            }
+                        }
+                    }
+                }
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
@@ -493,6 +596,7 @@ impl Calc {
             let tp = prof_now();
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);
@@ -591,7 +695,45 @@ impl Calc {
             if let Some(array) = new {
                 let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
                 let range = RangeRef::new(key.1, end);
-                let blocked = spill_is_blocked(sheet, key.1, range, end);
+                // Two arrays that want the same cells (see [`Standing`]): a spill already laid out
+                // that this anchor outranks on every cell they share is taken over, and recalculated.
+                let standing = &self.standing;
+                // A spill can only be in the way where it has cells besides its anchor, and an
+                // anchor itself blocks the array. When no spilled cell lies in the range, the owners
+                // are not scanned: a full recalculation of many disjoint spills stays linear.
+                let outranked: Vec<(CellRef, RangeRef)> = if range.iter().any(|cell| cell != key.1 && sheet.spill.contains_key(&cell)) {
+                    #[cfg(test)]
+                    OWNER_SCANS.with(|n| n.set(n.get() + 1));
+                    sheet
+                        .spill_ranges
+                        .iter()
+                        .filter(|(o, r)| {
+                            **o != key.1
+                                && r.intersection(&range).is_some_and(|shared| {
+                                    shared.iter().all(|cell| standing.outranks_at((*key, old), ((key.0, **o), Some(**r)), cell))
+                                })
+                        })
+                        .map(|(o, r)| (*o, *r))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let blocked = spill_is_blocked(sheet, (*key, old), range, end, standing, array.data.len());
+                if !blocked {
+                    for (o, r) in outranked {
+                        for c in r.iter() {
+                            sheet.spill.remove(&c);
+                        }
+                        sheet.spill_ranges.remove(&o);
+                        if let Some(cell) = sheet.cells.get_mut(o) {
+                            cell.value = Value::Error(CellError::Spill);
+                            self.spill_errors.insert((key.0, o));
+                        }
+                        spill_changes.push((key.0, o));
+                        self.graph.dependents_of_range(key.0, r, &mut spill_changes);
+                        freed.push((key.0, r));
+                    }
+                }
                 if blocked {
                     if let Some(cell) = sheet.cells.get_mut(key.1) {
                         cell.value = Value::Error(CellError::Spill);
@@ -628,12 +770,34 @@ impl Calc {
     }
 }
 
-fn spill_is_blocked(sheet: &gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, end: CellRef) -> bool {
+// Owner scans done by `write_back`, to check that disjoint spills never walk every owner.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OWNER_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the array at `anchor` (with the area the sheet showed for it) can't be laid out over
+/// `range`. A spill already laid out that `anchor` outranks does not block it: it is taken over
+/// when written back.
+fn spill_is_blocked(
+    sheet: &gridcraft_model::Sheet,
+    (anchor, now): (Key, Option<RangeRef>),
+    range: RangeRef,
+    end: CellRef,
+    standing: &Standing,
+    array_len: usize,
+) -> bool {
+    let outranked = |cell: CellRef| {
+        sheet
+            .spill_ranges
+            .iter()
+            .any(|(o, r)| *o != anchor.1 && r.contains(cell) && standing.outranks_at((anchor, now), ((anchor.0, *o), Some(*r)), cell))
+    };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
-        || range.iter().any(|cell| cell != anchor && (sheet.cells.has(cell) || sheet.spill.contains_key(&cell)))
+        || range.iter().any(|cell| cell != anchor.1 && (sheet.cells.has(cell) || (sheet.spill.contains_key(&cell) && !outranked(cell))))
         || sheet.merges.iter().any(|merge| merge.intersects(&range))
-        || sheet.tables.iter().any(|table| table.range.contains(anchor))
+        || (array_len > 1 && sheet.tables.iter().any(|table| table.range.contains(anchor.1)))
 }
 
 fn fill_spill(sheet: &mut gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, array: &Array) {
@@ -666,6 +830,38 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
+}
+
+/// What [`evaluate_bounded`] found: the formula's reference (not read), its value, or that it ran
+/// out of work.
+#[derive(Clone, Debug)]
+pub enum Bounded {
+    /// The formula is a reference (`$B$1:$B$9`, a name for one, `OFFSET(…)`): its areas, unread.
+    Areas(Vec<crate::eval::Area>),
+    Value(Value),
+    /// The formula needed more than the work it was given.
+    Exhausted,
+}
+
+/// Evaluates a formula in the context of a cell with at most `work` units of work (one per
+/// expression evaluated, per cell read, …), keeping a reference result as its areas so the caller
+/// can read as much of them as it needs (a validation list's search source).
+pub fn evaluate_bounded(wb: &Workbook, sheet: usize, at: CellRef, formula: &str, work: u64) -> Bounded {
+    let body = formula.strip_prefix('=').unwrap_or(formula);
+    let Ok(expr) = gridcraft_formula::parse(body) else { return Bounded::Value(Value::Error(CellError::Name)) };
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at).with_work(work);
+    let r = ev.eval(&expr);
+    if ev.is_exhausted() {
+        return Bounded::Exhausted;
+    }
+    match r {
+        crate::eval::Ev::R(areas) => Bounded::Areas(areas),
+        crate::eval::Ev::V(v) => Bounded::Value(v),
+        crate::eval::Ev::L(_) => Bounded::Value(Value::Error(CellError::Calc)),
+    }
 }
 
 fn prof_now() -> f64 {
