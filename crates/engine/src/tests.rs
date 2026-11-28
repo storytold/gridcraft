@@ -2011,6 +2011,31 @@ fn sort_orders_numbers_exactly() {
     }
 }
 
+/// The A-to-Z buttons guess whether the first row is a header; an explicit `header` wins, as in
+/// `data.sort`, so a caller that knows its range has no header sorts the first row too.
+#[test]
+fn quick_sort_honours_an_explicit_header_flag() {
+    let rows = |s: &Session| -> Vec<Value> { (1..=3).map(|r| v(s, &format!("A{r}"))).collect() };
+    let mut s = s();
+    let input = json!({"range": "A1", "values": [["b"], [2], [-1]]});
+    let headed = [Value::from("b"), Value::Number(-1.0), Value::Number(2.0)];
+    s.execute("range.setValues", input.clone()).unwrap();
+    // The text first row reads as a header to the guess: A1 stays put and A2:A3 sort.
+    s.execute("data.sortAscending", json!({"range": "A1:A3", "column": "A"})).unwrap();
+    assert_eq!(rows(&s), headed);
+    // header: true says so outright, with the same result.
+    s.execute("range.setValues", input.clone()).unwrap();
+    s.execute("data.sortAscending", json!({"range": "A1:A3", "column": "A", "header": true})).unwrap();
+    assert_eq!(rows(&s), headed);
+    // header: false sorts every row, as Excel does for a headerless selection.
+    s.execute("range.setValues", input.clone()).unwrap();
+    s.execute("data.sortAscending", json!({"range": "A1:A3", "column": "A", "header": false})).unwrap();
+    assert_eq!(rows(&s), [Value::Number(-1.0), Value::Number(2.0), Value::from("b")]);
+    s.execute("range.setValues", input).unwrap();
+    s.execute("data.sortDescending", json!({"range": "A1:A3", "column": "A", "header": false})).unwrap();
+    assert_eq!(rows(&s), [Value::from("b"), Value::Number(2.0), Value::Number(-1.0)]);
+}
+
 /// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
 #[test]
 fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
