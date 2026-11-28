@@ -61,6 +61,23 @@ struct RowState {
     /// The cell being read lost its shared formula to a copy limit: its cached value is kept, even
     /// inside an array range (where a formula's cached values otherwise give way to the spill).
     shared_copy_refused: bool,
+    /// The furthest cell read so far, in row-major order: a cell there, after an element for
+    /// another row, repeats the last address read (#2531).
+    furthest: Option<(u32, u32)>,
+    /// One bit per column: the columns of its own row the row elements read since the row number
+    /// last changed have held.
+    seen: Vec<u64>,
+    /// The row number of the row elements whose columns `seen` holds.
+    seen_row: Option<u32>,
+    /// How many of `seen`'s words, from the first, may hold a bit.
+    seen_words: usize,
+    /// One bit per row number: an element read for it has carried row properties already, even
+    /// when elements for other rows came between.
+    props_rows: Vec<u64>,
+    /// Cells and row properties read again at an address or row already read.
+    repeated: u64,
+    /// Cells placed out of column order, or in another row's element.
+    elsewhere: u64,
 }
 
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
@@ -255,6 +272,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     for row in &rows {
         read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
     }
+    report_repeated_rows(cx, name, &st);
     charge_cells(cx, sheet_part.dropped_cells)?;
     let new_warnings: Vec<String> = cx.pkg.craft_mut().warnings().get(prev_warnings..).unwrap_or_default().to_vec();
     for w in new_warnings {
@@ -748,12 +766,97 @@ fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &
     if info != LineInfo::default() {
         sheet.rows.insert(r, info);
     }
+    // A worksheet whose rows have cells repeating an address, running backwards or naming another
+    // row than their `<row>` gets its cells where their addresses say, as a workbook always was
+    // read: a later cell wins over an earlier one at the same address, and an unaddressed cell
+    // follows the last address read. Excel itself repairs such a file ("Removed Records: Cell
+    // information"), but moving or dropping cells here would lose the values a file holds today, so
+    // the import only says what it saw (#2531).
+    //
+    // A cell of its element's own row at a column held already, by this element or by an element
+    // for the same row right before it, repeats it; so does a cell at the furthest address read so
+    // far (nothing was read after it). A cell in another row's element, or one not to the right of
+    // the rightmost cell read before it in its element, is placed elsewhere. A cell counted as a
+    // repeat is not counted again as elsewhere, and rows read out of order are not reported on
+    // their own.
+    st.seen.resize(MAX_COLS.div_ceil(64) as usize, 0);
+    if st.seen_row != Some(r) {
+        for w in st.seen.iter_mut().take(st.seen_words) {
+            *w = 0;
+        }
+        st.seen_row = Some(r);
+        st.seen_words = 0;
+    }
+    let mut rightmost: Option<u32> = None;
     for c in &row.cells {
         charge_cells(cx, 1).map_err(|e| craft_xlsx::Error::TooLarge(e.to_string()))?;
-        let pos = CellRef::new(c.at.row, c.at.col);
-        read_craft_cell(cx, sheet, st, c, pos);
+        let mut held = false;
+        if c.at.row == r {
+            let word = (c.at.col / 64) as usize;
+            let bit = 1u64 << (c.at.col % 64);
+            if let Some(w) = st.seen.get_mut(word) {
+                held = *w & bit != 0;
+                *w |= bit;
+                st.seen_words = st.seen_words.max(word + 1);
+            }
+        }
+        let pos = (c.at.row, c.at.col);
+        if held || st.furthest == Some(pos) {
+            st.repeated = st.repeated.saturating_add(1);
+        } else if c.at.row != r || rightmost.is_some_and(|right| c.at.col <= right) {
+            st.elsewhere = st.elsewhere.saturating_add(1);
+        }
+        rightmost = Some(rightmost.map_or(c.at.col, |right| right.max(c.at.col)));
+        if st.furthest.is_none_or(|far| pos > far) {
+            st.furthest = Some(pos);
+        }
+        read_craft_cell(cx, sheet, st, c, CellRef::new(c.at.row, c.at.col));
+    }
+    // A repeated row element whose properties replace ones already read for the same row number is
+    // counted with the cells, even when elements for other rows came between; properties the first
+    // element did not carry replace nothing and stay silent. A property counts as written:
+    // `craft-xlsx` hands over the attributes it decodes and the ones it keeps aside (`thickBot`),
+    // so a written default its decoding hides (`hidden="0"`) is out of reach here and only the
+    // library can count it.
+    let props = row.height.is_some()
+        || row.custom_height
+        || row.hidden
+        || row.outline_level > 0
+        || row.collapsed
+        || row.style.is_some()
+        || !row.attrs.is_empty();
+    if props {
+        let word = (r / 64) as usize;
+        if st.props_rows.len() <= word {
+            st.props_rows.resize(word + 1, 0);
+        }
+        let bit = 1u64 << (r % 64);
+        if let Some(w) = st.props_rows.get_mut(word) {
+            if *w & bit != 0 {
+                st.repeated = st.repeated.saturating_add(1);
+            } else {
+                *w |= bit;
+            }
+        }
     }
     Ok(())
+}
+
+/// Says what the rows of sheet `name` read twice or placed elsewhere (#2531). Excel repairs such
+/// a file on open; GridCraft keeps every cell where its address says, and says what it saw.
+fn report_repeated_rows(cx: &mut Ctx<'_>, name: &str, st: &RowState) {
+    if st.repeated > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell(s), or a row's properties, repeated an address or row already read; the later ones were read again",
+            st.repeated
+        ));
+    }
+    if st.elsewhere > 0 {
+        cx.warn(format!(
+            "sheet \"{name}\": {} cell(s) sat out of column order, or in another row's element, and were placed where their addresses say",
+            st.elsewhere
+        ));
+    }
 }
 
 fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &craft_xlsx::Cell, pos: CellRef) {
@@ -843,7 +946,9 @@ fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &c
     {
         sheet.spill_ranges.insert(pos, *r);
     }
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
+    // `set_cell` rather than `cells.set`: a scalar must clear a picture the same address held,
+    // or the picture side map outlives the cell and saving writes the old picture back over it.
+    sheet.set_cell(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
 fn read_craft_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &CraftFormula, pos: CellRef, dynamic: bool) -> Option<Formula> {

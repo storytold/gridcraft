@@ -4,6 +4,7 @@ use std::io::Write;
 
 use super::{make_zip, minimal};
 use crate::{IoError, read_xlsx, write_xlsx};
+use gridcraft_core::{CellRef, Value};
 
 #[test]
 fn garbage_and_truncation() {
@@ -637,6 +638,150 @@ fn ordinary_overlapping_column_ranges_keep_last_declaration() {
     assert_eq!(last.size, None);
     assert!(last.hidden);
     assert_eq!(wb.styles.get(last.style.unwrap()).num_fmt.as_str(), "0.00");
+}
+
+/// A row whose cells repeat an address, run backwards or name another row than their `<row>`:
+/// Excel never writes such shapes but repairs them on open ("Removed Records: Cell information"),
+/// while GridCraft keeps every cell where its address says, as it always read them, and names what
+/// it saw in one warning per sheet (#2531 as amended on 2026-11-22). A later cell or row element
+/// read again at an address or row already read is kept over the earlier one; a cell out of column
+/// order, or in another row's element, keeps its address; an unaddressed cell takes the column
+/// after the address read before it. The counts come from craft-libs' `craft-xlsx`, which hands
+/// the cells over as written.
+/// The warnings this change adds, filtered out of whatever else a hostile fixture reports.
+fn repeated_warnings(rep: &crate::ReadReport) -> Vec<String> {
+    rep.warnings.iter().filter(|w| w.contains("already read") || w.contains("column order")).cloned().collect()
+}
+
+fn read_body(body: &str) -> (gridcraft_model::Workbook, crate::ReadReport) {
+    read_xlsx(&minimal(body, &[], "", "")).unwrap()
+}
+
+const REPEATED: &str = "sheet \"Data\": 1 cell(s), or a row's properties, repeated an address or row already read; the later ones were read again";
+const ELSEWHERE: &str = "sheet \"Data\": 1 cell(s) sat out of column order, or in another row's element, and were placed where their addresses say";
+
+/// A repeated address keeps the later cell and is reported; an address out of column order, or one
+/// naming another row, keeps its place and is reported in the other warning. An unaddressed cell
+/// still takes the column after the address read before it, and a row that skips columns is
+/// ordinary.
+#[test]
+fn repeated_and_out_of_place_cell_addresses_are_kept_with_warnings() {
+    let at = |a: &str| CellRef::parse(a).unwrap();
+
+    let (wb, rep) = read_body(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c><c r="A1"><v>999</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1"))), (Value::Number(999.0), Value::Number(2.0)));
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
+
+    let (wb, rep) = read_body(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="B1"><v>2</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1")), s.value(at("C1"))), (Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)));
+    assert_eq!(repeated_warnings(&rep), [ELSEWHERE]);
+
+    let (wb, rep) = read_body(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("D7"))), (Value::Number(1.0), Value::Number(7.0)));
+    assert_eq!(repeated_warnings(&rep), [ELSEWHERE]);
+
+    // An unaddressed cell takes the column after the address read before it, a stray address
+    // included, as before.
+    let (wb, rep) = read_body(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="D7"><v>7</v></c><c><v>8</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("D7")), s.value(at("E1"))), (Value::Number(1.0), Value::Number(7.0), Value::Number(8.0)));
+    assert_eq!(repeated_warnings(&rep), [ELSEWHERE]);
+
+    let (wb, rep) = read_body(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c><c r="E1"><v>5</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("E1")), Value::Number(5.0));
+    assert!(repeated_warnings(&rep).is_empty(), "{:?}", rep.warnings);
+}
+
+/// A second row element for a row already read is read over it, and so are its properties: the later
+/// value, cell and height apply, and the repeated properties are reported. A property the reader
+/// keeps aside (`thickBot`) counts as written. (A written default it decodes to nothing,
+/// `hidden="0"`, is out of reach here: `craft-xlsx` hands it over as no property at all.)
+#[test]
+fn repeated_row_elements_replace_cells_and_properties() {
+    let at = |a: &str| CellRef::parse(a).unwrap();
+
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row><row r="1" ht="40" customHeight="1"><c r="A1"><v>999</v></c><c r="C1"><v>77</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("B1")), s.value(at("C1"))), (Value::Number(999.0), Value::Number(2.0), Value::Number(77.0)));
+    assert_eq!(s.rows.get(&0).and_then(|line| line.size), Some(crate::tables::pt_to_px(40.0)));
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
+
+    // Properties a later element brings where the first carried none replace nothing and stay
+    // silent.
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="1" ht="40" customHeight="1"><c r="B1"><v>2</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("B1")), Value::Number(2.0));
+    assert_eq!(s.rows.get(&0).and_then(|line| line.size), Some(crate::tables::pt_to_px(40.0)));
+    assert!(repeated_warnings(&rep).is_empty(), "{:?}", rep.warnings);
+
+    // A property-bearing element for a row read before still replaces its properties when another
+    // row's element came between them.
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="1" ht="20" customHeight="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="1" ht="30" customHeight="1"><c r="B1"><v>3</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.rows.get(&0).and_then(|line| line.size), Some(crate::tables::pt_to_px(30.0)), "the later height replaces the first");
+    assert_eq!(s.rows.get(&1).and_then(|line| line.size), None);
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
+
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="1" thickBot="1"><c r="A1"><v>1</v></c></row><row r="1" thickBot="1"><c r="B1"><v>2</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(at("B1")), Value::Number(2.0));
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
+}
+
+/// A row element that goes back keeps its cells and formatting and is not reported on its own: rows
+/// out of order are not what this warning counts.
+#[test]
+fn rows_out_of_order_keep_their_cells_and_stay_silent() {
+    let at = |a: &str| CellRef::parse(a).unwrap();
+
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="40" customHeight="1"><c r="A2"><v>2</v></c></row><row r="1" ht="9" customHeight="1"><c r="A1"><v>999</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A1")), s.value(at("A2"))), (Value::Number(999.0), Value::Number(2.0)));
+    assert_eq!(s.rows.get(&0).and_then(|line| line.size), Some(crate::tables::pt_to_px(9.0)), "the later row 1's height applies");
+    assert_eq!(s.rows.get(&1).and_then(|line| line.size), Some(crate::tables::pt_to_px(40.0)));
+    assert!(repeated_warnings(&rep).is_empty(), "{:?}", rep.warnings);
+
+    // Rows 3 and 2: row 2 is out of order and moves nothing, and neither row is reported on its
+    // own.
+    let (wb, rep) =
+        read_body(r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2" ht="9" customHeight="1"><c r="A2"><v>2</v></c></row></sheetData>"#);
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A3")), s.value(at("A2"))), (Value::Number(3.0), Value::Number(2.0)));
+    assert_eq!(s.rows.get(&1).and_then(|line| line.size), Some(crate::tables::pt_to_px(9.0)));
+    assert!(repeated_warnings(&rep).is_empty(), "{:?}", rep.warnings);
+
+    // Rows 3, 2 and 3 again: the second row 3 reads A3 over the first — the furthest address read,
+    // since nothing was read after it — so that one repeat is reported, and its height applies.
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row r="3" ht="9" customHeight="1"><c r="A3"><v>999</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A3")), s.value(at("A2"))), (Value::Number(999.0), Value::Number(2.0)));
+    assert_eq!(s.rows.get(&2).and_then(|line| line.size), Some(crate::tables::pt_to_px(9.0)));
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
+
+    // Nor does a row out of order move the cursor an element without an address follows: after 3
+    // and 2 it reuses row 3, as before, and reading A3 again is one repeat.
+    let (wb, rep) = read_body(
+        r#"<sheetData><row r="3"><c r="A3"><v>3</v></c></row><row r="2"><c r="A2"><v>2</v></c></row><row><c><v>7</v></c></row></sheetData>"#,
+    );
+    let s = wb.sheet(0).unwrap();
+    assert_eq!((s.value(at("A3")), s.value(at("A2"))), (Value::Number(7.0), Value::Number(2.0)));
+    assert_eq!(repeated_warnings(&rep), [REPEATED]);
 }
 
 /// Show Outline Symbols off (`showOutlineSymbols="0"`) is read and written back.
