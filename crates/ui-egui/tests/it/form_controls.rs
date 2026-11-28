@@ -726,3 +726,106 @@ fn assign_action_and_format_control_dialogs() {
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.title.as_str()), Some("Edit Text"));
 }
+
+#[test]
+fn form_control_gestures_respect_frozen_panes() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B1", "input": "50"})).unwrap();
+    // Vertical slider anchored in frozen row 1, extending into the scrolling pane.
+    let slider = s.execute("insert.slider", json!({"at": "D1", "width": 20, "height": 200, "link": "B1", "max": 100, "step": 1, "page": 10})).unwrap()
+        ["control"]
+        .as_u64()
+        .unwrap() as u32;
+    s.execute(
+        "macro.save",
+        json!({"name": "MarkFrozen", "steps": [{"command": "cell.set", "params": {"cell": "H1", "input": "fired"}}], "output": {"onConflict": "overwrite"}}),
+    )
+    .unwrap();
+    // Button in the scrolling pane that will straddle the horizontal freeze line when scrolled.
+    let button = s.execute("insert.button", json!({"at": "F4", "width": 100, "height": 60, "text": "Run", "macro": "MarkFrozen"})).unwrap()["control"]
+        .as_u64()
+        .unwrap() as u32;
+    s.execute("selection.set", json!({"cell": "A3"})).unwrap();
+    s.execute("view.freezePanes", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(vec2(1400.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .with_os(egui::os::OperatingSystem::Mac)
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(s, Default::default()),
+        );
+    h.run_steps(4);
+
+    // Scroll slightly so the vertical slider's scrolling-pane projection shifts relative to its
+    // frozen-pane anchor while its thumb remains visible below the freeze line.
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 30.0);
+    h.run_steps(3);
+    let geo = {
+        let app = h.state();
+        let sh = app.session.doc().unwrap().wb.active().unwrap();
+        Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll)
+    };
+    let split_y = geo.cells.top() + geo.frozen_h;
+    let slider_ctrl = control(&h, slider);
+    let scrolled_slider_rect = {
+        let r0 = rect(&h, slider);
+        r0.translate(vec2(0.0, -h.state().view().scroll.y * geo.z))
+    };
+    let (_, thumb) = slider_parts(scrolled_slider_rect, &slider_ctrl, geo.z);
+    assert!(thumb.center().y > split_y, "thumb must be visible in the scrolling pane: {thumb:?} split_y={split_y}");
+
+    // Grab the thumb in the scrolling pane and hold stationary across frames: value must not jump.
+    h.input_mut().events.push(Event::PointerMoved(thumb.center()));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton {
+        pos: thumb.center(),
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(4);
+    assert_eq!(
+        h.state().grid.control.as_ref().map(|g| (g.id, g.part)),
+        Some((slider, Part::Thumb)),
+        "press on visible scrolling-pane thumb must start the thumb gesture"
+    );
+    assert_eq!(control(&h, slider).value, 50, "holding thumb stationary in scrolling fragment must not jump to frozen-pane projection");
+    h.input_mut().events.push(Event::PointerButton {
+        pos: thumb.center(),
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+
+    // Scroll so the button at F4 straddles the freeze line: top half behind frozen rows, bottom visible.
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 45.0);
+    h.run_steps(3);
+    let btn_rect = rect(&h, button);
+    assert!(btn_rect.top() < split_y && btn_rect.bottom() > split_y, "button must straddle freeze line: {btn_rect:?} split_y={split_y}");
+    let visible_pt = egui::pos2(btn_rect.center().x, (split_y + btn_rect.bottom()) * 0.5);
+    let clipped_pt = egui::pos2(btn_rect.center().x, (btn_rect.top() + split_y) * 0.5);
+
+    // Press in the visible part, move over the clipped part behind frozen rows, and release: must not fire.
+    h.input_mut().events.push(Event::PointerMoved(visible_pt));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: visible_pt, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(
+        h.state().grid.control.as_ref().map(|g| (g.id, g.part)),
+        Some((button, Part::Button)),
+        "press on visible scrolling-pane button must start the button gesture"
+    );
+    h.input_mut().events.push(Event::PointerMoved(clipped_pt));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: clipped_pt, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(cell(&h, "H1"), Value::Empty, "releasing button over its clipped frozen-row region must not fire");
+}

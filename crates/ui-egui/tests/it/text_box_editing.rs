@@ -234,3 +234,77 @@ fn protected_sheet_refuses_to_open_the_text_box_editor() {
     assert_eq!(shape(&h, id).text, ORIGINAL);
     assert_cell_unchanged(&h);
 }
+
+#[test]
+fn text_box_editor_stays_clipped_to_its_visible_frozen_pane() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let id = session.execute("insert.textBox", json!({"at": "B1", "width": 160, "height": 100, "text": "Header Note"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap() as u32;
+    session.execute("selection.set", json!({"cell": "A3"})).unwrap();
+    session.execute("view.freezePanes", json!({})).unwrap();
+    let mut h = crate::common::harness_with(
+        crate::common::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).with_os(egui::os::OperatingSystem::Mac),
+        crate::common::app(session),
+        4,
+    );
+
+    // Scroll until only a thin 2pt strip of the spanning box remains visible below the freeze
+    // line, then double-click that strip: the inset leaves no room in the scrolling pane, so the
+    // editor must fall back to the usable frozen fragment instead of opening invisibly.
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 58.0);
+    h.run_steps(3);
+    let geo = {
+        let app = h.state();
+        let sh = app.session.doc().unwrap().wb.active().unwrap();
+        Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll)
+    };
+    let split_y = geo.cells.top() + geo.frozen_h;
+    let strip = pos2(shape_rect(&h, id).center().x, split_y + 1.0);
+    for _ in 0..2 {
+        pointer(&mut h, strip, true);
+        pointer(&mut h, strip, false);
+    }
+    h.run_steps(3);
+    assert!(h.state().text_box_editor.is_some(), "double-clicking the thin strip opens the editor");
+    assert!(
+        h.ctx.memory(|m| m.has_focus(egui::Id::unique("gridcraft.text_box_editor"))),
+        "editor must render and take focus in the fallback frozen pane"
+    );
+
+    // Clicking below the freeze line where the unclipped 100pt box would have extended must be
+    // treated as an outside click (committing/closing the editor instead of being captured by it).
+    let below_divider = pos2(shape_rect(&h, id).center().x, split_y + 20.0);
+    pointer(&mut h, below_divider, true);
+    pointer(&mut h, below_divider, false);
+    h.run_steps(2);
+    assert!(h.state().text_box_editor.is_none(), "editor must not capture clicks below the frozen divider");
+
+    // A focused scrolling text box that scrolls completely behind frozen rows and back into view
+    // must regain focus without resetting its text/caret state.
+    let id2 = h.state_mut().session.execute("insert.textBox", json!({"at": "B5", "width": 160, "height": 50, "text": "Body"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap() as u32;
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 0.0);
+    h.run_steps(2);
+    assert!(h.state_mut().begin_text_box_edit(id2));
+    h.run_steps(2);
+    assert!(h.ctx.memory(|m| m.has_focus(egui::Id::unique("gridcraft.text_box_editor"))));
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 400.0);
+    h.run_steps(3);
+    assert!(h.state().text_box_editor.is_some(), "scrolling behind frozen rows keeps the edit session open");
+    h.state_mut().view_mut().unwrap().scroll = vec2(0.0, 0.0);
+    h.run_steps(1);
+    assert!(
+        h.ctx.memory(|m| m.has_focus(egui::Id::unique("gridcraft.text_box_editor"))),
+        "editor must restore keyboard focus on the first visible frame"
+    );
+    // Pressing Tab on the very next frame after restoration must stay locked inside the editor.
+    h.input_mut().events.push(egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(
+        h.ctx.memory(|m| m.has_focus(egui::Id::unique("gridcraft.text_box_editor"))),
+        "Tab on the first frame after restoration must not steal focus from the text-box editor"
+    );
+}

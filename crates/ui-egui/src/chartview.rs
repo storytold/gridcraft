@@ -9,7 +9,7 @@ use gridcraft_chart::{HAlign, Prim, VAlign};
 use gridcraft_engine::model::{Anchor, ObjKind, ObjRef, ShapeKind, Sheet, Workbook};
 
 use crate::SheetApp;
-use crate::grid::Geo;
+use crate::grid::{Geo, Pane};
 use crate::theme::{self, Tokens};
 
 fn rgba(c: [u8; 4]) -> Color32 {
@@ -273,10 +273,59 @@ fn chart_prims(app: &SheetApp, p: &Painter, z: f32, wb: &Arc<Workbook>, si: usiz
     cache.get(d.uid, wb, si, ci, (z, p.ctx().pixels_per_point()), || render_chart(p, z, wb, si, ch))
 }
 
+/// Smallest overlap (screen points) that counts as visible in a pane, avoiding 1-ULP
+/// floating-point bleed across a freeze boundary.
+const PANE_OVERLAP_EPS: f32 = 1e-3;
+
 pub(crate) fn anchor_rect(geo: &Geo, sh: &Sheet, a: &Anchor) -> Rect {
     let x = geo.x(sh, a.cell.col) + a.dx * geo.z;
     let y = geo.y(sh, a.cell.row) + a.dy * geo.z;
     Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
+}
+
+pub(crate) fn anchor_rect_in_axes(geo: &Geo, sh: &Sheet, a: &Anchor, frozen_x: bool, frozen_y: bool) -> Rect {
+    let x = geo.pane_x(sh, a.cell.col, frozen_x) + a.dx * geo.z;
+    let y = geo.pane_y(sh, a.cell.row, frozen_y) + a.dy * geo.z;
+    Rect::from_min_size(pos2(x, y), vec2(a.width * geo.z, a.height.max(1.0) * geo.z))
+}
+
+pub(crate) fn anchor_rect_in_pane(geo: &Geo, sh: &Sheet, a: &Anchor, pane: Pane) -> Rect {
+    anchor_rect_in_axes(geo, sh, a, pane.frozen_x, pane.frozen_y)
+}
+
+pub(crate) fn rect_overlaps_pane(rect: Rect, clip: Rect) -> bool {
+    let x_ok = if rect.width() > PANE_OVERLAP_EPS {
+        rect.max.x.min(clip.max.x) - rect.min.x.max(clip.min.x) > PANE_OVERLAP_EPS
+    } else {
+        let x = rect.center().x;
+        x >= clip.min.x && x < clip.max.x
+    };
+    let y_ok = if rect.height() > PANE_OVERLAP_EPS {
+        rect.max.y.min(clip.max.y) - rect.min.y.max(clip.min.y) > PANE_OVERLAP_EPS
+    } else {
+        let y = rect.center().y;
+        y >= clip.min.y && y < clip.max.y
+    };
+    x_ok && y_ok
+}
+
+fn turned_bounds(r: Rect, deg: f32) -> Rect {
+    let rem = deg.rem_euclid(360.0);
+    if rem == 0.0 || rem == 180.0 {
+        return r;
+    }
+    let c = r.center();
+    if rem == 90.0 || rem == 270.0 {
+        return Rect::from_center_size(c, vec2(r.height(), r.width()));
+    }
+    Rect::from_points(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|q| crate::frame::turn(q, c, deg)))
+}
+
+fn anchor_visible(geo: &Geo, sh: &Sheet, a: &Anchor, clip: Rect) -> bool {
+    geo.panes().into_iter().any(|pane| {
+        let pane_clip = pane.clip.intersect(clip);
+        pane_clip.is_positive() && rect_overlaps_pane(anchor_rect_in_pane(geo, sh, a, pane), pane_clip)
+    })
 }
 
 /// The shapes one floating object painted (indices into the painter's layer) and its logical
@@ -301,7 +350,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
     if let Some((_, data)) = selected_chart_data(app, geo, wb, si, sh, p.clip_rect()) {
         paint_chart_data(p, geo, sh, &data);
     } else if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
-        && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
+        && anchor_visible(geo, sh, &ch.anchor, p.clip_rect())
     {
         // Series that are not one block of cells: each series' values on this sheet.
         for s in &ch.series {
@@ -317,12 +366,51 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
             }
         }
     }
-    let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     // The grid paints the active workbook: its pictures are cached under it.
     let doc = app.session.active().map_or(0, |d| d.uid);
+    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
+    for pane in geo.panes() {
+        let pane_clip = pane.clip.intersect(p.clip_rect());
+        if !pane_clip.is_positive() {
+            continue;
+        }
+        paint_objects_in_pane(
+            PaneObjects {
+                app,
+                painter: &p.with_clip_rect(pane_clip),
+                geo,
+                workbook: wb,
+                sheet_index: si,
+                sheet: sh,
+                doc,
+                pane,
+                hover: hover.filter(|h| pane_clip.contains(*h)),
+            },
+            &mut painted,
+        );
+    }
+    painted
+}
+
+struct PaneObjects<'a> {
+    app: &'a SheetApp,
+    painter: &'a Painter,
+    geo: &'a Geo,
+    workbook: &'a Arc<Workbook>,
+    sheet_index: usize,
+    sheet: &'a Sheet,
+    doc: u64,
+    pane: Pane,
+    hover: Option<Pos2>,
+}
+
+fn paint_objects_in_pane(ctx: PaneObjects<'_>, painted: &mut Vec<PaintedObject>) {
+    let PaneObjects { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, doc, pane, hover } = ctx;
+    let pane_clip = p.clip_rect();
+    let mut done = |start: egui::layers::ShapeIdx, rect: Rect| painted.push(PaintedObject { shapes: start.0..p.add(egui::Shape::Noop).0, rect });
     for sp in &sh.shapes {
-        let r = anchor_rect(geo, sh, &sp.anchor);
-        if !r.intersects(p.clip_rect()) {
+        let r = anchor_rect_in_pane(geo, sh, &sp.anchor, pane);
+        if !rect_overlaps_pane(turned_bounds(r, sp.rotation), pane_clip) {
             continue;
         }
         let start = p.add(egui::Shape::Noop);
@@ -394,8 +482,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         done(start, r);
     }
     for im in &sh.images {
-        let r = anchor_rect(geo, sh, &im.anchor);
-        if !r.intersects(p.clip_rect()) {
+        let r = anchor_rect_in_pane(geo, sh, &im.anchor, pane);
+        if !rect_overlaps_pane(r, pane_clip) {
             continue;
         }
         let start = p.add(egui::Shape::Noop);
@@ -407,8 +495,8 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         done(start, r);
     }
     for (ci, ch) in sh.charts.iter().enumerate() {
-        let r = anchor_rect(geo, sh, &ch.anchor);
-        if !r.intersects(p.clip_rect()) {
+        let r = anchor_rect_in_pane(geo, sh, &ch.anchor, pane);
+        if !rect_overlaps_pane(r, pane_clip) {
             continue;
         }
         let start = p.add(egui::Shape::Noop);
@@ -416,16 +504,14 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
-        paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
+        paint_prims(&p.with_clip_rect(r.intersect(pane_clip)), r.min, &prims, geo.z);
         done(start, r);
     }
-    paint_slicers(p, geo, wb, si, sh);
+    paint_slicers(p, geo, wb, si, sh, pane);
     // Form controls sit above every other object.
-    let hover = p.ctx().input(|i| i.pointer.hover_pos()).map(|h| geo.mirror_pos(h)).filter(|h| geo.in_cells(*h));
     for c in &sh.controls {
-        let r = anchor_rect(geo, sh, &c.anchor);
-        // A slider's value shows beside it while it is dragged.
-        if !r.expand(24.0).intersects(p.clip_rect()) {
+        let r = anchor_rect_in_pane(geo, sh, &c.anchor, pane);
+        if !rect_overlaps_pane(r, pane_clip) {
             continue;
         }
         let start = p.add(egui::Shape::Noop);
@@ -435,15 +521,16 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
     // The selected object's frame and handles go over every object, and move with it on a
     // right-to-left sheet.
     if let Some(o) = app.selected_object
-        && let Some(r) = object_rect(geo, sh, o)
-        && r.intersects(p.clip_rect())
+        && let Some(a) = sh.object_anchor(o)
     {
-        let start = p.add(egui::Shape::Noop);
+        let r = anchor_rect_in_pane(geo, sh, &a, pane);
         let (deg, rotates, resizes) = frame_of(sh, o);
-        crate::frame::paint(p, r, deg, rotates, resizes);
-        done(start, r);
+        if rect_overlaps_pane(turned_bounds(r, deg), pane_clip) {
+            let start = p.add(egui::Shape::Noop);
+            crate::frame::paint(p, r, deg, rotates, resizes);
+            done(start, r);
+        }
     }
-    painted
 }
 
 /// Geometry of a slicer's parts within its screen rect.
@@ -479,11 +566,11 @@ pub fn slicer_layout(rect: Rect, z: f32, n: usize, columns: u32) -> SlicerLayout
     SlicerLayout { header, clear, tiles }
 }
 
-fn paint_slicers(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet) {
+fn paint_slicers(p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, pane: Pane) {
     let tk = theme::Tokens::get(p.ctx());
     for sl in &sh.slicers {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if !r.intersects(p.clip_rect()) {
+        let r = anchor_rect_in_pane(geo, sh, &sl.anchor, pane);
+        if !rect_overlaps_pane(r, p.clip_rect()) {
             continue;
         }
         let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
@@ -525,12 +612,13 @@ pub enum SlicerAction {
 /// A click on a slicer's value tile or clear button, if any. A click elsewhere in a slicer returns
 /// `None` so the caller can treat it as a select/drag on the object.
 pub fn slicer_click(geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize, p: Pos2) -> Option<(u32, SlicerAction)> {
-    if !geo.cells.contains(p) || objects_hidden(wb) {
+    let pane = geo.pane_at(p)?;
+    if objects_hidden(wb) {
         return None;
     }
     for sl in sh.slicers.iter().rev() {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if !r.contains(p) {
+        let r = anchor_rect_in_pane(geo, sh, &sl.anchor, pane);
+        if !rect_overlaps_pane(r, pane.clip) || !r.contains(p) {
             continue;
         }
         let items = gridcraft_engine::cmd::slicer::slicer_items(wb, si, sl);
@@ -584,7 +672,7 @@ pub(crate) fn selected_chart_data(
         _ => None,
     };
     // A drag that scrolls the chart away keeps its preview: the block is still being dragged.
-    if dragged.is_none() && !anchor_rect(geo, sh, &ch.anchor).intersects(clip) {
+    if dragged.is_none() && !anchor_visible(geo, sh, &ch.anchor, clip) {
         return None;
     }
     let data = gridcraft_engine::chart_data::chart_data(wb, si, ch).filter(|d| d.sheet == si)?;
@@ -649,63 +737,76 @@ pub fn object_rect(geo: &Geo, sh: &Sheet, o: ObjRef) -> Option<Rect> {
 /// area: a handle that lies under the headers, the formula bar or a scroll bar leaves the press
 /// to them. Nothing while objects are hidden.
 pub fn selected_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect, crate::objects::Handle)> {
-    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+    let pane = geo.pane_at(p)?;
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
     }
     let o = app.selected_object?;
-    let r = object_rect(geo, sh, o)?;
+    let a = sh.object_anchor(o)?;
+    let r = anchor_rect_in_pane(geo, sh, &a, pane);
     let (deg, _, resizes) = frame_of(sh, o);
-    if !resizes {
+    if !resizes || !rect_overlaps_pane(turned_bounds(r, deg), pane.clip) {
         return None;
     }
-    crate::objects::handle_at(r, crate::frame::turn(p, r.center(), -deg)).map(|h| (o, r, h))
+    let h = crate::objects::handle_at(r, crate::frame::turn(p, r.center(), -deg))?;
+    let knob = crate::frame::turn(h.pos(r), r.center(), deg);
+    let knob_rect = Rect::from_center_size(knob, vec2(2.0 * crate::frame::HANDLE_R, 2.0 * crate::frame::HANDLE_R));
+    pane.clip.intersects(knob_rect).then_some((o, r, h))
 }
 
 /// The selected object and its rect when `p` is on its rotation handle.
 pub fn selected_rotate(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
-    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+    let pane = geo.pane_at(p)?;
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
     }
     let o = app.selected_object?;
-    let r = object_rect(geo, sh, o)?;
+    let a = sh.object_anchor(o)?;
+    let r = anchor_rect_in_pane(geo, sh, &a, pane);
     let (deg, rotates, _) = frame_of(sh, o);
-    (rotates && matches!(crate::frame::grab_at(r, deg, true, p), Some(crate::frame::Grab::Rotate))).then_some((o, r))
+    if !rotates || !rect_overlaps_pane(turned_bounds(r, deg), pane.clip) {
+        return None;
+    }
+    let knob = crate::frame::rotate_handle(r, deg);
+    let knob_rect = Rect::from_center_size(knob, vec2(2.0 * crate::frame::HANDLE_R, 2.0 * crate::frame::HANDLE_R));
+    (pane.clip.intersects(knob_rect) && matches!(crate::frame::grab_at(r, deg, true, p), Some(crate::frame::Grab::Rotate))).then_some((o, r))
 }
 
 /// The topmost object under `p` and its rect: form controls paint on top, so they are hit first,
 /// then slicers, charts, pictures and shapes (equations included), each from the top of its stack.
 /// Nothing is hit outside the cell area or while objects are hidden.
 pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Rect)> {
-    if !geo.cells.contains(p) || app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
+    let pane = geo.pane_at(p)?;
+    if app.session.active().is_some_and(|d| objects_hidden(&d.wb)) {
         return None;
     }
     for c in sh.controls.iter().rev() {
-        let r = anchor_rect(geo, sh, &c.anchor);
-        if r.contains(p) {
+        let r = anchor_rect_in_pane(geo, sh, &c.anchor, pane);
+        if rect_overlaps_pane(r, pane.clip) && r.contains(p) {
             return Some((ObjRef::new(ObjKind::Control, c.id), r));
         }
     }
     for sl in sh.slicers.iter().rev() {
-        let r = anchor_rect(geo, sh, &sl.anchor);
-        if r.contains(p) {
+        let r = anchor_rect_in_pane(geo, sh, &sl.anchor, pane);
+        if rect_overlaps_pane(r, pane.clip) && r.contains(p) {
             return Some((ObjRef::new(ObjKind::Slicer, sl.id), r));
         }
     }
     for ch in sh.charts.iter().rev() {
-        let r = anchor_rect(geo, sh, &ch.anchor);
-        if r.expand(4.0).contains(p) {
+        let r = anchor_rect_in_pane(geo, sh, &ch.anchor, pane);
+        if rect_overlaps_pane(r, pane.clip) && r.expand(4.0).contains(p) {
             return Some((ObjRef::new(ObjKind::Chart, ch.id), r));
         }
     }
     for im in sh.images.iter().rev() {
-        let r = anchor_rect(geo, sh, &im.anchor);
-        if r.contains(p) {
+        let r = anchor_rect_in_pane(geo, sh, &im.anchor, pane);
+        if rect_overlaps_pane(r, pane.clip) && r.contains(p) {
             return Some((ObjRef::new(ObjKind::Image, im.id), r));
         }
     }
     for s in sh.shapes.iter().rev() {
-        let r = anchor_rect(geo, sh, &s.anchor);
-        if r.expand(3.0).contains(crate::frame::turn(p, r.center(), -s.rotation)) {
+        let r = anchor_rect_in_pane(geo, sh, &s.anchor, pane);
+        if rect_overlaps_pane(turned_bounds(r, s.rotation), pane.clip) && r.expand(3.0).contains(crate::frame::turn(p, r.center(), -s.rotation)) {
             let kind = if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape };
             return Some((ObjRef::new(kind, s.id), r));
         }
@@ -816,5 +917,24 @@ pub(crate) mod tests {
             out.textures_delta.clear();
         }
         assert!(checked);
+    }
+
+    #[test]
+    fn rotated_zero_width_line_still_overlaps_pane() {
+        let left = Rect::from_min_max(pos2(0.0, 100.0), pos2(200.0, 400.0));
+        let right = Rect::from_min_max(pos2(200.0, 100.0), pos2(400.0, 400.0));
+        // Long vertical zero-width line centered right on the x = 200 freeze divider rotated 180°.
+        let divider_line = Rect::from_min_size(pos2(200.0, -7800.0), vec2(0.0, 16_000.0));
+        let turned_180 = turned_bounds(divider_line, 180.0);
+        assert_eq!(turned_180.width(), 0.0);
+        assert!(!rect_overlaps_pane(turned_180, left));
+        assert!(rect_overlaps_pane(turned_180, right));
+        // Near-180° tilt leaving a sub-epsilon width residue inside the pane still counts as visible.
+        let tilted = turned_bounds(Rect::from_min_size(pos2(250.0, 150.0), vec2(0.0, 100.0)), 180.0002);
+        assert!(tilted.width() > 0.0 && tilted.width() <= PANE_OVERLAP_EPS);
+        assert!(rect_overlaps_pane(tilted, right));
+        let above = Rect::from_min_size(pos2(250.0, 20.0), vec2(0.0, 50.0));
+        assert!(!rect_overlaps_pane(turned_bounds(above, 90.0), right));
+        assert!(!rect_overlaps_pane(turned_bounds(above, 180.0), right));
     }
 }
