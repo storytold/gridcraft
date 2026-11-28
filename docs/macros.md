@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-14 · **Change:** trivial (debugger start lists the output override; earlier: form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -157,10 +157,11 @@ on, as after any recalculation.
 
 `macro.debug {action, …}` runs a macro a step at a time. The actions are:
 
-- `start` with `name` and the options of `macro.run` (`inputs`, `onConflict`, `overwrite`,
+- `start` with `name` and the options of `macro.run` (`inputs`, `output`, `onConflict`, `overwrite`,
   `approve`, `timeLimit`), refused as `macro.run` refuses them when they are of the wrong kind. The
   checks, the approval and the footprint come first, as for `macro.run`; then the run pauses
-  before its first step.
+  before its first step. For example, `macro.debug {action: "start", name: "Totals", output: "F2"}`
+  starts Totals with F2 as its output anchor.
 - `step` runs the next step; `continue` runs to the next breakpoint or the end; `runTo` (`step`:
   a path) runs to that step, stopping at a breakpoint on the way.
 - `stop` ends the run: `keep: true` keeps the changes as one undo step, otherwise they are rolled
@@ -371,3 +372,9 @@ recorded. A workbook can hold a script and a macro with the same name.
 
 A VBA project in an `.xlsm` or `.xltm` file is preserved on save and never run. GridCraft macros
 are stored apart from it.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-14 | trivial | List the debugger start output override and show an output-anchor example. |
