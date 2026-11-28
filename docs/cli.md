@@ -1,7 +1,16 @@
 # gridcraft-cli
 
-Headless GridCraft: inspect, convert, evaluate, script and serve MCP without a window. Errors go to stderr with a
-non-zero exit code.
+Headless GridCraft: inspect, convert, evaluate, script and serve MCP without a window.
+
+`gridcraft-cli` follows [RFC-0018](https://github.com/storytold/craft-contrib/blob/main/rfcs/0018-cli-conventions.md)
+(command-line conventions), and `gridcraft-cli --help` and `<subcommand> --help` are the reference for every flag; this page
+shows what they are for. Exit status: 0 success, 1 a command failed (`check` found a difference), 2 a usage error (an
+unknown or repeated flag, a bad value, flags that conflict or that a subcommand doesn't take, all checked before any file is
+touched), and 128 plus the signal number when a signal ends the process. Errors are `error: <message>` on stderr; results
+are on stdout. `--version`/`-V` work on every subcommand, and there is no `version` subcommand. `--json` is on the
+subcommands whose output a program reads. The CLI reads no environment variables of its own. The Linux packages (deb, rpm and
+tar.gz) and the FreeBSD package install its man pages and its bash, zsh and fish completions; the macOS and Windows downloads
+do not carry them (RFC-0018 leaves those platforms out of scope).
 
 `.xls` (Excel 97-2003, BIFF8) files are imported with values, formulas, number formats, merges,
 column widths, row heights and defined names; fonts, fills, borders, charts and other objects are
@@ -32,7 +41,6 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `functions [--json] [--search X] [--category C]` | `gridcraft-cli functions --search lookup` |
 | `mcp [--connect PORT] [--in FILE \| --sample NAME]` | MCP server on stdio ([mcp.md](mcp.md)). |
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
-| `version` | Prints `gridcraft-cli <version>`. |
 
 ## `run`
 

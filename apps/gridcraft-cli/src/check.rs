@@ -15,7 +15,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Read as _};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
 
 use gridcraft_engine::calc::{Calc, Key};
 use gridcraft_engine::cmd::inspect::value_json;
@@ -24,7 +23,10 @@ use gridcraft_engine::formula::{Expr, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::{Args, USAGE, number_text, pretty};
+use crate::args::CheckArgs;
+use crate::commands::{number_text, pretty};
+use crate::error::CliError;
+use crate::{Io, outln};
 
 mod calc;
 mod fidelity;
@@ -189,32 +191,16 @@ impl Diffs {
 
 /// `check <file-or-dir>... [--json] [--tolerance X] [--max-report N]`. Exit 0 when every file opens,
 /// every checked formula matches and every round trip is clean; 1 otherwise; 2 on a usage error.
-pub fn main(args: &[String]) -> ExitCode {
-    let usage = |e: String| {
-        eprintln!("gridcraft-cli: {e}\n{USAGE}");
-        ExitCode::from(2)
-    };
-    let a = match Args::parse(args, &["tolerance", "max-report"], &["json"]) {
-        Ok(a) => a,
-        Err(e) => return usage(e),
-    };
-    if a.positional.is_empty() {
-        return usage("missing <file-or-dir>".into());
-    }
+pub(crate) fn run(a: &CheckArgs, io: &mut Io) -> Result<i32, CliError> {
     let mut opts = Options::default();
-    if let Some(t) = a.opt("tolerance") {
-        match t.parse::<f64>() {
-            Ok(t) if t.is_finite() && t >= 0.0 => opts.tolerance = t,
-            _ => return usage(format!("--tolerance needs a number ≥ 0, not `{t}`")),
-        }
+    if let Some(t) = a.tolerance {
+        opts.tolerance = t;
     }
-    if let Some(n) = a.opt("max-report") {
-        match n.parse::<usize>() {
-            Ok(n) => opts.max_report = n,
-            Err(_) => return usage(format!("--max-report needs a whole number, not `{n}`")),
-        }
+    if let Some(n) = a.max_report {
+        opts.max_report = n;
     }
-    let Discovery { files, failures: mut reports, .. } = collect_inputs(&a.positional);
+    let inputs: Vec<String> = a.inputs.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let Discovery { files, failures: mut reports, .. } = collect_inputs(&inputs);
     reports.extend(files.iter().map(|p| {
         let path = p.to_string_lossy().into_owned();
         match gridcraft_engine::io::read_file(&path) {
@@ -222,12 +208,12 @@ pub fn main(args: &[String]) -> ExitCode {
             Err(e) => FileReport { path, error: Some(e.to_string()), ..Default::default() },
         }
     }));
-    if a.has("json") {
-        outln!("{}", pretty(&report_json(&reports, &opts)));
+    if a.json {
+        outln!(io, "{}", pretty(&report_json(&reports, &opts)));
     } else {
-        print_human(&reports, &opts);
+        print_human(io, &reports, &opts)?;
     }
-    if !files.is_empty() && reports.iter().all(FileReport::is_clean) { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    Ok(if !files.is_empty() && reports.iter().all(FileReport::is_clean) { 0 } else { 1 })
 }
 
 #[derive(Default)]

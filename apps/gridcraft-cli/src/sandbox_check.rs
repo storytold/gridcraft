@@ -12,54 +12,41 @@
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::process::ExitCode;
 
+use crate::args::SandboxCheckArgs;
+use crate::error::CliError;
+use crate::{Io, errln, outln};
 use gridcraft_sandbox::{Canary, Policy, REFUSED_EXIT_CODE, REPORT_FLAG, Support};
 
-pub fn main(args: &[String]) -> ExitCode {
-    match run(args) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("gridcraft-cli: sandbox-check: {e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn run(args: &[String]) -> Result<ExitCode, String> {
+pub(crate) fn run(a: &SandboxCheckArgs, io: &mut Io) -> Result<i32, CliError> {
     let mut policy = Policy::new().with_system_libraries();
-    let mut it = args.iter();
-    let mut program: Option<(PathBuf, Vec<OsString>)> = None;
-    while let Some(a) = it.next() {
-        match a.as_str() {
-            "--read" => policy = policy.read(it.next().ok_or("--read needs a path")?),
-            "--exec" => policy = policy.exec(it.next().ok_or("--exec needs a path")?),
-            "--" => {
-                let p = it.next().ok_or("a program follows `--`")?;
-                program = Some((PathBuf::from(p), it.by_ref().map(OsString::from).collect()));
-            }
-            other => return Err(format!("unknown option `{other}`")),
-        }
+    for path in &a.read {
+        policy = policy.read(path);
     }
+    for path in &a.exec {
+        policy = policy.exec(path);
+    }
+    let program: Option<(PathBuf, Vec<OsString>)> = a.program.split_first().map(|(p, rest)| (PathBuf::from(p), rest.to_vec()));
     // With a program, its standard output is passed through untouched, so this command's own
     // lines go to standard error; the self-test's report is the output, on standard output.
     let report = program.is_none();
-    let say = |line: String| {
+    let say = |io: &mut Io, line: String| -> Result<(), CliError> {
         if report {
-            outln!("{line}");
+            outln!(io, "{line}");
         } else {
-            eprintln!("{line}");
+            errln!(io, "{line}");
         }
+        Ok(())
     };
     match gridcraft_sandbox::support() {
-        Support::Available(how) => say(format!("sandbox: available ({how})")),
+        Support::Available(how) => say(io, format!("sandbox: available ({how})"))?,
         Support::Unsupported(why) => {
-            say(format!("sandbox: unsupported ({why})"));
-            return Ok(ExitCode::from(2));
+            say(io, format!("sandbox: unsupported ({why})"))?;
+            return Ok(2);
         }
     }
-    let canary = Canary::create().map_err(|e| e.to_string())?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let canary = Canary::create().map_err(|e| CliError::Sandbox(e.to_string()))?;
+    let exe = std::env::current_exe().map_err(|e| CliError::Sandbox(e.to_string()))?;
     let (program, program_args) = match program {
         Some((p, a)) => (p, a),
         // A confined copy of this program, reporting each attempt; it reads its own executable as
@@ -70,29 +57,38 @@ fn run(args: &[String]) -> Result<ExitCode, String> {
         }
     };
     let policy = policy.exec(program.clone());
-    let mut cmd = gridcraft_sandbox::launch_command(&policy, &canary, &program, &program_args).map_err(|e| e.to_string())?;
-    let status = cmd.status().map_err(|e| format!("couldn't start the launcher: {e}"))?;
+    let mut cmd = gridcraft_sandbox::launch_command(&policy, &canary, &program, &program_args).map_err(|e| CliError::Sandbox(e.to_string()))?;
+    let status = cmd.status().map_err(|e| CliError::Sandbox(format!("couldn't start the launcher: {e}")))?;
     drop(canary);
     match status.code() {
         Some(0) => {
-            say(if report { "result: every attempt is as the sandbox requires" } else { "result: the program ran confined and succeeded" }.into());
-            Ok(ExitCode::SUCCESS)
+            say(
+                io,
+                if report { "result: every attempt is as the sandbox requires" } else { "result: the program ran confined and succeeded" }.into(),
+            )?;
+            Ok(0)
         }
         Some(REFUSED_EXIT_CODE) => {
             // The launcher's refusal and a program's own exit share the code; the launcher's reason,
             // when it refused, is the `gridcraft-sandbox: refused:` line above.
-            say(format!(
-                "result: exit code {REFUSED_EXIT_CODE}: the launcher refused to run the program (its reason is above), or the program itself exited with {REFUSED_EXIT_CODE}"
-            ));
-            Ok(ExitCode::FAILURE)
+            say(
+                io,
+                format!(
+                    "result: exit code {REFUSED_EXIT_CODE}: the launcher refused to run the program (its reason is above), or the program itself exited with {REFUSED_EXIT_CODE}"
+                ),
+            )?;
+            Ok(1)
         }
         other => {
-            say(format!(
-                "result: {} ({})",
-                if report { "some attempts are not as the sandbox requires" } else { "the program failed" },
-                other.map_or("no exit code".into(), |c| format!("exit code {c}"))
-            ));
-            Ok(ExitCode::FAILURE)
+            say(
+                io,
+                format!(
+                    "result: {} ({})",
+                    if report { "some attempts are not as the sandbox requires" } else { "the program failed" },
+                    other.map_or("no exit code".into(), |c| format!("exit code {c}"))
+                ),
+            )?;
+            Ok(1)
         }
     }
 }

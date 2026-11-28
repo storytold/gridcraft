@@ -193,7 +193,7 @@ class FlatNightlyTar(unittest.TestCase):
 
 
 class StagedFormats(unittest.TestCase):
-    """package.sh with stub binaries, a stub nfpm and a stub strip."""
+    """package.sh with stub binaries, a stub man-and-completions example, a stub nfpm and a stub strip."""
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory()
@@ -208,6 +208,16 @@ class StagedFormats(unittest.TestCase):
             binary = self.target / "release" / name
             binary.write_text(RECORDER)
             binary.chmod(0o755)
+        # The man-and-completions example writes the files it does for a real build; this one writes placeholders.
+        example = self.target / "release" / "examples" / "man-and-completions"
+        example.parent.mkdir(parents=True, exist_ok=True)
+        example.write_text(
+            '#!/bin/sh\nmkdir -p "$1"\n'
+            'for f in gridcraft-cli.bash _gridcraft-cli gridcraft-cli.fish gridcraft-cli.1 gridcraft-cli-run.1; do\n'
+            '  echo "stub" >"$1/$f"\n'
+            'done\n'
+        )
+        example.chmod(0o755)
         # `strip` would refuse the recorder scripts; the real one is a no-op for a non-ELF file too.
         (self.stubs / "strip").write_text("#!/bin/sh\nexit 0\n")
         (self.stubs / "strip").chmod(0o755)

@@ -9,6 +9,10 @@ publish = false
 [lints]
 workspace = true
 
+[lib]
+name = "gridcraft_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "gridcraft-cli"
 path = "src/main.rs"
@@ -22,3 +26,10 @@ log = { workspace = true }
 # `check`: validating the packages GridCraft writes (content types, relationships).
 zip = { workspace = true }
 quick-xml = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+
+[dev-dependencies]
+# The completions and man pages (examples/man-and-completions.rs), generated from the clap definition.
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
