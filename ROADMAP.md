@@ -291,6 +291,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-07 | About window with contributor and model credits; macOS release runner |
 | 2026-10-06 | M0–M13 first pass: engine, 478 functions, XLSX/CSV, egui UI, charts, PivotTables with XLSX round-trip, PDF and printing, what-if, spelling, Draw, task panes, MCP, CLI, web build, release packaging |
 | 2026-10-05 | Repository created |
+| 2026-11-02 | macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication. |
 
 ## Revision history
 
@@ -391,3 +392,4 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+| 2026-11-10 | trivial | Document the Keychain-profile notarization option in the macOS section and keep its progress entry in the dated table. |
