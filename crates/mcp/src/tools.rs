@@ -633,6 +633,7 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Args) -> Result<Value, String> 
                 Some(v @ Value::Object(_)) => v.clone(),
                 Some(_) => return Err("`params` must be an object".into()),
             };
+            gridcraft_engine::check_params(cmd, &p).map_err(|e| e.to_string())?;
             exec(b, cmd, p)
         }
         "list_commands" => b.call("engine.commands", pick(a, &["search"])),

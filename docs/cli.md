@@ -48,6 +48,8 @@ The first failing step stops the run with a non-zero exit.
 
 A `--cmd` is `id`, `id={json}` or `id {json}`. A script has one command per line in the same forms, or as JSON objects
 `{"command": "cell.set", "params": {...}}`; blank lines and `#` comments are skipped.
+A key the line or the command does not take is an error naming it (``unknown key `nam` (takes {name?, before?: index})``), not
+a command that ran with its defaults; `gridcraft-cli commands --search X` shows what each command takes.
 
 ```sh
 gridcraft-cli run --in book.xlsx \
