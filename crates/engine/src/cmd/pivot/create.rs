@@ -185,7 +185,7 @@ fn insert_sheet_before_active(cx: &mut Ctx) -> usize {
     let at = cx.wb.active_sheet().min(cx.wb.sheets.len());
     let nm = cx.wb.next_sheet_name();
     cx.wb.sheets.insert(at, Arc::new(Sheet::new(nm)));
-    for n in cx.wb.names.iter_mut() {
+    for n in cx.wb.names_mut().iter_mut() {
         if let Some(sc) = n.scope.as_mut()
             && *sc >= at
         {

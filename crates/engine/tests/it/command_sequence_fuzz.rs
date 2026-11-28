@@ -535,7 +535,7 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
     wb.set_active_sheet(0);
-    wb.names.retain(|n| n.name != WATCH_NAME);
+    wb.names_mut().retain(|n| n.name != WATCH_NAME);
     for sh in wb.sheets.iter_mut() {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();

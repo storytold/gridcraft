@@ -331,7 +331,7 @@ fn edited_workbooks_keep_consistent_relationships() {
 
     // Deleting the sheet drops its content; workbook-level content stays.
     wb.sheets.remove(1);
-    wb.names.clear();
+    wb.names_mut().clear();
     let u = Unpacked::new(&write_xlsx(&wb).unwrap());
     u.assert_valid();
     for d in [PRINTER, OLE, EMF, QUERY_TABLE.as_bytes(), CTRL_PROP.as_bytes()] {

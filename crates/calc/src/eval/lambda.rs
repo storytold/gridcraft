@@ -2,11 +2,14 @@ use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
 use super::special::is_special;
 use super::{Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, MAX_TAIL_CALLS, Tail, Value, err};
+use gridcraft_functions::Gather;
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
     pub fn apply_lambda(&mut self, l: &Lambda, args: &[Expr]) -> Ev {
         match self.bind_args(l, args) {
+            // An argument that read can have handed the formula back: no call after it.
+            Ok(_) if self.refuses_calls() => err(CellError::Calc),
             Ok(bound) => self.call_lambda_values(l, bound),
             Err(e) => e,
         }
@@ -77,6 +80,8 @@ impl<'h> Evaluator<'h> {
 
     fn tail_call(&mut self, l: Arc<Lambda>, args: &[Expr]) -> Tail {
         match self.bind_args(&l, args) {
+            // As in `apply_lambda`: an argument that read can have handed the formula back.
+            Ok(_) if self.refuses_calls() => Tail::Done(err(CellError::Calc)),
             Ok(bound) => Tail::Call(l, bound),
             Err(e) => Tail::Done(e),
         }
@@ -129,6 +134,8 @@ impl<'h> Evaluator<'h> {
             return err(CellError::Value);
         }
         let base = self.env.len();
+        // Each variable is bound for the values after it and for the result, and shadows a defined
+        // name (`Evaluator::name`); `Walk::collect` in `eval/special.rs` binds LET in the same order.
         for pair in args[..args.len() - 1].chunks(2) {
             let [Expr::Name(n), v] = pair else {
                 self.env.truncate(base);
@@ -175,21 +182,24 @@ impl<'h> Evaluator<'h> {
                 let arrays: Vec<Arc<Array>> = args[..args.len() - 1].iter().map(|a| as_array(self.value(a))).collect();
                 let rows = arrays.iter().map(|a| a.rows).max().unwrap_or(1);
                 let cols = arrays.iter().map(|a| a.cols).max().unwrap_or(1);
-                let Some(n) = broadcast_len(rows, cols) else { return err(CellError::Num) };
+                if broadcast_len(rows, cols).is_none() {
+                    return err(CellError::Num);
+                }
                 // The LAMBDA takes one parameter per array.
                 if l.params.len() != arrays.len() {
                     return err(CellError::Value);
                 }
-                let mut out = Vec::with_capacity(n);
-                for r in 0..rows {
-                    for c in 0..cols {
-                        let bound = l.params.iter().zip(arrays.iter()).map(|(p, a)| (p.clone(), Ev::V(a.get_broadcast(r, c)))).collect();
-                        let v = self.call_lambda_values(&l, bound);
-                        let Some(one) = single(self.deref(v)) else { return err(CellError::Calc) };
-                        out.push(one);
-                    }
+                // The arrays broadcast to far more calls than they hold values: the calls go
+                // through `Gather` (see `gridcraft_functions::Halt`).
+                let calls = Gather::new(&*self).grid(self, (rows, cols), |ev, r, c| {
+                    let bound = l.params.iter().zip(arrays.iter()).map(|(p, a)| (p.clone(), Ev::V(a.get_broadcast(r, c)))).collect();
+                    let v = ev.call_lambda_values(&l, bound);
+                    single(ev.deref(v)).ok_or_else(|| err(CellError::Calc))
+                });
+                match calls {
+                    Ok(out) => Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc))),
+                    Err(e) => e,
                 }
-                Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc)))
             }
             "REDUCE" | "SCAN" => {
                 if args.len() != 3 {
@@ -201,20 +211,28 @@ impl<'h> Evaluator<'h> {
                 if l.params.len() != 2 {
                     return err(CellError::Value);
                 }
-                let mut scan = Vec::with_capacity(arr.data.len());
-                for v in arr.data.iter() {
-                    let bound = vec![(l.params[0].clone(), Ev::V(acc.clone())), (l.params[1].clone(), Ev::V(v.clone()))];
-                    let r = self.call_lambda_values(&l, bound);
-                    acc = self.deref(r);
-                    if name == "SCAN" {
-                        let Some(one) = single(acc.clone()) else { return err(CellError::Calc) };
-                        scan.push(one);
-                    }
-                }
+                // The calls go through `Gather` (see `gridcraft_functions::Halt`).
+                let gather = Gather::new(&*self);
+                let bound = |acc: &Value, v: &Value| vec![(l.params[0].clone(), Ev::V(acc.clone())), (l.params[1].clone(), Ev::V(v.clone()))];
                 if name == "SCAN" {
-                    Ev::V(Array::new(arr.rows, arr.cols, scan).map(Value::from).unwrap_or(Value::Error(CellError::Calc)))
-                } else {
-                    Ev::V(acc)
+                    let scan = gather.collect(self, arr.data.iter(), |ev, v| {
+                        let r = ev.call_lambda_values(&l, bound(&acc, v));
+                        acc = ev.deref(r);
+                        single(acc.clone()).ok_or_else(|| err(CellError::Calc))
+                    });
+                    return match scan {
+                        Ok(scan) => Ev::V(Array::new(arr.rows, arr.cols, scan).map(Value::from).unwrap_or(Value::Error(CellError::Calc))),
+                        Err(e) => e,
+                    };
+                }
+                let reduced = gather.each(self, arr.data.iter(), |ev, v| {
+                    let r = ev.call_lambda_values(&l, bound(&acc, v));
+                    acc = ev.deref(r);
+                    Ok(())
+                });
+                match reduced {
+                    Ok(()) => Ev::V(acc),
+                    Err(e) => e,
                 }
             }
             "BYROW" | "BYCOL" => {
@@ -229,20 +247,21 @@ impl<'h> Evaluator<'h> {
                 }
                 let by_row = name == "BYROW";
                 let n = if by_row { arr.rows } else { arr.cols };
-                let mut out = Vec::with_capacity(n);
-                for i in 0..n {
+                // The calls go through `Gather` (see `gridcraft_functions::Halt`).
+                let calls = Gather::new(&*self).collect(self, 0..n, |ev, i| {
                     let slice: Vec<Value> = if by_row {
                         (0..arr.cols).map(|c| arr.get(i, c).cloned().unwrap_or_default()).collect()
                     } else {
                         (0..arr.rows).map(|r| arr.get(r, i).cloned().unwrap_or_default()).collect()
                     };
                     let a = if by_row { Array::row(slice) } else { Array::column(slice) };
-                    let r = self.call_lambda_values(&l, vec![(p.clone(), Ev::V(a.into()))]);
-                    let Some(one) = single(self.deref(r)) else { return err(CellError::Calc) };
-                    out.push(one);
+                    let r = ev.call_lambda_values(&l, vec![(p.clone(), Ev::V(a.into()))]);
+                    single(ev.deref(r)).ok_or_else(|| err(CellError::Calc))
+                });
+                match calls {
+                    Ok(out) => Ev::V(if by_row { Array::column(out) } else { Array::row(out) }.into()),
+                    Err(e) => e,
                 }
-                let a = if by_row { Array::column(out) } else { Array::row(out) };
-                Ev::V(a.into())
             }
             "MAKEARRAY" => {
                 if args.len() != 3 {
@@ -260,19 +279,19 @@ impl<'h> Evaluator<'h> {
                     return err(CellError::Value);
                 }
                 let (rows, cols) = (rows as usize, cols as usize);
-                let mut out = Vec::with_capacity(rows * cols);
-                for r in 0..rows {
-                    for c in 0..cols {
-                        let bound = vec![
-                            (l.params[0].clone(), Ev::V(Value::number(r as f64 + 1.0))),
-                            (l.params[1].clone(), Ev::V(Value::number(c as f64 + 1.0))),
-                        ];
-                        let v = self.call_lambda_values(&l, bound);
-                        let Some(one) = single(self.deref(v)) else { return err(CellError::Calc) };
-                        out.push(one);
-                    }
+                // As MAP, through `Gather`.
+                let calls = Gather::new(&*self).grid(self, (rows, cols), |ev, r, c| {
+                    let bound = vec![
+                        (l.params[0].clone(), Ev::V(Value::number(r as f64 + 1.0))),
+                        (l.params[1].clone(), Ev::V(Value::number(c as f64 + 1.0))),
+                    ];
+                    let v = ev.call_lambda_values(&l, bound);
+                    single(ev.deref(v)).ok_or_else(|| err(CellError::Calc))
+                });
+                match calls {
+                    Ok(out) => Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc))),
+                    Err(e) => e,
                 }
-                Ev::V(Array::new(rows, cols, out).map(Value::from).unwrap_or(Value::Error(CellError::Calc)))
             }
             _ => err(CellError::Name),
         }

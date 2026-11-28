@@ -3966,7 +3966,10 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "precisionAsDisplayed": false}));
+    assert_eq!(
+        r,
+        json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "precisionAsDisplayed": false, "multiThreaded": true, "threads": 0})
+    );
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -6067,6 +6070,25 @@ fn precision_as_displayed_applies_in_manual_mode() {
 }
 
 #[test]
+fn leaving_manual_mode_calculates_what_waited() {
+    // In manual mode an edited cell's dependents wait for the next calculation. Leaving manual
+    // mode calculates them, for Automatic and for Automatic except tables alike: an edit elsewhere
+    // afterwards doesn't reach them.
+    for mode in ["automatic", "automaticExceptTables"] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "=A1+1"})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(2.0), "{mode}: B1 waits in manual mode");
+        s.execute("formulas.calculationOptions", json!({"mode": mode})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(6.0), "{mode}: leaving manual mode calculates B1");
+        s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(6.0), "{mode}: after an unrelated edit");
+    }
+}
+
+#[test]
 fn precision_as_displayed_on_a_protected_sheet_keeps_locked_constants() {
     let mut s = s();
     let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
@@ -7399,11 +7421,13 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod calculation_settings;
 mod chart_data;
 mod controls;
 mod equation;
 mod json_golden;
 mod macros;
+mod name_recalc;
 mod objects;
 mod python_cells;
 mod python_commands;
@@ -8488,4 +8512,29 @@ fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
     s.execute("selection.set", json!({"range": "C3:D3"})).unwrap();
     s.execute("edit.paste", json!({})).unwrap();
     assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+}
+
+/// A JSON workbook holding a PivotTable whose output range has its corners the wrong way round
+/// (the format reads a range as stored) opens and calculates: GETPIVOTDATA over the report gives
+/// `#REF!` as on main, and an edit recalculates the array and its reader, on four threads with a
+/// formula that draws random numbers, so the rounds are planned.
+#[test]
+fn a_json_workbook_with_a_report_range_the_wrong_way_round_opens_and_calculates() {
+    let mut s = s();
+    for (cell, input) in [("Q1", "1"), ("J1", "=GETPIVOTDATA(\"Sales\",A1:F6)"), ("D10", "=SEQUENCE(3)+Q1"), ("H20", "=D11+1"), ("M1", "=RAND()")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    wb.calc.multi_threaded = true;
+    wb.calc.threads = 4;
+    let backward = gridcraft_core::RangeRef { start: CellRef::parse("F6").unwrap(), end: CellRef::parse("A1").unwrap() };
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).pivots.push(gridcraft_model::PivotTable { last_range: Some(backward), ..Default::default() });
+    let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+    let (opened, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    assert_eq!(opened.sheets[0].pivots[0].last_range, Some(backward), "read as stored");
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(opened, None, "Book".into(), crate::Trust::FromFile));
+    assert_eq!((v(&t, "J1"), v(&t, "H20")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(4.0)));
+    t.execute("cell.set", json!({"cell": "Q1", "input": "2"})).unwrap();
+    assert_eq!((v(&t, "J1"), v(&t, "H20")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(5.0)));
 }

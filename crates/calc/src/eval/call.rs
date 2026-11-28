@@ -1,8 +1,45 @@
 use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
-use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
+use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, Lambda, Pipe, Value, compare, err};
+use gridcraft_functions::Gather;
 use std::sync::Arc;
+
+/// What a call of a function can evaluate to, by [`Evaluator::call`]'s dispatch (see
+/// [`call_gives`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallGives {
+    /// A value or a LAMBDA, never a reference.
+    Value,
+    /// A reference, on some arguments.
+    MayBeReference,
+    /// Not a function: the call of a name (a LAMBDA in a defined name or a LET variable), which
+    /// gives what that LAMBDA gives.
+    ByName,
+}
+
+/// Whether a call of `name` (as the parser stores it: upper case, `_xlfn.` dropped) can evaluate to
+/// a reference. The source is [`Evaluator::call`] and what it dispatches to, so a change there
+/// changes this: IF, IFS, IFERROR, IFNA, CHOOSE and SWITCH give what the branch they pick gives;
+/// OFFSET, INDIRECT, INDEX, XLOOKUP and TRIMRANGE make references; LET gives what its result gives,
+/// and LAMBDA's body gives whatever it gives where the LAMBDA is called. The other functions it
+/// handles itself give values, and so does every function in the registry
+/// (`gridcraft_functions::call` returns a `Value`). A function the evaluator handles itself and
+/// this list doesn't name counts as one that may. Every name [`Evaluator::call`] dispatches on is
+/// listed here, which a test checks against its source.
+pub fn call_gives(name: &str) -> CallGives {
+    match name {
+        "IF" | "IFS" | "IFERROR" | "IFNA" | "CHOOSE" | "SWITCH" | "OFFSET" | "INDIRECT" | "INDEX" | "XLOOKUP" | "TRIMRANGE" | "LET" | "LAMBDA" => {
+            CallGives::MayBeReference
+        }
+        "ROW" | "COLUMN" | "ROWS" | "COLUMNS" | "AREAS" | "ISREF" | "ISFORMULA" | "FORMULATEXT" | "SHEET" | "SHEETS" | "CELL" | "GETPIVOTDATA"
+        | "SUBTOTAL" | "AGGREGATE" | "TEXT" | "ISOMITTED" | "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" | "GROUPBY" | "PIVOTBY"
+        | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" => CallGives::Value,
+        _ if super::special::is_special(name) => CallGives::MayBeReference,
+        _ if gridcraft_functions::lookup(name).is_some() => CallGives::Value,
+        _ => CallGives::ByName,
+    }
+}
 
 impl<'h> Evaluator<'h> {
     /// `IF` with an array condition: element-wise.
@@ -92,15 +129,26 @@ impl<'h> Evaluator<'h> {
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
                 let sys = self.host.workbook().date_system;
+                // One format code for a whole range of values is the usual shape
+                // (`TEXT(A2:A2000, "0")`): convert the code to text once, not per element.
+                let scalar_code: Option<Result<String, CellError>> = if matches!(f, Value::Array(_)) { None } else { Some(f.to_text()) };
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
                     }
-                    let code = match f.to_text() {
-                        Ok(c) => c,
-                        Err(e) => return Value::Error(e),
+                    let owned;
+                    let code: &str = match &scalar_code {
+                        Some(Ok(c)) => c.as_str(),
+                        Some(Err(e)) => return Value::Error(*e),
+                        None => match f.to_text() {
+                            Ok(c) => {
+                                owned = c;
+                                owned.as_str()
+                            }
+                            Err(e) => return Value::Error(e),
+                        },
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function(v, code, sys) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }
@@ -222,8 +270,7 @@ impl<'h> Evaluator<'h> {
             for argument in &args[1..] {
                 evaluated.push(Arg::val(self.value(argument)));
             }
-            let mut context = FnCtx { ev: self, criteria: None, lambda: None };
-            return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
+            return self.call_function(spec, &evaluated, None, None).pipe(Ev::V);
         }
         let index = match index.to_number() {
             Ok(number) => number.trunc() as i64,
@@ -301,7 +348,8 @@ impl<'h> Evaluator<'h> {
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
-            // A defined name holding a LAMBDA, or a LET-bound lambda.
+            // A defined name holding a LAMBDA, or a LET-bound lambda. `Walk::collect` in
+            // `eval/special.rs` follows such a call as a name lookup by the same rule.
             return match self.name(name) {
                 Ev::L(l) => self.apply_lambda(&l, args),
                 Ev::V(Value::Error(x)) => err(x),
@@ -315,6 +363,10 @@ impl<'h> Evaluator<'h> {
             return self.aggregate(kind, args);
         }
         let mut evaluated = Vec::with_capacity(args.len());
+        // A union's row that the charge below would refuse (see the loop over its areas).
+        let mut over_work = false;
+        // The values the arguments evaluated so far hold, which the charge below counts.
+        let mut held = 0u64;
         // SUMIF/AVERAGEIF: the size of the criteria range (argument 1), which the sum range takes.
         let mut criteria_shape = None;
         // Database functions: the criteria range (argument 2), whose formulas are computed criteria.
@@ -354,13 +406,31 @@ impl<'h> Evaluator<'h> {
             let from_ref = matches!(ev, Ev::R(_));
             let value = match ev {
                 Ev::R(areas) if areas.len() > 1 => {
-                    // Multi-area references (unions): flatten into one row for aggregates.
+                    // Multi-area references (unions): flatten into one row for aggregates. A
+                    // union can hold millions of areas (doubled through LET): read through
+                    // `Gather` (see `gridcraft_functions::Halt`).
                     let mut vals = Vec::new();
-                    for ar in &areas {
-                        match self.area_value(ar) {
-                            Value::Array(a) => vals.extend(a.data.iter().cloned()),
-                            v => vals.push(v),
-                        }
+                    let flattened = Gather::new(&*self).each_kept(
+                        self,
+                        &areas,
+                        |ev, ar| ev.area_value(ar),
+                        |ev, v| {
+                            // The row is charged below with the values of the other arguments,
+                            // after every argument; the work left only goes down, so once the row
+                            // and the arguments before it hold more values than that, the charge
+                            // fails: the rest is read, in order, but not copied.
+                            if over_work {
+                                return;
+                            }
+                            match v {
+                                Value::Array(a) => vals.extend(a.data.iter().cloned()),
+                                v => vals.push(v),
+                            }
+                            over_work = held.saturating_add(vals.len() as u64) > ev.work;
+                        },
+                    );
+                    if let Err(e) = flattened {
+                        return e;
                     }
                     Value::from(Array::row(vals))
                 }
@@ -368,17 +438,22 @@ impl<'h> Evaluator<'h> {
             };
             // Only an argument left out (`f(a,,b)`) is omitted; one that computes a blank is given.
             let blank_value = !from_ref && value == Value::Empty && lambda_at != Some(i) && !matches!(a, Expr::Missing);
+            held = held.saturating_add(if let Value::Array(x) = &value { x.data.len() as u64 } else { 1 });
             evaluated.push(Arg { value, from_ref, blank_value });
         }
         // The function may go through every value it is given (a SUM inside each call of a
         // LAMBDA over a large array): the values count against the cell's work.
-        let values = evaluated.iter().fold(0u64, |n, a| n.saturating_add(if let Value::Array(x) = &a.value { x.data.len() as u64 } else { 1 }));
+        let values = held;
+        if over_work {
+            // As the charge of the whole row would have: no work left.
+            self.spend(u64::MAX);
+            return err(CellError::Calc);
+        }
         if !self.spend(values) {
             return err(CellError::Calc);
         }
         let database = criteria.is_some();
-        let mut ctx = FnCtx { ev: self, criteria, lambda };
-        let v = gridcraft_functions::call(spec, &evaluated, &mut ctx);
+        let v = self.call_function(spec, &evaluated, criteria, lambda);
         // A computed criterion that ran out of work counted as not met: the result leaves
         // records out.
         if database && self.exhausted {
@@ -397,6 +472,23 @@ impl<'h> Evaluator<'h> {
         for a in args {
             let ev = self.eval(a);
             let steps = match ev {
+                Ev::R(areas) if areas.len() > 1 => {
+                    // A union, as `builtin` flattens one, through `Gather`. A union can hold
+                    // millions of areas: the first error is kept as the loop goes, not a result
+                    // per area.
+                    let summed = Gather::new(&*self).each(self, &areas, |ev, area| {
+                        if let Err(e) = ev.aggregate_area(kind, area, &mut acc)
+                            && first_error.is_none()
+                        {
+                            first_error = Some(e);
+                        }
+                        Ok(())
+                    });
+                    if let Err(e) = summed {
+                        return e;
+                    }
+                    Vec::new()
+                }
                 Ev::R(areas) => areas.iter().map(|area| self.aggregate_area(kind, area, &mut acc)).collect(),
                 ev => {
                     let value = self.deref(ev);
@@ -415,12 +507,13 @@ impl<'h> Evaluator<'h> {
         if !a.range.is_single() {
             // Adding the block's remembered sum to anything but +0.0 would add in another order.
             // COUNT never reads the sum, so it may reuse every block.
-            if (kind == Agg::Count || acc.sum.to_bits() == 0)
-                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
-            {
-                acc.sum = sum;
-                acc.count = acc.count.saturating_add(count);
-                return Ok(());
+            if kind == Agg::Count || acc.sum.to_bits() == 0 {
+                let known = self.read_sum(a.sheet, a.range);
+                if let Some((sum, count)) = known {
+                    acc.sum = sum;
+                    acc.count = acc.count.saturating_add(count);
+                    return Ok(());
+                }
             }
             // Folded without building an array, but still walked: the part inside the used
             // range counts against the cell's work.
@@ -429,7 +522,7 @@ impl<'h> Evaluator<'h> {
                 return Err(err(CellError::Calc));
             }
             let mut error = None;
-            let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
+            let walked = self.read_visit(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,
                 Err(e) => {
                     error = Some(e);
@@ -455,13 +548,13 @@ impl<'h> Evaluator<'h> {
         };
         let args = [Arg { value, from_ref, blank_value: false }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
+            match self.call_function(sum, &args, None, None) {
                 Value::Number(n) => acc.sum += n,
                 other => return Err(Ev::V(other)),
             }
         }
         if kind != Agg::Sum {
-            match gridcraft_functions::call(count, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
+            match self.call_function(count, &args, None, None) {
                 Value::Number(n) => acc.count = acc.count.saturating_add(n as u64),
                 other => return Err(Ev::V(other)),
             }
@@ -479,5 +572,55 @@ impl<'h> Evaluator<'h> {
         }
         let u = n.to_ascii_uppercase();
         gridcraft_functions::lookup(&u).map(|_| u)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CallGives, call_gives};
+
+    /// The quoted upper-case words (function names) in `text`.
+    fn quoted_names(text: &str) -> Vec<&str> {
+        text.split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '.' || c == '_'))
+            .collect()
+    }
+
+    /// The text of `source` from `start` to the first `end` after it.
+    fn between<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+        let from = source.find(start).unwrap_or_else(|| panic!("`{start}` not found")) + start.len();
+        let to = source[from..].find(end).unwrap_or_else(|| panic!("`{end}` not found after `{start}`"));
+        &source[from..from + to]
+    }
+
+    #[test]
+    fn call_gives_names_every_function_the_evaluator_dispatches_on() {
+        // `call_gives` is read where a name's definition is judged by its tree: a function the
+        // evaluator handles itself that `call_gives` doesn't list falls to a default, which must
+        // not be what a new arm gives. So every name `Evaluator::call` matches is in one of
+        // `call_gives`'s explicit lists, read from the source of both, and every special function
+        // is a function to `call_gives`.
+        let source = include_str!("call.rs");
+        let dispatch = between(source, "pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {", "\n        }\n");
+        let arms: Vec<&str> = dispatch
+            .lines()
+            .filter(|line| line.starts_with("            \"") || line.starts_with("            | \""))
+            .flat_map(|line| quoted_names(line.split("=>").next().unwrap_or(line)))
+            .collect();
+        for expected in ["IF", "INDIRECT", "XLOOKUP", "GROUPBY", "RANDARRAY"] {
+            assert!(arms.contains(&expected), "the scan of the dispatch finds {expected}: {arms:?}");
+        }
+        let listed = quoted_names(between(source, "pub fn call_gives(name: &str) -> CallGives {", "_ if super::special::is_special"));
+        for name in &arms {
+            assert!(listed.contains(name), "{name} is dispatched by `Evaluator::call` but not listed in `call_gives`");
+        }
+        let special = include_str!("special.rs");
+        let is_special = quoted_names(between(special, "pub(super) fn is_special(n: &str) -> bool {", "\n}\n"));
+        assert!(is_special.contains(&"LAMBDA"), "the scan of `is_special` finds LAMBDA: {is_special:?}");
+        for name in is_special.iter().chain(crate::SPECIAL_FUNCTIONS) {
+            assert_ne!(call_gives(name), CallGives::ByName, "{name}");
+        }
     }
 }

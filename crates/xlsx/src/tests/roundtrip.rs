@@ -20,7 +20,16 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
+    wb.calc = CalcSettings {
+        mode: CalcMode::Manual,
+        iterative: true,
+        max_iterations: 42,
+        max_change: 0.5,
+        precision_as_displayed: true,
+        multi_threaded: false,
+        threads: 3,
+        r1c1: true,
+    };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.write_reservation = Some(gridcraft_model::WriteReservation {
@@ -504,9 +513,9 @@ fn sample() -> Workbook {
         },
     );
     wb.sheets.push(Arc::new(s3));
-    wb.names.push(DefinedName { name: "Rate".into(), scope: None, formula: "0.07".into(), comment: "c".into(), hidden: false });
-    wb.names.push(DefinedName { name: "Local".into(), scope: Some(1), formula: "Hidden!$A$1".into(), comment: String::new(), hidden: true });
-    wb.names.push(DefinedName {
+    wb.names_mut().push(DefinedName { name: "Rate".into(), scope: None, formula: "0.07".into(), comment: "c".into(), hidden: false });
+    wb.names_mut().push(DefinedName { name: "Local".into(), scope: Some(1), formula: "Hidden!$A$1".into(), comment: String::new(), hidden: true });
+    wb.names_mut().push(DefinedName {
         name: "Pick".into(),
         scope: None,
         formula: "XLOOKUP(1,Hidden!A:A,Hidden!A:A)".into(),
@@ -760,6 +769,56 @@ fn iterative_calculation_settings_roundtrip() {
         let calc = read_xlsx(&bytes).unwrap().0.calc;
         assert!(calc.iterative, "{attrs}");
         assert_eq!((calc.max_iterations, calc.max_change), (count, change), "{attrs}");
+    }
+    // The calculation-thread attributes: anything but a boolean keeps the default (on) with a
+    // warning naming the value; a count left out is 0, the automatic count; a count of 0, which
+    // Excel doesn't write, is one thread, as Excel opens it; a count that isn't a non-negative
+    // integer is 0, and a large one saturates, each with a warning naming the value, while a
+    // count at the limit is kept as it is.
+    for (attrs, multi, threads, warning) in [
+        ("", true, 0, None),
+        (r#"concurrentManualCount="0""#, true, 1, Some("concurrentManualCount is 0; Excel reads that as one thread")),
+        (r#"concurrentCalc="1" concurrentManualCount=" 0 ""#, true, 1, Some("is 0; Excel reads that as one thread")),
+        (r#"concurrentCalc="2""#, true, 0, Some(r#"concurrentCalc "2" is not a boolean"#)),
+        (r#"concurrentCalc="0" concurrentManualCount="-1""#, false, 0, Some(r#""-1" is not a count"#)),
+        (r#"concurrentCalc="false" concurrentManualCount="7""#, false, 7, None),
+        (r#"concurrentManualCount="1024""#, true, 1024, None),
+        (r#"concurrentManualCount="1025""#, true, 1024, Some("1025 is above Excel's limit; kept 1024")),
+        (r#"concurrentManualCount="99999999999""#, true, 1024, Some("99999999999 is above")),
+        (r#"concurrentManualCount="5000""#, true, 1024, Some("5000 is above")),
+        (r#"concurrentManualCount="abc""#, true, 0, Some(r#""abc" is not a count"#)),
+    ] {
+        let wbx = xml(attrs);
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let ws = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+        let bytes = super::make_zip(&[
+            ("[Content_Types].xml", super::CT.as_bytes()),
+            ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wbx.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            ("xl/worksheets/sheet1.xml", ws.as_bytes()),
+        ]);
+        let (wb, report) = read_xlsx(&bytes).unwrap();
+        assert_eq!((wb.calc.multi_threaded, wb.calc.threads), (multi, threads), "{attrs}");
+        let about_count: Vec<&String> = report.warnings.iter().filter(|w| w.contains("concurrent")).collect();
+        match warning {
+            Some(text) => assert!(about_count.len() == 1 && about_count[0].contains(text), "{attrs}: {about_count:?}"),
+            None => assert!(about_count.is_empty(), "{attrs}: {about_count:?}"),
+        }
+    }
+    // A count set past the limit in memory (the field is public) is written at the limit, which
+    // reads back without a warning; one at the limit is written as it is, threading off or on.
+    for (multi, threads) in [(true, CalcSettings::MAX_THREADS), (false, CalcSettings::MAX_THREADS + 1), (true, u32::MAX)] {
+        let mut wb = Workbook::new();
+        wb.calc.multi_threaded = multi;
+        wb.calc.threads = threads;
+        let bytes = write_xlsx(&wb).unwrap();
+        let mut pkg = Package::open(&bytes).unwrap();
+        let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
+        assert_eq!(book.child("calcPr").unwrap().attr("concurrentManualCount"), Some("1024"), "{threads}");
+        let (back, report) = read_xlsx(&bytes).unwrap();
+        assert_eq!((back.calc.multi_threaded, back.calc.threads), (multi, CalcSettings::MAX_THREADS), "{threads}");
+        assert!(!report.warnings.iter().any(|w| w.contains("concurrent")), "{threads}: {:?}", report.warnings);
     }
 }
 
@@ -1392,7 +1451,7 @@ fn implied_intersection_made_redundant_by_an_edit_saves_legacy() {
     assert_eq!(text(&wb, "C5"), "SQRT(@Rng)");
     // What deleting rows 2:3 leaves.
     wb.sheet_mut(0).unwrap().cells.set(at("B5"), Cell::formula(Formula::new("SQRT(@A1:A1)")));
-    wb.names.iter_mut().find(|n| n.name == "Rng").unwrap().formula = "Data!$A$1:$A$1".into();
+    wb.names_mut().iter_mut().find(|n| n.name == "Rng").unwrap().formula = "Data!$A$1:$A$1".into();
     let bytes = write_xlsx(&wb).unwrap();
     assert_eq!(written_formula(&bytes, "B5"), (Some("SQRT(A1:A1)".into()), None));
     assert_eq!(written_formula(&bytes, "C5"), (Some("SQRT(Rng)".into()), None));

@@ -18,7 +18,7 @@ fn go_to_workbook() -> Session {
     define(&mut s, "Rate", "=0.07", "Workbook");
     define(&mut s, "Total", "=SUM(Sheet1!$B$2:$B$5)", "Workbook");
     let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
-    wb.names.push(gridcraft_model::DefinedName {
+    wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Secret".into(),
         scope: None,
         formula: "Sheet1!$Z$9".into(),
@@ -49,9 +49,9 @@ fn go_to_lists_many_aliases_and_follows_them() {
     let mut s = go_to_workbook();
     let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
     let alias = |name: String, formula: String| gridcraft_model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
-    wb.names.push(alias("Chain0".into(), "Areas".into()));
+    wb.names_mut().push(alias("Chain0".into(), "Areas".into()));
     for i in 1..20_000 {
-        wb.names.push(alias(format!("Chain{i}"), format!("Chain{},price", i - 1)));
+        wb.names_mut().push(alias(format!("Chain{i}"), format!("Chain{},price", i - 1)));
     }
     let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
     let names: Vec<&str> = list["names"].as_array().unwrap().iter().filter_map(|n| n.as_str()).collect();

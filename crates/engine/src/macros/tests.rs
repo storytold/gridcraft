@@ -142,11 +142,11 @@ fn a_visible_name_that_looks_like_macro_storage_is_left_alone() {
     // is neither read as a macro nor removed when the workbook opens.
     let mut wb = Workbook::new();
     let name = DefinedName { hidden: false, ..hidden("_gc_macro_0_0", "x") };
-    wb.names.push(name.clone());
+    wb.names_mut().push(name.clone());
     let warnings = load(&mut wb);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(wb.macros.is_empty());
-    assert_eq!(wb.names, vec![name]);
+    assert_eq!(wb.names.to_vec(), vec![name]);
 }
 
 #[test]
@@ -169,7 +169,7 @@ fn a_hidden_macro_name_this_build_did_not_write_is_kept() {
     // save with macros keeps it beside the items written.
     let mut wb = Workbook::new();
     let theirs = hidden("_gc_macro_index_0", "{}");
-    wb.names.push(theirs.clone());
+    wb.names_mut().push(theirs.clone());
     wb.macros.push(sample_macro("Totals"));
     let (raw, _) = gridcraft_xlsx::read_xlsx(&crate::io::save_bytes(&wb, "book.xlsx").unwrap()).unwrap();
     let names = names_of(&raw);
@@ -245,12 +245,12 @@ fn a_visible_name_of_the_storage_shape_does_not_block_a_save() {
     let mut wb = Workbook::new();
     wb.macros.push(sample_macro("A"));
     wb.macros.push(sample_macro("B"));
-    wb.names.push(visible("_GC_MACRO_0_0"));
-    wb.names.push(hidden("_gc_macro_7_0", "stale"));
+    wb.names_mut().push(visible("_GC_MACRO_0_0"));
+    wb.names_mut().push(hidden("_gc_macro_7_0", "stale"));
     let (raw, back) = xlsx_round_trip(&wb);
     assert_eq!(raw, ["_GC_MACRO_0_0", "_gc_macro_1_0", "_gc_macro_2_0"]);
     assert_eq!(back.macros, wb.macros, "both macros, in their order");
-    assert_eq!(back.names, vec![visible("_GC_MACRO_0_0")], "the person's name is kept as it was");
+    assert_eq!(back.names.to_vec(), vec![visible("_GC_MACRO_0_0")], "the person's name is kept as it was");
     assert_eq!(wb.names.len(), 2, "the open workbook is not changed by a save");
 }
 
@@ -260,8 +260,8 @@ fn a_huge_visible_index_takes_no_part_in_numbering() {
     // from 0 up, so no arithmetic depends on that number (one past the largest would overflow).
     let mut wb = Workbook::new();
     wb.macros.push(sample_macro("A"));
-    wb.names.push(visible(&format!("_gc_macro_{}_0", u64::MAX)));
-    wb.names.push(visible("_gc_macro_0_0"));
+    wb.names_mut().push(visible(&format!("_gc_macro_{}_0", u64::MAX)));
+    wb.names_mut().push(visible("_gc_macro_0_0"));
     let (raw, back) = xlsx_round_trip(&wb);
     assert_eq!(raw, [format!("_gc_macro_{}_0", u64::MAX), "_gc_macro_0_0".into(), "_gc_macro_1_0".into()]);
     assert_eq!(back.macros, wb.macros);
@@ -274,11 +274,11 @@ fn a_visible_legacy_name_of_the_storage_shape_is_kept() {
     // key `macro_0` would remove a person's visible `_sc_macro_0`. That key is stepped around too.
     let mut wb = Workbook::new();
     wb.macros.push(sample_macro("A"));
-    wb.names.push(visible("_sc_macro_0"));
+    wb.names_mut().push(visible("_sc_macro_0"));
     let (raw, back) = xlsx_round_trip(&wb);
     assert_eq!(raw, ["_sc_macro_0", "_gc_macro_1_0"]);
     assert_eq!(back.macros, wb.macros);
-    assert_eq!(back.names, vec![visible("_sc_macro_0")]);
+    assert_eq!(back.names.to_vec(), vec![visible("_sc_macro_0")]);
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn scripts_and_vba_stay_as_they_are() {
     // Automate scripts keep their own storage, and a VBA project is carried through unchanged.
     let mut wb = Workbook::new();
     let scripts = json!({"Fill": [{"command": "cell.set", "params": {"cell": "A1", "input": "x"}}]});
-    wb.names.push(hidden("_sc_scripts", &scripts.to_string()));
+    wb.names_mut().push(hidden("_sc_scripts", &scripts.to_string()));
     wb.vba_project = Some(std::sync::Arc::new(b"\xd0\xcf\x11\xe0 synthetic vbaProject".to_vec()));
     wb.macros.push(sample_macro("Totals"));
     let bytes = crate::io::save_bytes(&wb, "book.xlsm").unwrap();
@@ -316,11 +316,11 @@ fn scripts_and_vba_stay_as_they_are() {
 #[test]
 fn damaged_or_oversized_macros_are_dropped_with_a_warning() {
     let mut wb = Workbook::new();
-    wb.names.push(hidden("_gc_macro_0_0", &json!({"name": "Good"}).to_string()));
-    wb.names.push(hidden("_gc_macro_1_0", "{not json"));
-    wb.names.push(hidden("_gc_macro_2_0", &json!({"name": "Huge", "steps": vec![json!({"command": "x"}); MAX_MACRO_STEPS + 1]}).to_string()));
-    wb.names.push(hidden("_gc_macro_3_0", &json!({"name": "good"}).to_string()));
-    wb.names.push(hidden("_gc_macro_10_0", &json!({"name": "Tenth"}).to_string()));
+    wb.names_mut().push(hidden("_gc_macro_0_0", &json!({"name": "Good"}).to_string()));
+    wb.names_mut().push(hidden("_gc_macro_1_0", "{not json"));
+    wb.names_mut().push(hidden("_gc_macro_2_0", &json!({"name": "Huge", "steps": vec![json!({"command": "x"}); MAX_MACRO_STEPS + 1]}).to_string()));
+    wb.names_mut().push(hidden("_gc_macro_3_0", &json!({"name": "good"}).to_string()));
+    wb.names_mut().push(hidden("_gc_macro_10_0", &json!({"name": "Tenth"}).to_string()));
     let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
     let (back, warnings) = crate::io::open_bytes("hostile.xlsx", &bytes).unwrap();
     let names: Vec<&str> = back.macros.iter().map(|m| m.name.as_str()).collect();
@@ -423,9 +423,9 @@ fn many_hidden_macro_names_are_read_in_one_pass() {
     let mut wb = Workbook::new();
     let items = 20_000;
     for i in 0..items {
-        wb.names.push(hidden(&format!("_gc_macro_{i}_0"), "{not json"));
+        wb.names_mut().push(hidden(&format!("_gc_macro_{i}_0"), "{not json"));
     }
-    wb.names.push(hidden("_gc_other_0", "kept"));
+    wb.names_mut().push(hidden("_gc_other_0", "kept"));
     let start = std::time::Instant::now();
     let warnings = load(&mut wb);
     let took = start.elapsed();
@@ -497,7 +497,7 @@ fn a_macro_in_a_newer_format_is_kept_unread_and_saved_back_unchanged() {
     // Hidden names in xlsx.
     let mut wb = Workbook::new();
     for (i, m) in [&future, &current, &missing].into_iter().enumerate() {
-        wb.names.push(hidden(&format!("_gc_macro_{i}_0"), &m.to_string()));
+        wb.names_mut().push(hidden(&format!("_gc_macro_{i}_0"), &m.to_string()));
     }
     let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
     let (back, warnings) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
@@ -519,7 +519,7 @@ fn kept_macros_share_the_save_limits_and_the_numbering() {
     let (mut wb, warnings) = crate::io::open_bytes("book.json", file.to_string().as_bytes()).unwrap();
     assert_eq!(*wb.macros_unread, [newer("Kept")]);
     assert_eq!(warnings.len(), 2, "one kept, one left out: {warnings:?}");
-    wb.names.push(visible("_gc_macro_1_0"));
+    wb.names_mut().push(visible("_gc_macro_1_0"));
     let (raw, back) = {
         let bytes = crate::io::save_bytes(&wb, "book.xlsx").unwrap();
         let raw = names_of(&gridcraft_xlsx::read_xlsx(&bytes).unwrap().0);
@@ -531,7 +531,7 @@ fn kept_macros_share_the_save_limits_and_the_numbering() {
     // it also holds in hidden names is the one left out: readable macros come first.
     list = (0..MAX_MACROS).map(|i| json!({"name": format!("M{i}")})).collect();
     let mut with_item = Workbook::new();
-    with_item.names.push(hidden("_gc_macro_0_0", &newer("InNames").to_string()));
+    with_item.names_mut().push(hidden("_gc_macro_0_0", &newer("InNames").to_string()));
     let mut file: serde_json::Value = serde_json::from_slice(&crate::io::save_bytes(&with_item, "book.json").unwrap()).unwrap();
     for extra in [None, Some(newer("Over"))] {
         file["macros"] = json!(list.iter().cloned().chain(extra).collect::<Vec<_>>());
@@ -715,7 +715,7 @@ fn the_storage_rules_hold_together_through_both_formats() {
     let newer = json!({"name": "Kept", "v": MACRO_VERSION + 1, "fromALaterBuild": true});
     let broken = json!({"name": "Broken", "inputs": [{"name": "Input", "rows": [5, 2]}]});
     let mut start = Workbook::new();
-    start.names.push(visible("_gc_macro_0_0"));
+    start.names_mut().push(visible("_gc_macro_0_0"));
     let mut file: serde_json::Value = serde_json::from_slice(&crate::io::save_bytes(&start, "book.json").unwrap()).unwrap();
     file["macros"] = json!([newer, broken, {"name": "Good"}]);
     let (wb, warnings) = crate::io::open_bytes("book.json", file.to_string().as_bytes()).unwrap();

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (`cargo xtask bench`: measured recalc baselines; earlier: File › Print › Settings: Print Selection; earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-21 · **Change:** minor (§2: multi-threaded recalculation landed; earlier: §2: defined names are static precedents; earlier: `cargo xtask bench`: measured recalc baselines; earlier: File › Print › Settings: Print Selection; earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
@@ -27,15 +27,51 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
-### 2. Large workbooks don't open; recalc is single-threaded (P, H)
-- **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; faster whole-column
-  SUMIFS and lookups (100 of either over 100k rows take 0.16–0.59 s per edit); whole-sheet
-  operations bounded. A 100k-dependent edit measures 90–106 ms, around the 100 ms target
-  (`cargo xtask bench`).
-- **Evidence:** #175; `cargo xtask bench`; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
+### 2. Large workbooks don't open (P, H)
+- **Missing:** streaming read for ~100 MB XLSX; faster whole-column SUMIFS and lookups (100 of
+  either over 100k rows take 0.16–0.59 s per edit); whole-sheet operations bounded. A
+  100k-dependent edit measures 90–106 ms, around the 100 ms target (`cargo xtask bench`).
+  Landed 2026-11-21: recalculation on several cores. A round's
+  dirty formulas are planned into dependency levels unless the workbook cannot draw random numbers
+  and either one thread is in use or the round has fewer dirty formulas than a level needs for
+  worker threads (512 by default); on several threads, levels of 512 formulas or more (the
+  default) run on worker threads (each keeping copies of the blocks it reads twice, and the arrays
+  and text results it calculates until the merge, within an equal share of 384 MB for the level's
+  workers), and each planned round is checked against row-major order before it is written back,
+  and calculated again in row-major order on the main thread when the two could differ; values are
+  main's where main's are correct, apart from the order of random draws, a cell two arrays of one
+  pass cover, a SUM over constants beside an unrelated array, and what names as static precedents
+  change (#1499, a known regression through a defined name among them); known stale ones stay as
+  on main and are pinned (#2320, #4469, #4470). Opening two real workbooks (release CLI, four-core 2011 iMac i5-2500S, Linux):
+  LAMBDA-heavy, 51,014 formulas, ~15 s on four threads and ~57 s on one; lookup-heavy, 41,232
+  formulas, ~7 s and ~15 s (measured 2026-11-21 on the code of that day; not timed again after later changes, and main's XLSX open has become slower since, issue #4585). Still to do: skipping the plan and the threads
+  for levels too cheap to gain from them; a workbook with iterative calculation on gains no speed
+  (it has no plan); block copies for the main thread; reading the `.xls` multi-thread record. Also
+  spill ranges read from the file, so the first calculation after opening doesn't lay every array
+  out anew, and one rule for a circular reference closed through INDIRECT or OFFSET: which member
+  shows `#CIRC!` and which the circular list names follow the row-major order the cycle is entered
+  in, and can differ from each other.
+- **Evidence:** #175; `cargo xtask bench`; PR #152 (whole-sheet Fill/Remove Duplicates
+  out of memory), PR #151 (current region past 10,000 rows). Landed 2026-11-18: formulas
+  referencing most defined names, or using LET variables or LAMBDA parameters (also dynamic
+  before), are static dependencies (were dynamic: a 49K-cell column of LAMBDA calls recalculated
+  on every edit; each name is resolved once per graph build and sheet, so a definition mentioning
+  another name many times costs its size, not k^depth), names parsed once per pass (up to 1 MiB of
+  definitions), `TEXT(n,"0")` fast path; on a 2011 four-core iMac (i5-2500S, Linux, release build)
+  a LAMBDA-heavy workbook of 51,014 formulas opens in ~75 s instead of ~302 s, and a one-cell edit
+  recalculates 2 formulas in under 1 s instead of 49,098 in ~295 s; a lookup-heavy workbook of
+  41,232 formulas opens in ~18 s instead of ~34 s, and a one-cell edit recalculates 2 formulas in
+  under 1 s instead of 37,401 in ~34 s (measured 2026-11-18 on main of that day; not timed again after later rebases; main's XLSX open has become slower since, issue #4585). When another formula reads a formula's
+  spill cells through a defined name, the name now behaves as a direct reference does: a loop of
+  that shape runs to the round limit, where main stops after two evaluations. Such a loop is
+  wrong on both (#4470), and the follow-up reports it as a circular reference. A known regression:
+  when an array is laid out in a later round of a calculation because
+  its condition reads a cell through a name, a dynamic formula (INDIRECT, OFFSET) that read the
+  array's cells earlier keeps a stale value until a full recalculation, where main gives the
+  settled one; main leaves a direct reference stale in the same shape (#4469). Calculation was still
+  single-threaded at that point; cached values are still ignored on open.
 - **Impact:** finance and data users routinely have big workbooks.
-- **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
+- **Estimate:** 20–30 h for beta (30–50 h full). [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
@@ -200,6 +236,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | §2: multi-threaded recalculation landed; the entry keeps the streaming reader and the edit-latency target |
+| 2026-11-18 | minor | §2: names as static precedents, per-pass name parse cache, TEXT fast path; measured ~302 s → ~75 s open, ~295 s → under 1 s edit on a LAMBDA-heavy workbook of 51,014 formulas (on main of 2026-11-18, not timed again since) |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

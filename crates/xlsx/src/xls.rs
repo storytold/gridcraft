@@ -133,7 +133,13 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
     wb.calc = calc_of(&book.calc);
     wb.calc.precision_as_displayed = book.precision_as_displayed;
     for n in &book.names {
-        wb.names.push(DefinedName { name: n.name.clone(), scope: n.scope, formula: n.formula.clone(), comment: String::new(), hidden: n.hidden });
+        wb.names_mut().push(DefinedName {
+            name: n.name.clone(),
+            scope: n.scope,
+            formula: n.formula.clone(),
+            comment: String::new(),
+            hidden: n.hidden,
+        });
     }
     // Every .xls formula is a legacy (pre-dynamic-array) one: read with Excel's implicit `@`, like
     // an .xlsx formula without `cm`. Ctrl+Shift+Enter arrays are read as they are.

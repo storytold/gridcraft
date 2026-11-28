@@ -69,6 +69,7 @@ pub(crate) mod dynamic;
 pub(crate) mod engineering;
 pub(crate) mod ets;
 pub(crate) mod financial;
+pub mod halt;
 pub(crate) mod info;
 pub(crate) mod lift;
 pub(crate) mod lookup;
@@ -79,6 +80,7 @@ pub(crate) mod text;
 pub(crate) mod util;
 
 pub use ets::Timeline;
+pub use halt::{Asked, Gather, Halt, Halted};
 pub use stat::{aggregate_values, aggregate_values_k};
 
 /// An evaluated argument. Ranges arrive as `Value::Array` (blank cells = `Value::Empty`) with
@@ -121,6 +123,17 @@ pub trait Ctx {
     fn exhausted(&self) -> bool {
         false
     }
+    /// [`Halt::can_halt`] for this context: whether a draw, a computed criterion or a LAMBDA call
+    /// can hand the evaluation back. Where it can, every draw does.
+    fn can_halt(&self) -> bool {
+        false
+    }
+    /// [`Halt::halted`] for this context, asked only by [`Gather`] (see [`Halt`]): on a
+    /// calculation thread a draw hands the formula back to the main thread, which draws from the
+    /// one generator, and RANDARRAY and a lifted RANDBETWEEN then draw no more.
+    fn halted(&mut self, _asked: Asked) -> bool {
+        false
+    }
     /// For GROUPBY/PIVOTBY: whether their function argument is a LAMBDA (its value is then not used).
     fn has_lambda(&self) -> bool {
         false
@@ -129,6 +142,16 @@ pub trait Ctx {
     /// there is no lambda.
     fn call_lambda(&mut self, _arg: Value) -> Option<Value> {
         None
+    }
+}
+
+/// A function's context is where its loops ask (see [`Halt`]).
+impl Halt for dyn Ctx + '_ {
+    fn can_halt(&self) -> bool {
+        Ctx::can_halt(self)
+    }
+    fn halted(&mut self, asked: Asked) -> bool {
+        Ctx::halted(self, asked)
     }
 }
 

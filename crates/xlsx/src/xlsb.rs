@@ -103,7 +103,7 @@ fn import_defined_names(book: &craft_xlsx::Workbook, file_to_model: &[Option<usi
         if lname == "_xlnm._filterdatabase" || lname.starts_with("_xlchart.") || lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
             continue;
         }
-        wb.names.push(DefinedName {
+        wb.names_mut().push(DefinedName {
             name: d.name.clone(),
             scope,
             formula: crate::fmla::from_file(d.formula.trim()),
@@ -283,7 +283,7 @@ fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>], 
         }
     }
     let mut kept_names = Vec::with_capacity(wb.names.len());
-    for mut name in std::mem::take(&mut wb.names) {
+    for mut name in std::mem::take(wb.names_mut()) {
         match remap_external_formula(&name.formula, remap) {
             Ok(Some(rewritten)) => {
                 name.formula = rewritten;
@@ -293,7 +293,7 @@ fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>], 
             Err(()) => dropped = true,
         }
     }
-    wb.names = kept_names;
+    *wb.names_mut() = kept_names;
     if dropped {
         report.warn("XLSB: formulas referencing unresolved external links were replaced with their cached values");
     }

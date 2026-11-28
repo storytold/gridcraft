@@ -29,6 +29,8 @@ pub mod view;
 pub mod whatif;
 pub mod wordart;
 
+mod name_readers;
+
 use gridcraft_calc::Key;
 use gridcraft_core::{CellRef, RangeRef};
 use gridcraft_model::Workbook;
@@ -446,8 +448,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural || recalc_all {
         d.calc.recalc_all(&mut wb);
-    } else if !changed.is_empty() {
-        d.calc.cells_changed(&mut wb, &changed);
+    } else {
+        // A command that rewrites a hidden name (a solver model, a custom view) recalculates the
+        // formulas reading it as well: see the `name_readers` module.
+        name_readers::recalc_after_name_changes(&mut d.calc, &mut wb, &d.wb, changed);
     }
     controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {

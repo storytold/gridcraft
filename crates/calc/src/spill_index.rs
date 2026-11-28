@@ -50,6 +50,12 @@ fn block_span(rect: &RangeRef) -> (u32, u32, u32, u32) {
     (rect.start.row / BLOCK, rect.end.row / BLOCK, rect.start.col / BLOCK, rect.end.col / BLOCK)
 }
 
+/// Whether a range touching `touched` blocks is wider than the `areas` of a sheet are many: past
+/// four blocks an area, plus 16, a look-up tests each area once instead of walking the blocks.
+fn wider_than_the_areas(touched: u64, areas: usize) -> bool {
+    touched > 4 * areas as u64 + 16
+}
+
 fn block_count(rect: &RangeRef) -> u64 {
     let (r0, r1, c0, c1) = block_span(rect);
     u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1)
@@ -149,30 +155,60 @@ impl SpillIndex {
     /// The anchors of the areas whose rectangle meets `range` (an empty area counts through its
     /// anchor cell), sorted by anchor.
     pub(crate) fn meeting(&self, sheet: usize, range: RangeRef, out: &mut Vec<CellRef>) {
-        out.clear();
-        let Some(areas) = self.sheets.get(&sheet) else { return };
+        let _ = self.meeting_within(sheet, range, out, usize::MAX);
+    }
+
+    /// Whether any area's rectangle meets `range` (an empty area counts through its anchor cell):
+    /// the walk of [`SpillIndex::meeting`], ended at the first area found, with nothing collected
+    /// or sorted.
+    pub(crate) fn meets_any(&self, sheet: usize, range: RangeRef) -> bool {
+        let Some(areas) = self.sheets.get(&sheet) else { return false };
+        let meets = |a: &CellRef| areas.entries.get(a).is_some_and(|e| e.rect.intersects(&range));
         let (r0, r1, c0, c1) = block_span(&range);
         let touched = u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1);
-        if touched > 4 * areas.entries.len() as u64 + 16 {
+        if wider_than_the_areas(touched, areas.entries.len()) {
+            // A range wider than the areas are many: each area at most once.
+            return areas.entries.values().any(|e| e.rect.intersects(&range));
+        }
+        areas.big.iter().any(meets) || (r0..=r1).any(|br| (c0..=c1).any(|bc| areas.blocks.get(&(br, bc)).is_some_and(|list| list.iter().any(meets))))
+    }
+
+    /// [`SpillIndex::meeting`] within `left` units of index work, a unit for each area tested and
+    /// each block looked up: the units it took, or `None` (with `out` incomplete) as soon as the
+    /// areas and blocks it has come to would take more than `left`.
+    pub(crate) fn meeting_within(&self, sheet: usize, range: RangeRef, out: &mut Vec<CellRef>, left: usize) -> Option<usize> {
+        out.clear();
+        let Some(areas) = self.sheets.get(&sheet) else { return Some(0) };
+        let (r0, r1, c0, c1) = block_span(&range);
+        let touched = u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1);
+        let used;
+        if wider_than_the_areas(touched, areas.entries.len()) {
             // A range wider than the areas are many: look at each area once.
+            used = areas.entries.len();
+            if used > left {
+                return None;
+            }
             out.extend(areas.entries.iter().filter(|(_, e)| e.rect.intersects(&range)).map(|(a, _)| *a));
         } else {
+            let mut taken = areas.big.len();
             for br in r0..=r1 {
                 for bc in c0..=c1 {
-                    if let Some(list) = areas.blocks.get(&(br, bc)) {
+                    let list = areas.blocks.get(&(br, bc));
+                    taken = taken.saturating_add(1).saturating_add(list.map_or(0, Vec::len));
+                    if taken > left {
+                        return None;
+                    }
+                    if let Some(list) = list {
                         out.extend(list.iter().copied().filter(|a| areas.entries.get(a).is_some_and(|e| e.rect.intersects(&range))));
                     }
                 }
             }
+            used = taken;
             out.extend(areas.big.iter().copied().filter(|a| areas.entries.get(a).is_some_and(|e| e.rect.intersects(&range))));
         }
         out.sort_unstable();
         out.dedup();
-    }
-
-    /// The rectangle indexed for `anchor` and whether it covers no cells.
-    pub(crate) fn area(&self, sheet: usize, anchor: CellRef) -> Option<(RangeRef, bool)> {
-        self.sheets.get(&sheet)?.entries.get(&anchor).map(|e| (e.rect, e.empty))
+        Some(used)
     }
 }
 
@@ -280,6 +316,7 @@ mod tests {
                 let mut got = Vec::new();
                 ix.meeting(sheet, range, &mut got);
                 assert_eq!(got, want, "{range:?}");
+                assert_eq!(ix.meets_any(sheet, range), !want.is_empty(), "any: {range:?}");
             }
         }
     }
@@ -292,5 +329,31 @@ mod tests {
         let mut hits = Vec::new();
         ix.meeting(0, RangeRef::new(at(3, 3), at(3, 3)), &mut hits);
         assert_eq!(hits, vec![at(3, 3)]);
+    }
+
+    #[test]
+    fn a_look_up_within_a_budget_counts_what_it_inspects_and_stops_before_passing_it() {
+        // 600 two-cell areas down A:B, in 38 blocks of up to 16, and one big column area.
+        let mut ix = SpillIndex::default();
+        for r in 0..600 {
+            ix.insert((0, at(r, 0)), 1, 2);
+        }
+        ix.insert((0, at(0, 5)), 1_048_576, 1);
+        let mut hits = Vec::new();
+        // A block wider than the areas are many, meeting none of them: each of the 601 areas is
+        // tested once, met or not.
+        let far = RangeRef::new(at(9_000, 3), at(100_000, 4));
+        assert_eq!(ix.meeting_within(0, far, &mut hits, 601), Some(601));
+        assert!(hits.is_empty());
+        assert_eq!(ix.meeting_within(0, far, &mut hits, 600), None);
+        // Two blocks of A:B: each block looked up and its 16 entries, and the big area.
+        let near = RangeRef::new(at(0, 0), at(31, 1));
+        assert_eq!(ix.meeting_within(0, near, &mut hits, 35), Some(35));
+        assert_eq!(hits.len(), 32);
+        assert_eq!(ix.meeting_within(0, near, &mut hits, 34), None);
+        // Without a budget, the same anchors.
+        let mut all = Vec::new();
+        ix.meeting(0, near, &mut all);
+        assert_eq!(all.len(), 32);
     }
 }

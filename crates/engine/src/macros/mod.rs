@@ -187,7 +187,7 @@ pub fn with_names(wb: &Workbook) -> crate::Result<Option<Workbook>> {
     let mut out = wb.clone();
     // One pass drops the items of the last save, and one writes the macros (a file can hold a
     // thousand macros and many thousands of names).
-    out.names.retain(|n| !stored(n));
+    out.names_mut().retain(|n| !stored(n));
     // A visible workbook-scope name of the storage shape is someone's own, and `set_many` won't
     // write a hidden one of the same name beside it. Such a name (`_GC_MACRO_1_0`, or one a
     // person defined after the file opened) blocks its item's key, in any chunk, so the macros
@@ -254,7 +254,7 @@ pub fn load(wb: &mut Workbook) -> Vec<String> {
     // One pass takes the hidden macro names out of the workbook, grouped by macro in saved order.
     let mut stored: BTreeMap<(u64, String), Vec<DefinedName>> = BTreeMap::new();
     let mut kept = Vec::new();
-    for n in std::mem::take(&mut wb.names) {
+    for n in std::mem::take(wb.names_mut()) {
         match macro_item(&n) {
             None => kept.push(n),
             Some((key, Some(i))) => stored.entry((i, key)).or_default().push(n),
@@ -263,13 +263,13 @@ pub fn load(wb: &mut Workbook) -> Vec<String> {
             Some((_, None)) => kept.push(n),
         }
     }
-    wb.names = kept;
+    *wb.names_mut() = kept;
     // Past the macro limit, the rest are counted without being read.
     bad = bad.saturating_add(stored.len().saturating_sub(gridcraft_model::MAX_MACROS));
     let mut found = Vec::new();
     let mut item = Workbook::new();
     for ((_, key), names) in stored.into_iter().take(gridcraft_model::MAX_MACROS) {
-        item.names = names;
+        *item.names_mut() = names;
         let v = stash::get_json(&item, &key);
         if let Some(v) = v.as_ref().filter(|v| is_newer(v)) {
             keep_unread(&mut unread, v.clone(), &mut bad);

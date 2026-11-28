@@ -3,6 +3,9 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+mod levels;
+mod names;
+
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
@@ -54,7 +57,7 @@ fn spill_range_operator() {
     t.set("D1", "=SUM(A1#)");
     assert_eq!(t.get("D1"), Value::Error(CellError::Ref));
     // Through a defined name.
-    t.wb.names.push(gridcraft_model::DefinedName {
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Seq".into(),
         scope: None,
         formula: "Sheet1!$B$1#".into(),
@@ -909,7 +912,7 @@ fn references_functions() {
     t.set("C2", "=INDIRECT(\"A3\",FALSE)");
     assert_eq!(t.get("C2"), Value::Error(CellError::Ref));
     // Defined names don't depend on the reference style.
-    t.wb.names.push(gridcraft_model::DefinedName {
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Third".into(),
         scope: None,
         formula: "Sheet1!$A$3".into(),
@@ -965,7 +968,7 @@ fn relative_names() {
     // As files store them: relative to A1. `Left` is the cell to the left, `Above3` the three
     // cells above, `Mixed` column A of the same row.
     for (name, formula) in [("Left", "Sheet1!XFD1"), ("Above3", "Sheet1!A1048574:A1048576"), ("Mixed", "Sheet1!$A1")] {
-        t.wb.names.push(gridcraft_model::DefinedName {
+        t.wb.names_mut().push(gridcraft_model::DefinedName {
             name: name.into(),
             scope: None,
             formula: formula.into(),
@@ -1142,7 +1145,7 @@ fn groupby_and_pivotby_take_a_lambda() {
 #[test]
 fn lambda_argument_count() {
     let mut t = T::new();
-    t.wb.names.push(gridcraft_model::DefinedName {
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
         name: "AddPair".into(),
         scope: None,
         formula: "LAMBDA(a,b,a+b)".into(),
@@ -1178,7 +1181,7 @@ fn a_lambda_that_calls_itself_without_end_is_num_on_a_small_stack() {
         .stack_size(1 << 20)
         .spawn(|| {
             let mut t = T::new();
-            t.wb.names.push(gridcraft_model::DefinedName {
+            t.wb.names_mut().push(gridcraft_model::DefinedName {
                 name: "LOOP".into(),
                 scope: None,
                 formula: "LAMBDA(n,LOOP(n))".into(),
@@ -1210,7 +1213,7 @@ fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
             .stack_size(stack)
             .spawn(|| {
                 let mut wb = Workbook::new();
-                wb.names.push(gridcraft_model::DefinedName {
+                wb.names_mut().push(gridcraft_model::DefinedName {
                     name: "CNT".into(),
                     scope: None,
                     formula: "LAMBDA(n,IF(n=0,0,1+CNT(n-1)))".into(),
@@ -1241,7 +1244,7 @@ fn a_tail_recursive_lambda_reaches_excels_depth_on_a_small_stack() {
             .stack_size(stack)
             .spawn(|| {
                 let mut wb = Workbook::new();
-                wb.names.push(gridcraft_model::DefinedName {
+                wb.names_mut().push(gridcraft_model::DefinedName {
                     name: "TAILN".into(),
                     scope: None,
                     formula: "LAMBDA(n,IF(n=0,0,TAILN(n-1)))".into(),
@@ -1318,7 +1321,13 @@ fn a_recursive_lambda_that_reads_another_cells_recursive_lambda_shares_the_stack
 #[test]
 fn names_and_sheets() {
     let mut t = T::new();
-    t.wb.names.push(gridcraft_model::DefinedName { name: "Rate".into(), scope: None, formula: "0.5".into(), comment: String::new(), hidden: false });
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
+        name: "Rate".into(),
+        scope: None,
+        formula: "0.5".into(),
+        comment: String::new(),
+        hidden: false,
+    });
     t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
     t.wb.sheet_mut(1).unwrap().set_value(c("A1"), Value::Number(8.0));
     t.calc.rebuild(&t.wb);
@@ -1334,7 +1343,13 @@ fn name_referring_to_several_ranges() {
     let mut t = T::new();
     // As Excel writes it in `<definedName>`: a union with no parentheses around it.
     let union = "Sheet1!$A$1:$A$2,Sheet1!$C$1:$C$2";
-    t.wb.names.push(gridcraft_model::DefinedName { name: "u".into(), scope: None, formula: union.into(), comment: String::new(), hidden: false });
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
+        name: "u".into(),
+        scope: None,
+        formula: union.into(),
+        comment: String::new(),
+        hidden: false,
+    });
     for (at, v) in [("A1", "1"), ("A2", "2"), ("C1", "5"), ("C2", "7")] {
         t.set(at, v);
     }
@@ -1426,6 +1441,15 @@ fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");
     assert_eq!(t.get("A1"), Value::from("1,234.50"));
+}
+
+#[test]
+fn text_with_an_array_of_codes_formats_the_value_by_each() {
+    // TEXT converts a single format code once per call; an array of codes still formats by each.
+    let mut t = T::new();
+    t.set("A1", "=TEXT(1234.5,{\"0\",\"0.0\"})");
+    assert_eq!(t.get("A1"), Value::text("1235"));
+    assert_eq!(t.get("B1"), Value::text("1234.5"));
 }
 
 #[test]
@@ -1696,7 +1720,7 @@ fn sumif_resized_sum_range_stops_at_the_sheet_edge() {
 fn sumif_resized_sum_range_on_another_sheet_and_through_a_name() {
     let mut t = T::new();
     t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Data")));
-    t.wb.names.push(gridcraft_model::DefinedName {
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Amounts".into(),
         scope: None,
         formula: "Data!$B$1".into(),
@@ -2312,7 +2336,7 @@ fn analysis_toolpak_value_params_reject_multi_cell_references() {
     ] {
         t.set(a, v);
     }
-    t.wb.names.push(gridcraft_model::DefinedName {
+    t.wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Dates".into(),
         scope: None,
         formula: "Sheet1!$A$1:$A$3".into(),
@@ -3137,6 +3161,25 @@ fn plant_python(t: &mut T, at: &str, cached: Value, result: Value) -> (usize, Ce
 fn column(values: &[f64]) -> Value {
     let data = values.iter().map(|v| Value::Number(*v)).collect();
     Value::Array(std::sync::Arc::new(gridcraft_core::Array::new(values.len(), 1, data).unwrap()))
+}
+
+#[test]
+fn an_array_over_a_python_cells_old_spill_is_laid_out_when_the_cell_is_calculated_too() {
+    // B1, a Python cell, spilled B1:B3; A3's array (A3:B3) was blocked by it. Both are calculated
+    // again, B1 with a result two rows tall: its old spill doesn't block A3, since B1 lays its
+    // array out again in the same pass (B1:B2), and A3 gets B3 in that round. (Blocked by the old
+    // spill, A3 would get B3 only in a second round, once B1's new spill freed it.)
+    let mut t = T::new();
+    let python = plant_python(&mut t, "B1", Value::Number(1.0), column(&[1.0, 2.0, 3.0]));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("B3"), 3.0);
+    t.set("A3", "=SEQUENCE(1,2)");
+    assert_eq!(t.get("A3"), Value::Error(CellError::Spill));
+    plant_python(&mut t, "B1", Value::Number(1.0), column(&[5.0, 6.0]));
+    t.calc.cells_changed(&mut t.wb, &[python, (0, c("A3"))]);
+    assert_eq!(t.calc.rounds_calculated, 1, "A3 laid out in the round that lays B1 out");
+    assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
+    assert_eq!((t.num("A3"), t.num("B3")), (1.0, 2.0));
 }
 
 #[test]

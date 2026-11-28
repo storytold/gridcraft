@@ -1,8 +1,10 @@
 use super::RangeRef;
 use crate::eval::Area;
 use gridcraft_core::CellRef;
+use gridcraft_model::{Formula, Workbook};
 use std::collections::BTreeSet;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::sync::Arc;
 
 /// A fast, non-cryptographic hasher for cell keys (FxHash-style multiply-rotate).
 #[derive(Default, Clone, Copy)]
@@ -34,10 +36,103 @@ pub(super) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<FxH
 
 pub type Key = (usize, CellRef);
 
+#[cfg(test)]
+thread_local! {
+    /// Units of work the range look-ups ([`Graph::dependents_of_range`] and
+    /// [`Graph::dependents_of_range_within`]) did on this thread, budgeted or not, which a test
+    /// reads: one per pending entry and node of a row-interval index visited, and one per reader
+    /// listed, from any index. The look-ups all run on the main thread.
+    pub(crate) static RANGE_LOOK_UP_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most spans [`Graph::levels`] held at once for a formula on this thread, which a test
+    /// reads and resets: at most [`KEPT_SPANS`] and one more.
+    pub(crate) static PLAN_SPANS_PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` units of range look-up work (see [`RANGE_LOOK_UP_WORK`]).
+fn look_up_work(n: usize) {
+    #[cfg(test)]
+    RANGE_LOOK_UP_WORK.with(|w| w.set(w.get().saturating_add(n)));
+    #[cfg(not(test))]
+    let _ = n;
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct Node {
     pub(super) areas: Vec<Area>,
     pub(super) dynamic: bool,
+    /// The formula the node was resolved from (the cell's own, shared; none for a Python cell),
+    /// so that `Calc::rebuild` sees a formula replaced by one that reads the same cells.
+    pub(super) formula: Option<Arc<Formula>>,
+    /// Whether the formula's parsed tree draws random numbers itself (`uses_random`), worked out
+    /// once here rather than at every level calculated on worker threads. False when the formula
+    /// keeps no parsed tree: `PassHost::run_level` takes the flag only for the very tree it
+    /// evaluates, and walks any other.
+    pub(super) random: bool,
+    /// Whether evaluating the formula may draw a random number by its own tree
+    /// (`draws::random_use`): `random`, or a function that draws passed by name. True for a
+    /// formula that keeps no parsed tree, which is not looked at. A defined name's body is not
+    /// part of it (see `Calc::run`).
+    pub(super) may_draw: bool,
+    /// The places in the formula's parsed tree that may look a defined name up
+    /// (`pass_host::name_lookups`), counted up to one past `NAME_LOOKUPS_SCANNED`, past which
+    /// `PassHost::run_level` builds the names' index whatever the rest adds; worked out once
+    /// here, by the precedent walk (see [`Node::drawing`]), rather than by a walk of the tree at
+    /// every level calculated on worker threads. `None` when not counted (a node made without
+    /// that walk): `run_level` then walks the tree.
+    pub(super) name_lookups: Option<u8>,
+}
+
+impl Node {
+    pub(super) fn new(areas: Vec<Area>, dynamic: bool, formula: Option<Arc<Formula>>) -> Node {
+        Node::drawing(areas, dynamic, formula, None)
+    }
+
+    /// [`Node::new`] with what `random_use` answers for the formula's tree, and its name lookups
+    /// (`name_lookups`), when the caller has them (`drawn`, from the walk that found the
+    /// references). The precedent walk (`precedents_drawing`) folds the draw flags and the count
+    /// into its own walk as an optimisation, saving two tree walks per formula at every graph
+    /// build; under `cfg(test)` the assertions below check every folded answer against a walk of
+    /// `random_use` and of `name_lookups`, which pins that they agree.
+    pub(super) fn drawing(areas: Vec<Area>, dynamic: bool, formula: Option<Arc<Formula>>, drawn: Option<(super::Draws, u8)>) -> Node {
+        let (random, may_draw, name_lookups) = match formula.as_ref().map(|f| f.expr.as_deref()) {
+            Some(Some(tree)) => {
+                #[cfg(test)]
+                if let Some((d, lookups)) = drawn {
+                    let text = formula.as_ref().map(|f| &f.text);
+                    assert_eq!(d, super::random_use(tree), "folded draws differ for {text:?}");
+                    let walked = super::name_lookups(tree, crate::eval::NAME_LOOKUPS_SCANNED);
+                    assert_eq!(usize::from(lookups), walked, "folded name lookups differ for {text:?}");
+                }
+                match drawn {
+                    Some((d, lookups)) => (d.calls, d.may_draw, Some(lookups)),
+                    None => {
+                        let d = super::random_use(tree);
+                        (d.calls, d.may_draw, None)
+                    }
+                }
+            }
+            Some(None) => (false, true, None),
+            None => (false, false, None),
+        };
+        Node { areas, dynamic, formula, random, may_draw, name_lookups }
+    }
+}
+
+/// The same references read the same way, from the same formula: the same one, or one with the
+/// same text, array range and dynamic-array mark (Sort and Undo can put back a new copy of a
+/// formula that didn't change; the expression is parsed from the text).
+impl PartialEq for Node {
+    fn eq(&self, other: &Node) -> bool {
+        let same_formula = match (&self.formula, &other.formula) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || (a.text == b.text && a.array == b.array && a.dynamic == b.dynamic),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        same_formula && self.dynamic == other.dynamic && self.areas == other.areas
+    }
 }
 
 /// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.
@@ -45,6 +140,63 @@ const WIDE: u32 = 64;
 
 /// Insertions an [`Intervals`] keeps aside (scanned by every query) before merging them in.
 const PENDING: usize = 32;
+
+/// Cells up to which a look-up of an area's readers probes the per-cell index once per cell
+/// ([`Graph::dependents_of_range`]); a larger area walks the whole index instead. Planning charges
+/// the same switch ([`Graph::uncharged_probes`]).
+const PROBED_CELLS: u64 = 4096;
+
+/// Precedents up to this many get an exact release list in [`Graph::levels`]; more are recounted
+/// per level.
+const EXACT: usize = 64;
+
+/// Dirty columns met by a formula's areas whose spans [`Graph::levels`] keeps for its release list
+/// and its anchors above, rather than visit the areas again: a formula whose areas meet no more
+/// columns than this is visited once, and one whose areas meet more (wide areas, whole rows) is
+/// visited again for each, so that what is kept never grows with the work the budget allows. The
+/// plan and the work charged are the same either way.
+const KEPT_SPANS: usize = EXACT;
+
+/// Index work per dirty formula before planning is given up: areas walked and columns visited
+/// (twice for a formula with an exact list), up to [`EXACT`] entries pushed and later released,
+/// and recounts. A few microseconds a formula, a small part of calculating it.
+const BUDGET_PER_FORMULA: usize = 4 * EXACT;
+
+/// The index work of a round of `formulas` dirty formulas: the budget rule.
+///
+/// Each phase of a round that walks the dependency index gets this figure for itself: planning
+/// ([`Graph::levels`]), checking the planned round against row-major order
+/// (`Calc::agrees_with_row_major`), and, in levels calculated on worker threads, looking up the
+/// readers of the arrays laid out differently from what the workbook stores
+/// (`PassHost::mark_readers`). A phase is charged a unit per index entry it inspects (an area
+/// walked, a column visited, an interval-index entry or node visited, an entry stored or
+/// released, a reader recounted, listed or reached) and per look-up, and a look-up stops when
+/// its phase's figure runs out. Then planning gives no plan, and the checking sends the round
+/// back to be calculated again in row-major order; after either, the passes run in row-major
+/// order until a formula cell is entered, edited, removed or passed as changed, or the workbook
+/// becomes able to draw random numbers (the hold, `Calc::row_major_only`).
+/// Marking that runs out calculates the rest of its level on the main thread. A range look-up's
+/// probes of the per-cell and column indexes ([`Graph::uncharged_probes`]) are charged before
+/// it by planning and by marking for a worker's array that is thrown away. The checking, and
+/// marking for an array that is kept, leave them uncharged: the areas they look up belong to
+/// arrays whose readers `write_back` looks up too, over an area holding them, when the round is
+/// kept, and running out over those probes would hold planning off for the passes after it.
+///
+/// What the dynamic formulas of a planned round read is noted within a limit of its own
+/// ([`Plan::note_limit`]). The memory a level's workers keep has limits of its own: their copied
+/// blocks share `CACHE_BYTES_BUDGET`, divided between them afresh at each level and dropped with
+/// the workers, and the names they parse go in one store they share, which comes out of what the
+/// pass has left of its limit on definition text (`MAX_PASS_NAME_TEXT`).
+fn index_budget(formulas: usize) -> usize {
+    formulas.saturating_mul(BUDGET_PER_FORMULA).saturating_add(FIXED_INDEX_WORK)
+}
+
+/// The part of [`index_budget`] any round gets whatever its size: about a million units in each
+/// phase, beside [`BUDGET_PER_FORMULA`] a formula, which is what a round of a few formulas may
+/// spend. It is also the fixed part of the notes' limit ([`Plan::note_limit`]). Its source: a
+/// two-formula edit round on two real workbooks of about 1.2 million cells spends about 72,000
+/// to 81,000 units of index work, so the fixed part is about 13 times a measured small round.
+const FIXED_INDEX_WORK: usize = 1 << 20;
 
 /// Row intervals `[r0, r1]`, each with a payload, answering "which intervals overlap rows
 /// `a..=b`?" in O(log n + k).
@@ -136,19 +288,38 @@ impl<T: Copy + Ord> Intervals<T> {
     }
 
     /// Calls `f` for every interval overlapping rows `a..=b` (`r0 <= b && r1 >= a`). Returns the
-    /// number of tree nodes visited.
+    /// number of pending entries and tree nodes visited.
     pub(super) fn query(&self, a: u32, b: u32, f: &mut dyn FnMut(&T)) -> usize {
+        let mut left = usize::MAX;
+        self.query_within(a, b, &mut left, &mut |t| {
+            f(t);
+            false
+        });
+        // A single-cell look-up's visits aren't range look-up work (see `RANGE_LOOK_UP_WORK`).
+        #[cfg(test)]
+        RANGE_LOOK_UP_WORK.with(|w| w.set(w.get().saturating_sub(usize::MAX - left)));
+        usize::MAX - left
+    }
+
+    /// [`Intervals::query`] charging `left` one unit for each pending entry and tree node it
+    /// visits, and one more for each entry `f` answers true for (one it keeps). Stops, and returns
+    /// false, when a unit is due and nothing is left.
+    pub(super) fn query_within(&self, a: u32, b: u32, left: &mut usize, f: &mut dyn FnMut(&T) -> bool) -> bool {
         for it in &self.pending {
-            if it.0 <= b && it.1 >= a {
-                f(&it.2);
+            if !take(left, 1) {
+                return false;
+            }
+            look_up_work(1);
+            if it.0 <= b && it.1 >= a && f(&it.2) && !take(left, 1) {
+                return false;
             }
         }
         // Entries before `p` start at or before row `b`.
         let p = self.items.partition_point(|it| it.0 <= b);
         if p == 0 {
-            return 0;
+            return true;
         }
-        self.walk(1, 0, self.max_end.len() / 2, p, a, f)
+        self.walk(1, 0, self.max_end.len() / 2, p, a, left, f)
     }
 
     /// [`Intervals::query`] that skips entries an earlier call with the same `taken` already
@@ -199,20 +370,37 @@ impl<T: Copy + Ord> Intervals<T> {
         done
     }
 
-    fn walk(&self, node: usize, lo: usize, hi: usize, p: usize, a: u32, f: &mut dyn FnMut(&T)) -> usize {
+    #[allow(clippy::too_many_arguments)]
+    fn walk(&self, node: usize, lo: usize, hi: usize, p: usize, a: u32, left: &mut usize, f: &mut dyn FnMut(&T) -> bool) -> bool {
+        if !take(left, 1) {
+            return false;
+        }
+        look_up_work(1);
         if lo >= p || self.max_end.get(node).is_none_or(|m| *m < a) {
-            return 1;
+            return true;
         }
         if hi - lo <= 1 {
             if let (Some(it), Some(false)) = (self.items.get(lo), self.dead.get(lo))
                 && it.1 >= a
+                && f(&it.2)
             {
-                f(&it.2);
+                return take(left, 1);
             }
-            return 1;
+            return true;
         }
         let mid = lo + (hi - lo) / 2;
-        1 + self.walk(2 * node, lo, mid, p, a, f) + self.walk(2 * node + 1, mid, hi, p, a, f)
+        self.walk(2 * node, lo, mid, p, a, left, f) && self.walk(2 * node + 1, mid, hi, p, a, left, f)
+    }
+}
+
+/// Takes `n` units from `left`: false, leaving it as it was, when fewer are left.
+fn take(left: &mut usize, n: usize) -> bool {
+    match left.checked_sub(n) {
+        Some(rest) => {
+            *left = rest;
+            true
+        }
+        None => false,
     }
 }
 
@@ -233,6 +421,9 @@ pub struct Graph {
     /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
     wide_deps: HashMap<usize, Intervals<(u32, u32, Key)>>,
     pub(super) dynamic: HashSet<Key>,
+    /// The nodes whose formula may draw a random number (`Node::may_draw`), counted by `insert`
+    /// and `remove`.
+    drawing: usize,
     /// Range indexes changed since the last [`Graph::settle`].
     unsettled_cols: HashSet<(usize, u32)>,
     unsettled_wide: HashSet<usize>,
@@ -290,11 +481,18 @@ impl Graph {
         if node.dynamic {
             self.dynamic.insert(k);
         }
+        self.drawing = self.drawing.saturating_add(usize::from(node.may_draw));
         self.nodes.insert(k, node);
+    }
+
+    /// Whether a formula of the graph may draw a random number by its own tree (`Node::may_draw`).
+    pub(super) fn may_draw(&self) -> bool {
+        self.drawing > 0
     }
 
     pub(super) fn remove(&mut self, k: Key) {
         let Some(old) = self.nodes.remove(&k) else { return };
+        self.drawing = self.drawing.saturating_sub(usize::from(old.may_draw));
         let (cells, cols, wide) = Self::entries(&old.areas);
         for c in cells {
             if let Some(v) = self.cell_deps.get_mut(&c) {
@@ -340,6 +538,12 @@ impl Graph {
         }
     }
 
+    /// Whether the formula at `k` is evaluated on every recalc (its references aren't known
+    /// statically: INDIRECT, OFFSET, tables, unresolvable names). The tests read it.
+    #[cfg(test)]
+    pub(crate) fn is_dynamic(&self, k: Key) -> bool {
+        self.dynamic.contains(&k)
+    }
     /// Formulas that read cell `c` of `sheet`.
     pub fn dependents(&self, sheet: usize, c: CellRef, out: &mut Vec<Key>) {
         if let Some(v) = self.cell_deps.get(&(sheet, c)) {
@@ -383,46 +587,746 @@ impl Graph {
         }
     }
 
-    /// Formulas that read any cell of `range` (a formula can be listed more than once).
-    pub fn dependents_of_range(&self, sheet: usize, range: RangeRef, out: &mut Vec<Key>) {
-        if range.count() <= 4096 {
+    /// Formulas that read any cell of `range` (a formula can be listed more than once). Returns the
+    /// pending entries and nodes of the row-interval indexes it visited, those of readers whose
+    /// columns miss the range included.
+    pub fn dependents_of_range(&self, sheet: usize, range: RangeRef, out: &mut Vec<Key>) -> usize {
+        let mut left = usize::MAX;
+        self.readers_of_range(sheet, range, out, &mut left, false);
+        usize::MAX - left
+    }
+
+    /// The probes a look-up of the readers of `range` makes that it doesn't charge as it goes
+    /// (see [`Graph::dependents_of_range_within`]): of the per-cell index, one for each cell, or
+    /// for an area over [`PROBED_CELLS`] a walk of that whole index, and of the column index, one for
+    /// each column, or a walk of it when that is shorter. A walk is charged by the index's
+    /// capacity, not its length: it visits the allocated table, which removals don't shrink. A
+    /// phase that pays for them charges this before the look-up (see [`index_budget`]).
+    pub(crate) fn uncharged_probes(&self, range: RangeRef) -> usize {
+        let cells = usize::try_from(range.count()).unwrap_or(usize::MAX);
+        (if range.count() > PROBED_CELLS { self.cell_deps.capacity() } else { cells })
+            .saturating_add((range.width() as usize).min(self.col_deps.capacity()))
+    }
+
+    /// [`Graph::dependents_of_range`] within `left` units of index work (see [`index_budget`]):
+    /// one for each pending entry and node of the row-interval indexes it visits, found or not,
+    /// and one for each reader it lists, from any index; not the probes
+    /// [`Graph::uncharged_probes`] counts. Stops, and returns false, once a unit is due and
+    /// nothing is left; `out` then holds part of the readers.
+    pub(crate) fn dependents_of_range_within(&self, sheet: usize, range: RangeRef, out: &mut Vec<Key>, left: &mut usize) -> bool {
+        self.readers_of_range(sheet, range, out, left, true)
+    }
+
+    /// The look-up of [`Graph::dependents_of_range`], charging `left` for what it visits, and
+    /// for each reader it lists when `charge_readers` is set. False when it stopped.
+    fn readers_of_range(&self, sheet: usize, range: RangeRef, out: &mut Vec<Key>, left: &mut usize, charge_readers: bool) -> bool {
+        let unit = usize::from(charge_readers);
+        let mut push = |k: Key, left: &mut usize| {
+            out.push(k);
+            look_up_work(1);
+            take(left, unit)
+        };
+        if range.count() <= PROBED_CELLS {
             for c in range.iter() {
                 if let Some(v) = self.cell_deps.get(&(sheet, c)) {
-                    out.extend(v.iter().copied());
+                    for k in v {
+                        if !push(*k, left) {
+                            return false;
+                        }
+                    }
                 }
             }
         } else {
             for ((s, c), v) in &self.cell_deps {
                 if *s == sheet && range.contains(*c) {
-                    out.extend(v.iter().copied());
+                    for k in v {
+                        if !push(*k, left) {
+                            return false;
+                        }
+                    }
                 }
             }
         }
         let (r0, r1) = (range.start.row, range.end.row);
-        if (range.width() as usize) <= self.col_deps.len() {
+        // `query_within` charges the entries `f` keeps itself.
+        if (range.width() as usize) <= self.col_deps.capacity() {
             for col in range.start.col..=range.end.col {
-                if let Some(v) = self.col_deps.get(&(sheet, col)) {
-                    v.query(r0, r1, &mut |k| out.push(*k));
+                if let Some(v) = self.col_deps.get(&(sheet, col))
+                    && !v.query_within(r0, r1, left, &mut |k| {
+                        out.push(*k);
+                        look_up_work(1);
+                        charge_readers
+                    })
+                {
+                    return false;
                 }
             }
         } else {
             for ((s, col), v) in &self.col_deps {
-                if *s == sheet && range.start.col <= *col && *col <= range.end.col {
-                    v.query(r0, r1, &mut |k| out.push(*k));
+                if *s == sheet
+                    && range.start.col <= *col
+                    && *col <= range.end.col
+                    && !v.query_within(r0, r1, left, &mut |k| {
+                        out.push(*k);
+                        look_up_work(1);
+                        charge_readers
+                    })
+                {
+                    return false;
                 }
             }
         }
-        if let Some(v) = self.wide_deps.get(&sheet) {
-            v.query(r0, r1, &mut |(c0, c1, k)| {
-                if *c0 <= range.end.col && range.start.col <= *c1 {
+        self.wide_deps.get(&sheet).is_none_or(|v| {
+            v.query_within(r0, r1, left, &mut |(c0, c1, k)| {
+                let hit = *c0 <= range.end.col && range.start.col <= *c1;
+                if hit {
                     out.push(*k);
+                    look_up_work(1);
                 }
-            });
-        }
+                hit && charge_readers
+            })
+        })
     }
 
     /// Precedent areas of a formula cell (for Trace Precedents).
     pub fn precedents_of(&self, k: Key) -> Vec<Area> {
         self.nodes.get(&k).map(|n| n.areas.clone()).unwrap_or_default()
+    }
+
+    /// Orders `dirty` into levels: a formula's level is one past the highest level of the dirty
+    /// formulas it reads (statically), so the formulas of a level don't read one another and
+    /// can be calculated in any order, or at once. Formulas on a cycle, and those behind one,
+    /// never reach a level and come last (see [`Plan::rest`]). No plan ([`NoPlan::Budget`]) when
+    /// planning would cost more than it saves (a budget of index work), and the caller calculates
+    /// in row-major order.
+    ///
+    /// Each formula waits for the dirty formulas inside its precedent areas, counted through a
+    /// per-column index of the dirty formulas (a binary search per column an area covers, not a
+    /// report per cell: a formula over a column of 25K formulas costs one search, not 25K
+    /// reports). A formula with few precedents gets an exact release list from them; one with
+    /// many (a whole column of formulas) is recounted when a level completes, through the index
+    /// of the formulas not leveled yet. A formula that spills now also holds back the readers of
+    /// its spill range, so they come after it and read the new array rather than the old one,
+    /// and a formula reading an area waits for the nearest dirty formula above it in each of its
+    /// columns, which spills into it if it returns an array taller than it was (or new), as it
+    /// would come before the reader in row-major order.
+    pub(crate) fn levels(&self, wb: &Workbook, dirty: &[Key]) -> Result<Plan, NoPlan> {
+        self.levels_within(wb, dirty, None)
+    }
+
+    /// [`Graph::levels`] with the index work capped at `cap` (tests force the row-major fallback).
+    pub(crate) fn levels_within(&self, wb: &Workbook, dirty: &[Key], cap: Option<usize>) -> Result<Plan, NoPlan> {
+        // A cap of nothing plans nothing (tests' row-major oracle), even for a round of formulas
+        // that would cost no index work.
+        if cap == Some(0) {
+            return Err(NoPlan::Other);
+        }
+        let DirtyIndex { index, keys, mut cols, sheet_cols, pos } = DirtyIndex::new(dirty).ok_or(NoPlan::Other)?;
+        let n = keys.len();
+        let budget = index_budget(n).min(cap.unwrap_or(usize::MAX));
+        let mut work = 0usize;
+        // An area with its corners in order, whichever way round they came: the graph's areas are
+        // ordered where the precedent walk records them, and nothing here may panic, or miss a
+        // dirty formula inside an area or above it, if one is not.
+        fn in_order(a: &Area) -> Area {
+            Area { sheet: a.sheet, range: RangeRef::new(a.range.start, a.range.end) }
+        }
+        // Visits each column of the index that `area` covers, calling `f` with the span of the
+        // area's rows in it. The area itself is charged too: one that meets no dirty column (on a
+        // sheet without any, or wide and between them) still costs a look-up, and a wide reader
+        // with thousands of such areas walks them at every recount.
+        fn visit<'c>(
+            cols: &'c HashMap<(usize, u32), ColIndex>,
+            sheet_cols: &HashMap<usize, Vec<u32>>,
+            area: &Area,
+            work: &mut usize,
+            f: &mut dyn FnMut(&'c ColIndex, std::ops::Range<usize>),
+        ) {
+            *work += 1;
+            let area = in_order(area);
+            let (c0, c1) = (area.range.start.col, area.range.end.col);
+            let (r0, r1) = (area.range.start.row, area.range.end.row);
+            let Some(list) = sheet_cols.get(&area.sheet) else { return };
+            // Wholly to one side of the sheet's dirty columns: nothing to visit, charged as the
+            // walk below would charge it (a column each when it walks the area's columns, none
+            // when it walks the list's).
+            if list.first().is_some_and(|&first| c1 < first) || list.last().is_some_and(|&last| c0 > last) {
+                if ((c1 - c0) as usize) < list.len() {
+                    *work += (c1 - c0) as usize + 1;
+                }
+                return;
+            }
+            if ((c1 - c0) as usize) < list.len() {
+                for col in c0..=c1 {
+                    *work += 1;
+                    if let Some(c) = cols.get(&(area.sheet, col)) {
+                        f(c, c.span(r0, r1));
+                    }
+                }
+            } else {
+                let from = list.partition_point(|c| *c < c0);
+                for col in list.get(from..).unwrap_or(&[]).iter().take_while(|c| **c <= c1) {
+                    *work += 1;
+                    if let Some(c) = cols.get(&(area.sheet, *col)) {
+                        f(c, c.span(r0, r1));
+                    }
+                }
+            }
+        }
+        // The nearest dirty formula above an area, in each of its columns, spills into it if it
+        // returns an array tall enough and nothing stands between them (one further up would be
+        // blocked by it): the reader waits for it, as it would come after it in row-major order,
+        // so a chain of spills, each sized by the area of the one before, settles in one round.
+        // Held back like a spill reader. A cell under the formula or at the top of the area that
+        // holds a value or a formula would block the spill, so the reader doesn't wait then (a
+        // sheet of formulas has no such waits, nor loops of them). Looked at for each dirty column
+        // `c` the area `a` (in order) of formula `i` meets, from the span of its rows there: the
+        // formula it waits for there, if any.
+        // Inlined: it runs for each dirty column an area meets, in the planner's innermost loop.
+        #[inline(always)]
+        fn anchor_above(wb: &Workbook, keys: &[Key], a: &Area, c: &ColIndex, span: &std::ops::Range<usize>, i: usize) -> Option<u32> {
+            let occupied = |sheet: usize, at: CellRef| {
+                wb.sheet(sheet).and_then(|sh| sh.cells.get(at)).is_some_and(|cell| !cell.value.is_empty() || cell.formula.is_some())
+            };
+            let r0 = a.range.start.row;
+            // The span starts at the first dirty row at or below the top of the area.
+            let above = span.start;
+            // A dirty formula at the top of the area fills it: nothing spills into it.
+            if c.rows.get(above) == Some(&r0) {
+                return None;
+            }
+            if let Some(&j) = above.checked_sub(1).and_then(|p| c.keys.get(p))
+                && j as usize != i
+                && let Some(anchor) = keys.get(j as usize).filter(|anchor| anchor.0 == a.sheet)
+                && !occupied(a.sheet, CellRef::new(anchor.1.row.saturating_add(1), anchor.1.col))
+                && !occupied(a.sheet, CellRef::new(r0, anchor.1.col))
+            {
+                return Some(j);
+            }
+            None
+        }
+        // The release lists and the anchors above use what the visits of a formula's areas found,
+        // when they were kept, rather than visit them again, and each is charged what those visits
+        // cost (`walk`, `costs` one per area), as a walk over the areas is: tested against the
+        // budget after each area. When the whole walk fits, the test can't fail before its end and
+        // it is charged at once.
+        fn walk_again(work: &mut usize, walk: usize, costs: &[usize], budget: usize) -> Result<(), NoPlan> {
+            if work.saturating_add(walk) <= budget {
+                *work += walk;
+                return Ok(());
+            }
+            for cost in costs {
+                *work = work.saturating_add(*cost);
+                if *work > budget {
+                    return Err(NoPlan::Budget { work: *work });
+                }
+            }
+            Ok(())
+        }
+        // For a formula whose spans were not kept: visits its areas again, each charged as it is
+        // visited, which is what `walk_again` charges for it, with the budget tested after each
+        // area, and calls `f` with each dirty column an area meets, the span of the area's rows in
+        // it and the area, in order.
+        fn visit_again<'c>(
+            cols: &'c HashMap<(usize, u32), ColIndex>,
+            sheet_cols: &HashMap<usize, Vec<u32>>,
+            areas: &[Area],
+            work: &mut usize,
+            budget: usize,
+            f: &mut dyn FnMut(&'c ColIndex, std::ops::Range<usize>, &Area),
+        ) -> Result<(), NoPlan> {
+            for a in areas {
+                let a = &in_order(a);
+                visit(cols, sheet_cols, a, work, &mut |c, span| f(c, span, a));
+                if *work > budget {
+                    return Err(NoPlan::Budget { work: *work });
+                }
+            }
+            Ok(())
+        }
+        let mut waits = vec![0usize; n];
+        // `spill_waits` (filled by `anchor_above` and by the readers of stored spill ranges
+        // below): one of the places the stale-reader rule is enforced; see `Calc::run`.
+        let mut spill_waits = vec![0usize; n];
+        // (released formula, waiter) pairs, in the order found: the release lists, laid out below.
+        let mut pairs: Vec<(u32, u32)> = Vec::new();
+        let mut spill_release: Vec<Vec<u32>> = vec![Vec::new(); n];
+        let mut big: Vec<u32> = Vec::new();
+        let mut deps = Vec::new();
+        // For the formula being planned: the work the visit of each of its areas cost, and the
+        // spans the visits found, each dirty column an area met with the positions of the area's
+        // rows in it and the area's place among the formula's: all of them when there are at most
+        // `KEPT_SPANS`, and otherwise the first `KEPT_SPANS + 1`, the last of which marks them not
+        // kept (the areas are visited again), so `spans` never holds more than `KEPT_SPANS + 1`.
+        // `pairs` gains at most `EXACT` entries a formula, each charged to the budget before it is
+        // pushed, so it holds no more than the budget's units in all.
+        let mut costs: Vec<usize> = Vec::new();
+        let mut spans: Vec<(&ColIndex, std::ops::Range<usize>, usize)> = Vec::new();
+        for (i, k) in keys.iter().enumerate() {
+            let areas = self.nodes.get(k).map(|nd| nd.areas.as_slice()).unwrap_or(&[]);
+            let mut total = 0usize;
+            costs.clear();
+            spans.clear();
+            let start = work;
+            for (place, a) in areas.iter().enumerate() {
+                let before = work;
+                visit(&cols, &sheet_cols, a, &mut work, &mut |c, span| {
+                    total += span.len();
+                    if spans.len() <= KEPT_SPANS {
+                        spans.push((c, span, place));
+                        #[cfg(test)]
+                        PLAN_SPANS_PEAK.with(|p| p.set(p.get().max(spans.len())));
+                    }
+                });
+                costs.push(work - before);
+                if work > budget {
+                    return Err(NoPlan::Budget { work });
+                }
+            }
+            let walk = work - start;
+            // Whether `spans` holds every dirty column the visits met.
+            let kept = spans.len() <= KEPT_SPANS;
+            if total <= EXACT {
+                // The entries are charged before they are pushed, so a plan that can't fit the
+                // budget is given up here, before the lists are built.
+                work += total;
+                if work > budget {
+                    return Err(NoPlan::Budget { work });
+                }
+                if kept {
+                    walk_again(&mut work, walk, &costs, budget)?;
+                    for (c, span, _) in &spans {
+                        pairs.extend(c.keys.get(span.clone()).unwrap_or(&[]).iter().map(|&j| (j, i as u32)));
+                    }
+                } else {
+                    visit_again(&cols, &sheet_cols, areas, &mut work, budget, &mut |c, span, _| {
+                        pairs.extend(c.keys.get(span).unwrap_or(&[]).iter().map(|&j| (j, i as u32)));
+                    })?;
+                }
+            } else {
+                big.push(i as u32);
+            }
+            if let Some(w) = waits.get_mut(i) {
+                *w = total;
+            }
+            let mut wait_for = |j: u32| {
+                if let Some(w) = spill_waits.get_mut(i) {
+                    *w += 1;
+                    if let Some(r) = spill_release.get_mut(j as usize) {
+                        r.push(i as u32);
+                    }
+                }
+            };
+            if kept {
+                walk_again(&mut work, walk, &costs, budget)?;
+                for (c, span, place) in &spans {
+                    if let Some(a) = areas.get(*place).map(in_order)
+                        && let Some(j) = anchor_above(wb, &keys, &a, c, span, i)
+                    {
+                        wait_for(j);
+                    }
+                }
+            } else {
+                visit_again(&cols, &sheet_cols, areas, &mut work, budget, &mut |c, span, a| {
+                    if let Some(j) = anchor_above(wb, &keys, a, c, &span, i) {
+                        wait_for(j);
+                    }
+                })?;
+            }
+            // Readers of the range this formula spills over now. The query walks the range's
+            // cells, or the whole cell index past 4,096 of them, the row intervals of the columns
+            // and those of the wide readers, whose columns may miss the range, and pushes a key for
+            // each reference that meets it (a reader of many cells of the range one by one is
+            // pushed once for each): charged to the budget as the query goes, before the keys are
+            // sorted. The query stops as soon as the budget runs out, and planning with it
+            // (reported one unit past the budget: the work it was allowed and one more).
+            if let Some(r) = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
+                deps.clear();
+                work = work.saturating_add(self.uncharged_probes(*r));
+                if work > budget {
+                    return Err(NoPlan::Budget { work });
+                }
+                let mut left = budget.saturating_sub(work);
+                let within = self.dependents_of_range_within(k.0, *r, &mut deps, &mut left);
+                work = budget.saturating_sub(left);
+                if !within {
+                    return Err(NoPlan::Budget { work: work.saturating_add(1) });
+                }
+                deps.sort_unstable();
+                deps.dedup();
+                for d in &deps {
+                    if let Some(j) = DirtyIndex::place(index.as_ref(), &keys, d)
+                        && j as usize != i
+                        && let Some(w) = spill_waits.get_mut(j as usize)
+                    {
+                        *w += 1;
+                        if let Some(r) = spill_release.get_mut(i) {
+                            r.push(j);
+                        }
+                    }
+                }
+            }
+            if work > budget {
+                return Err(NoPlan::Budget { work });
+            }
+        }
+        drop(spans);
+        let (starts, waiters) = release_lists(n, &pairs);
+        drop(pairs);
+        let is_big: HashSet<u32> = big.iter().copied().collect();
+        // A wide reader with `left` precedents pending can't be ready before `left` more
+        // formulas complete, anywhere: it is counted again only then, so the readers of a long
+        // chain's end are recounted once per `left` waves, not every wave.
+        // Kept by the completion count they are due at, so a wave only looks at the due ones.
+        let mut big: std::collections::BinaryHeap<std::cmp::Reverse<(usize, u32)>> =
+            big.iter().map(|&i| std::cmp::Reverse((waits.get(i as usize).copied().unwrap_or(0), i))).collect();
+        let mut completed = 0usize;
+        let mut order: Vec<Key> = Vec::with_capacity(n);
+        let mut bounds: Vec<usize> = Vec::new();
+        let mut done = vec![false; n];
+        let mut wave: Vec<u32> = (0..n).filter(|&i| waits.get(i) == Some(&0) && spill_waits.get(i) == Some(&0)).map(|i| i as u32).collect();
+        let mut next: Vec<u32> = Vec::new();
+        while !wave.is_empty() {
+            completed += wave.len();
+            for &i in &wave {
+                let Some(&k) = keys.get(i as usize) else { continue };
+                order.push(k);
+                if let Some(d) = done.get_mut(i as usize) {
+                    *d = true;
+                }
+                // The pending counts are read only to recount the wide readers.
+                if !is_big.is_empty()
+                    && let Some((col, p)) = pos.get(i as usize)
+                    && let Some(c) = cols.get_mut(col)
+                {
+                    c.pending.decrement(*p);
+                }
+            }
+            for &i in &wave {
+                let ready = |j: u32, waits: &[usize], spill_waits: &[usize], next: &mut Vec<u32>| {
+                    let j = j as usize;
+                    if waits.get(j) == Some(&0)
+                        && spill_waits.get(j) == Some(&0)
+                        && (is_big.is_empty() || !is_big.contains(&(j as u32)))
+                        && done.get(j) == Some(&false)
+                    {
+                        next.push(j as u32);
+                    }
+                };
+                // Each entry released is charged, and the budget tested, as it goes: a wave of many
+                // entries stops where the budget runs out, not after it.
+                let list = starts.get(i as usize).copied().unwrap_or(0)..starts.get(i as usize + 1).copied().unwrap_or(0);
+                for &j in waiters.get(list).unwrap_or(&[]) {
+                    work += 1;
+                    if work > budget {
+                        return Err(NoPlan::Budget { work });
+                    }
+                    if let Some(w) = waits.get_mut(j as usize)
+                        && *w > 0
+                    {
+                        *w -= 1;
+                        ready(j, &waits, &spill_waits, &mut next);
+                    }
+                }
+                for &j in spill_release.get(i as usize).map(Vec::as_slice).unwrap_or(&[]) {
+                    work += 1;
+                    if work > budget {
+                        return Err(NoPlan::Budget { work });
+                    }
+                    if let Some(w) = spill_waits.get_mut(j as usize)
+                        && *w > 0
+                    {
+                        *w -= 1;
+                        ready(j, &waits, &spill_waits, &mut next);
+                    }
+                }
+            }
+            // Wide readers: counted again through what is still pending, once enough formulas
+            // have completed for the count to have reached zero. A reader of overlapping areas
+            // (two lookups over nested tables) counts a formula in both, so its count can lie
+            // past what will ever complete: when nothing else is ready, all of them are counted
+            // again, so such a reader is leveled rather than left for after the levels.
+            let stalled = next.is_empty();
+            let mut later = Vec::new();
+            while let Some(&std::cmp::Reverse((due, i))) = big.peek() {
+                if due > completed && !stalled {
+                    break;
+                }
+                big.pop();
+                let Some(k) = keys.get(i as usize) else { continue };
+                work += 1;
+                if work > budget {
+                    return Err(NoPlan::Budget { work });
+                }
+                let mut left = waits.get(i as usize).copied().unwrap_or(0);
+                if left > 0 {
+                    let areas = self.nodes.get(k).map(|nd| nd.areas.as_slice()).unwrap_or(&[]);
+                    left = 0;
+                    for a in areas {
+                        visit(&cols, &sheet_cols, a, &mut work, &mut |c, span| left += c.pending_in(span));
+                        if work > budget {
+                            return Err(NoPlan::Budget { work });
+                        }
+                    }
+                    if let Some(w) = waits.get_mut(i as usize) {
+                        *w = left;
+                    }
+                }
+                // A count of zero stays zero; the reader may still wait on a spill range, which
+                // is looked at again next wave.
+                if left == 0 && spill_waits.get(i as usize) == Some(&0) {
+                    next.push(i);
+                } else {
+                    later.push(std::cmp::Reverse((completed.saturating_add(left.max(1)), i)));
+                }
+            }
+            big.extend(later);
+            if work > budget {
+                return Err(NoPlan::Budget { work });
+            }
+            bounds.push(order.len());
+            // Row-major within the level (`dirty` is sorted so), whatever order released them:
+            // the same order on one thread and on many, and the sequence RAND draws in.
+            next.sort_unstable();
+            std::mem::swap(&mut wave, &mut next);
+            next.clear();
+        }
+        let leveled = order.len();
+        if leveled < n {
+            order.extend(keys.iter().zip(&done).filter(|(_, d)| !**d).map(|(k, _)| *k));
+        }
+        Ok(Plan { order, bounds, leveled, work, budget, wide: is_big.len() })
+    }
+}
+
+/// The dirty formulas of one column, for [`Graph::levels`]: rows sorted, each with the formula's
+/// index in the plan, and which of them are not leveled yet.
+#[derive(Default)]
+struct ColIndex {
+    rows: Vec<u32>,
+    keys: Vec<u32>,
+    pending: Fenwick,
+}
+
+impl ColIndex {
+    /// The positions of the rows in `r0..=r1`.
+    fn span(&self, r0: u32, r1: u32) -> std::ops::Range<usize> {
+        let a = self.rows.partition_point(|r| *r < r0);
+        // The rows are distinct, so no more than the area's height of them lie in it.
+        let height = (r1.saturating_sub(r0) as usize).saturating_add(1);
+        let b = a + self.rows.get(a..a.saturating_add(height).min(self.rows.len())).unwrap_or(&[]).partition_point(|r| *r <= r1);
+        a..b
+    }
+    /// How many of the positions are not leveled yet.
+    fn pending_in(&self, span: std::ops::Range<usize>) -> usize {
+        self.pending.prefix(span.end).saturating_sub(self.pending.prefix(span.start))
+    }
+}
+
+/// Prefix counts over positions, each starting at one and decremented once.
+#[derive(Default)]
+struct Fenwick(Vec<usize>);
+
+// `isolate_lowest_one` needs Rust 1.97; the workspace builds on 1.95.
+#[allow(clippy::manual_isolate_lowest_one)]
+impl Fenwick {
+    fn ones(n: usize) -> Fenwick {
+        let mut t = vec![0usize; n + 1];
+        for i in 1..=n {
+            if let Some(x) = t.get_mut(i) {
+                *x += 1;
+            }
+            let j = i + (i & i.wrapping_neg());
+            if j <= n {
+                let add = t.get(i).copied().unwrap_or(0);
+                if let Some(y) = t.get_mut(j) {
+                    *y += add;
+                }
+            }
+        }
+        Fenwick(t)
+    }
+    /// Count of positions `< end`.
+    fn prefix(&self, end: usize) -> usize {
+        let mut i = end.min(self.0.len().saturating_sub(1));
+        let mut s = 0;
+        while i > 0 {
+            s += self.0.get(i).copied().unwrap_or(0);
+            i &= i - 1;
+        }
+        s
+    }
+    fn decrement(&mut self, p: usize) {
+        let n = self.0.len().saturating_sub(1);
+        let mut i = p + 1;
+        while i <= n {
+            if let Some(x) = self.0.get_mut(i) {
+                *x = x.saturating_sub(1);
+            }
+            i += i & i.wrapping_neg();
+        }
+    }
+}
+
+/// The release lists of [`Graph::levels`] from its (released formula, waiter) pairs over `n`
+/// formulas: formula `i`'s list is `waiters[starts[i]..starts[i + 1]]`, in the order found.
+fn release_lists(n: usize, pairs: &[(u32, u32)]) -> (Vec<usize>, Vec<u32>) {
+    let mut starts = vec![0usize; n + 1];
+    for &(j, _) in pairs {
+        if let Some(s) = starts.get_mut(j as usize) {
+            *s += 1;
+        }
+    }
+    let mut sum = 0usize;
+    for s in starts.iter_mut() {
+        sum += *s;
+        *s = sum;
+    }
+    let mut waiters = vec![0u32; sum];
+    for &(j, i) in pairs.iter().rev() {
+        if let Some(s) = starts.get_mut(j as usize) {
+            *s -= 1;
+            if let Some(w) = waiters.get_mut(*s) {
+                *w = i;
+            }
+        }
+    }
+    (starts, waiters)
+}
+
+/// Why [`Graph::levels`] made no plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoPlan {
+    /// Planning passed its budget of index work, and was given up after `work` units.
+    Budget { work: usize },
+    /// Not planned for another reason: more dirty formulas than the index numbers, or a cap of
+    /// nothing (tests).
+    Other,
+}
+
+/// An evaluation plan from [`Graph::levels`].
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Plan {
+    pub(super) order: Vec<Key>,
+    /// End of each level in `order`.
+    pub(super) bounds: Vec<usize>,
+    /// Where the formulas on or behind cycles start in `order`.
+    pub(super) leveled: usize,
+    /// Index work it took (tests bound it).
+    work: usize,
+    /// The index work planning could cost (see [`index_budget`]).
+    budget: usize,
+    /// Formulas recounted per level rather than given a release list (more than [`EXACT`]
+    /// precedents pending).
+    pub(super) wide: usize,
+}
+
+impl Plan {
+    /// The index work planning took: columns visited, entries released, readers recounted.
+    pub(crate) fn work(&self) -> usize {
+        self.work
+    }
+    /// The index work each phase of the round that walks the dependency index may cost, planning
+    /// included (the budget rule: see [`index_budget`]).
+    pub(crate) fn budget(&self) -> usize {
+        self.budget
+    }
+    /// The most note entries the round may keep, its dynamic formulas' reads (`Watch::reads`) and
+    /// the pairs of readers before an anchor (`Watch::unforced`) between them, a limit of its own
+    /// beside [`index_budget`]: one per formula of the round plus
+    /// [`FIXED_INDEX_WORK`], so that the notes stay in proportion to what the round holds for
+    /// its results.
+    pub(crate) fn note_limit(&self) -> usize {
+        self.order.len().saturating_add(FIXED_INDEX_WORK)
+    }
+    /// How many formulas each level has.
+    pub(crate) fn level_sizes(&self) -> impl Iterator<Item = usize> + '_ {
+        self.levels().map(<[Key]>::len)
+    }
+    /// The levels, in order: no formula of a level reads another of the same level (statically).
+    pub(crate) fn levels(&self) -> impl Iterator<Item = &[Key]> {
+        let starts = std::iter::once(0).chain(self.bounds.iter().copied());
+        starts.zip(self.bounds.iter().copied()).filter_map(|(a, b)| self.order.get(a..b))
+    }
+    /// Formulas on or behind a cycle.
+    pub(crate) fn rest(&self) -> &[Key] {
+        self.order.get(self.leveled..).unwrap_or(&[])
+    }
+}
+
+/// The dirty formulas of a plan by their place in it, and by (sheet, column), rows sorted, with
+/// each formula's place; per sheet, the columns that hold any (for areas wider than that list);
+/// and where each formula sits in its column's lists.
+struct DirtyIndex {
+    /// The places by key, when `dirty` was not in row-major order (or held a formula twice);
+    /// otherwise `keys` is `dirty`, searched in that order.
+    index: Option<HashMap<Key, u32>>,
+    keys: Vec<Key>,
+    cols: HashMap<(usize, u32), ColIndex>,
+    sheet_cols: HashMap<usize, Vec<u32>>,
+    pos: Vec<((usize, u32), usize)>,
+}
+
+impl DirtyIndex {
+    /// The place of the dirty formula `k` in `keys`, through `index` when there is one.
+    fn place(index: Option<&HashMap<Key, u32>>, keys: &[Key], k: &Key) -> Option<u32> {
+        match index {
+            Some(index) => index.get(k).copied(),
+            None => keys.binary_search_by_key(&(k.0, k.1.row, k.1.col), |x| (x.0, x.1.row, x.1.col)).ok().and_then(|p| u32::try_from(p).ok()),
+        }
+    }
+
+    /// `None` when there are more dirty formulas than a `u32` counts.
+    fn new(dirty: &[Key]) -> Option<DirtyIndex> {
+        let strictly_row_major = dirty.windows(2).all(|w| (w[0].0, w[0].1.row, w[0].1.col) < (w[1].0, w[1].1.row, w[1].1.col));
+        let (index, keys) = if strictly_row_major {
+            // Each formula once, in order: placed by a search, without an index.
+            u32::try_from(dirty.len().saturating_sub(1)).ok()?;
+            (None, dirty.to_vec())
+        } else {
+            let mut index: HashMap<Key, u32> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
+            let mut keys: Vec<Key> = Vec::with_capacity(dirty.len());
+            for &k in dirty {
+                if let std::collections::hash_map::Entry::Vacant(e) = index.entry(k) {
+                    let i = u32::try_from(keys.len()).ok()?;
+                    e.insert(i);
+                    keys.push(k);
+                }
+            }
+            (Some(index), keys)
+        };
+        // The dirty formulas by (sheet, column), rows sorted, with the formula's index; and per
+        // sheet the columns that hold any, for areas wider than that list.
+        let n = keys.len();
+        let mut by_col: Vec<(usize, u32, u32, u32)> = keys.iter().enumerate().map(|(i, k)| (k.0, k.1.col, k.1.row, i as u32)).collect();
+        // In row-major order (`Calc::run` sorts them so; tests may not), each column's rows come
+        // in ascending order as they are: only the sheets' column lists need sorting then.
+        let row_major = strictly_row_major || keys.windows(2).all(|w| (w[0].0, w[0].1.row, w[0].1.col) < (w[1].0, w[1].1.row, w[1].1.col));
+        if !row_major {
+            by_col.sort_unstable();
+        }
+        let mut cols: HashMap<(usize, u32), ColIndex> = HashMap::default();
+        let mut sheet_cols: HashMap<usize, Vec<u32>> = HashMap::default();
+        let mut pos: Vec<((usize, u32), usize)> = vec![((0, 0), 0); n];
+        for &(sheet, col, row, i) in &by_col {
+            let c = cols.entry((sheet, col)).or_insert_with(|| {
+                sheet_cols.entry(sheet).or_default().push(col);
+                ColIndex::default()
+            });
+            if let Some(p) = pos.get_mut(i as usize) {
+                *p = ((sheet, col), c.rows.len());
+            }
+            c.rows.push(row);
+            c.keys.push(i);
+        }
+        if row_major {
+            for list in sheet_cols.values_mut() {
+                list.sort_unstable();
+            }
+        }
+        for c in cols.values_mut() {
+            c.pending = Fenwick::ones(c.rows.len());
+        }
+        Some(DirtyIndex { index, keys, cols, sheet_cols, pos })
     }
 }
