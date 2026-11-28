@@ -291,8 +291,7 @@ fn cash_flows() {
     let m = col(&[-120000.0, 39000.0, 30000.0, 21000.0, 37000.0, 46000.0]);
     close_tol(ev("MIRR", vec![rf(m), n(0.1), n(0.12)]), 0.1260943, 1e-6);
     close_tol(ev("MIRR", vec![rf(col(&[-120000.0, 39000.0, 30000.0, 21000.0])), n(0.1), n(0.12)]), -0.048044655, 1e-7);
-    is_err(ev("MIRR", vec![rf(col(&[1.0, 2.0])), n(0.1), n(0.1)]), CellError::Div0);
-    // Excel 365 gives -1 when every flow is negative: the positive flows are worth nothing.
+    is_err(ev("MIRR", vec![rf(col(&[1.0, 2.0])), n(0.1), n(0.1)]), CellError::Div0); // Excel 365 gives -1 when every flow is negative: the positive flows are worth nothing.
     close_tol(ev("MIRR", vec![rf(col(&[-10000.0, -3400.0, -6500.0, -1000.0])), n(0.07), n(0.01)]), -1.0, 1e-12);
     close(ev("FVSCHEDULE", vec![n(1.0), av(row(&[0.09, 0.11, 0.1]))]), 1.33089);
     close(ev("EFFECT", vec![n(0.0525), n(4.0)]), 0.0535426673707584);
@@ -309,6 +308,19 @@ fn cash_flows() {
     close(ev("DOLLARFR", vec![n(1.125), n(32.0)]), 1.04);
     is_err(ev("DOLLARDE", vec![n(1.02), n(0.0)]), CellError::Div0);
     is_err(ev("DOLLARDE", vec![n(1.02), n(-1.0)]), CellError::Num);
+}
+
+/// Excel does not read a Boolean guess as 1/0: `XIRR(..., TRUE)` and `XIRR(..., FALSE)` are
+/// #VALUE!, from a literal and from a reference alike, while a numeric guess still solves (#4045).
+#[test]
+fn xirr_rejects_a_boolean_guess() {
+    let flows = || rf(col(&[-100.0, 110.0]));
+    let dates = || rf(col(&[1.0, 366.0]));
+    is_err(ev("XIRR", vec![flows(), dates(), b(true)]), CellError::Value);
+    is_err(ev("XIRR", vec![flows(), dates(), b(false)]), CellError::Value);
+    is_err(ev("XIRR", vec![flows(), dates(), Arg::reference(Value::Bool(true))]), CellError::Value);
+    is_err(ev("XIRR", vec![flows(), dates(), Arg::reference(Value::Bool(false))]), CellError::Value);
+    close_tol(ev("XIRR", vec![flows(), dates(), n(0.1)]), 0.0999999, 1e-6);
 }
 
 #[test]
