@@ -65,6 +65,60 @@ fn filter_list_orders_arabic_like_sort() {
 }
 
 #[test]
+fn filter_choices_count_the_rows_the_other_columns_filters_leave() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "B2", "values": [
+            ["Payment", "Region"], ["Card", "East"], ["Cash", "East"],
+            ["Card", "West"], [null, "East"], [null, "West"], ["card", "East"]
+        ]}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "B9", "input": "Outside"})).unwrap();
+    s.execute("data.filter", json!({"range": "B2:C8"})).unwrap();
+    let counts = |s: &Session| -> Vec<(String, bool, u32)> {
+        filter_choices(&s.doc().unwrap().wb, 0, 1).into_iter().map(|c| (c.label, c.checked, c.count)).collect()
+    };
+    // Case variants share one entry, so its count is all of their rows.
+    assert_eq!(counts(&s), vec![("Card".into(), true, 3), ("Cash".into(), true, 1), ("(Blanks)".into(), true, 2)]);
+
+    // The list is built from the rows the other columns' filters leave, and so are its counts;
+    // this column's own filter unticks values without changing them.
+    s.execute("data.filterBy", json!({"column": "C", "values": ["East"]})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["Cash"], "blanks": false})).unwrap();
+    assert_eq!(counts(&s), vec![("Card".into(), false, 2), ("Cash".into(), true, 1), ("(Blanks)".into(), false, 1)]);
+}
+
+#[test]
+fn filter_only_params_leave_the_rows_a_choice_counts() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "B2", "values": [
+            ["Payment", "Region"], ["Card", "East"], ["Cash", "East"],
+            ["Card", "West"], [null, "East"], [null, "West"], ["card", "East"]
+        ]}),
+    )
+    .unwrap();
+    s.execute("data.filter", json!({"range": "B2:C8"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "C", "values": ["East"]})).unwrap();
+    let choices = filter_choices(&s.doc().unwrap().wb, 0, 1);
+    assert_eq!(choices.iter().map(|c| (c.label.as_str(), c.count)).collect::<Vec<_>>(), [("Card", 2), ("Cash", 1), ("(Blanks)", 1)]);
+    for choice in &choices {
+        // Only on a value replaces the column's filter, whatever it was, and leaves the rows it counted.
+        s.execute("data.filterBy", filter_only_params("B", choice)).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let showing = (2..=7).filter(|&r| !sh.is_row_hidden(r)).count();
+        assert_eq!(showing, choice.count as usize, "{choice:?}");
+        let ticked: Vec<String> = filter_choices(&s.doc().unwrap().wb, 0, 1).into_iter().filter(|c| c.checked).map(|c| c.label).collect();
+        assert_eq!(ticked, [choice.label.as_str()]);
+    }
+}
+
+#[test]
 fn filter_by_huge_numeric_column_is_rejected_not_overflowed() {
     let mut s = Session::new();
     s.new_workbook();

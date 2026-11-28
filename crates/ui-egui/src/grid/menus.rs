@@ -71,11 +71,36 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             // Full width: shrunk to the longest value, the scroll bar sat mid-menu and the wheel only
             // worked over the values themselves (#432).
+            // "Only" filters to one value in a click (as in WPS), without unticking (Select All) first.
+            // It shows on the hovered row and keeps its space on the others, so labels don't reflow.
+            let mut only = None;
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for c in checks.iter_mut().filter(|c| matches(&c.label)) {
-                    ui.checkbox(&mut c.checked, c.label.as_str());
+                    ui.allocate_ui_with_layout(
+                        vec2(ui.available_width(), ui.spacing().interact_size.y),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let hovered = ui.rect_contains_pointer(ui.max_rect());
+                            if ui.add_visible(hovered, egui::Button::new("Only").small()).clicked() {
+                                only = Some(c.clone());
+                            }
+                            ui.label(egui::RichText::new(c.count.to_string()).color(Tokens::get(ui.ctx()).text_dim));
+                            ui.allocate_ui_with_layout(
+                                vec2(ui.available_width(), ui.spacing().interact_size.y),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                                    ui.checkbox(&mut c.checked, c.label.as_str());
+                                },
+                            );
+                        },
+                    );
                 }
             });
+            if let Some(choice) = only {
+                app.run_or_alert("data.filterBy", gridcraft_engine::cmd::data::filter_only_params(&col_to_letters(col), &choice));
+                close = true;
+            }
             app.grid.filter_checks = Some(checks.clone());
             app.grid.filter_search.clone_from(&search);
             let visible_checks: Vec<gridcraft_engine::cmd::data::FilterChoice> = checks
