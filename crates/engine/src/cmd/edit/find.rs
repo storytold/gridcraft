@@ -109,6 +109,45 @@ pub(crate) fn wildcard(text: &str, pat: &str) -> bool {
     state[p.len() / 64] & (1 << (p.len() % 64)) != 0
 }
 
+/// What Find searches in each cell (Excel's Look in).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LookIn {
+    Formulas,
+    Values,
+    /// The text of each note.
+    Notes,
+    /// The text of each threaded comment and its replies.
+    Comments,
+}
+
+fn look_in(p: &Json) -> Result<LookIn> {
+    // Absent or null keeps the default; any other non-string is as unknown as a misspelt name.
+    if p.get("lookIn").is_some_and(|v| !v.is_string() && !v.is_null()) {
+        return Err(bad("edit.find", "`lookIn` must be a string: use formulas, values, notes or comments"));
+    }
+    match str_param(p, "lookIn") {
+        None | Some("formulas") => Ok(LookIn::Formulas),
+        Some("values") => Ok(LookIn::Values),
+        Some("notes") => Ok(LookIn::Notes),
+        Some("comments") => Ok(LookIn::Comments),
+        Some(other) => Err(bad("edit.find", format!("unknown `lookIn` {other:?}: use formulas, values, notes or comments"))),
+    }
+}
+
+/// The note or comment-thread text at each cell that matches, in row order. A thread matches when
+/// its first entry or any reply does, so Match entire cell contents applies to each entry; the
+/// text given back is the whole thread, one entry per line.
+fn comment_hits(sh: &gridcraft_model::Sheet, threaded: bool, mut keep: impl FnMut(CellRef, &str) -> bool) -> Vec<(CellRef, String)> {
+    sh.comments
+        .iter()
+        .filter(|(_, cm)| cm.threaded == threaded)
+        .filter_map(|(c, cm)| {
+            let thread: Vec<&str> = std::iter::once(cm.text.as_str()).chain(cm.replies.iter().map(|(_, t)| t.as_str())).collect();
+            thread.iter().any(|t| keep(*c, t)).then(|| (*c, thread.join("\n")))
+        })
+        .collect()
+}
+
 pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     let what = str_param(p, "what").unwrap_or("").to_string();
     if what.is_empty() {
@@ -116,7 +155,8 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let case = bool_param(p, "matchCase").unwrap_or(false);
     let whole = bool_param(p, "wholeCell").unwrap_or(false);
-    let values = str_param(p, "lookIn") == Some("values");
+    let look = look_in(p)?;
+    let values = look == LookIn::Values;
     let by_cols = bool_param(p, "byColumns").unwrap_or(false);
     let all = bool_param(p, "all").unwrap_or(false);
     let workbook = str_param(p, "within") == Some("workbook");
@@ -128,19 +168,22 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     let mut hits: Vec<(usize, CellRef, String)> = Vec::new();
     for si in sheets {
         let Some(sh) = d.wb.sheet(si) else { continue };
-        let mut cells: Vec<(CellRef, String)> = sh
-            .cells
-            .iter()
-            .filter(|(c, _)| !in_selection || d.selection.contains(*c))
-            .filter_map(|(c, cell)| {
-                let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
-                    crate::display::cell_text(&d.wb, sh, c)
-                } else {
-                    cell.input_text()
-                };
-                matches(&text, &what, case, whole).then_some((c, text))
-            })
-            .collect();
+        let mut cells: Vec<(CellRef, String)> = if matches!(look, LookIn::Notes | LookIn::Comments) {
+            comment_hits(sh, look == LookIn::Comments, |c, t| (!in_selection || d.selection.contains(c)) && matches(t, &what, case, whole))
+        } else {
+            sh.cells
+                .iter()
+                .filter(|(c, _)| !in_selection || d.selection.contains(*c))
+                .filter_map(|(c, cell)| {
+                    let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
+                        crate::display::cell_text(&d.wb, sh, c)
+                    } else {
+                        cell.input_text()
+                    };
+                    matches(&text, &what, case, whole).then_some((c, text))
+                })
+                .collect()
+        };
         if by_cols {
             cells.sort_by_key(|(c, _)| (c.col, c.row));
         }
@@ -185,6 +228,10 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let with = str_param(p, "with").unwrap_or("");
     if what.is_empty() {
         return Err(bad("edit.replace", "missing `what`"));
+    }
+    // Replace looks in formulas only, as in Excel; note and comment text is not replaced.
+    if matches!(str_param(p, "lookIn"), Some("notes" | "comments")) {
+        return Err(bad("edit.replace", "Replace looks in formulas only; notes and comments can be searched with Find"));
     }
     let case = bool_param(p, "matchCase").unwrap_or(false);
     let whole = bool_param(p, "wholeCell").unwrap_or(false);

@@ -144,13 +144,13 @@ pub fn specs() -> Vec<CommandSpec> {
             fill_series
         ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
-        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook|selection} (selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
+        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values|notes|comments, byColumns?, all?: bool, within?: sheet|workbook|selection} (notes: each note's text; comments: each threaded comment and its replies, value is the thread; an unknown lookIn is an error; selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
         cmd!(
             "edit.replace",
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook|selection} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook|selection} → {replaced, skipped?} (looks in formulas only: lookIn notes or comments is an error; in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),

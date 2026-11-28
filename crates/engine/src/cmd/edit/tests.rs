@@ -937,3 +937,97 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// Cells Find All lists, as A1 strings.
+fn found_cells(r: &Json) -> Vec<String> {
+    r["results"].as_array().into_iter().flatten().filter_map(|x| x["cell"].as_str().map(str::to_string)).collect()
+}
+
+/// Look in Notes searches note text, not cell values, and never threaded comments (#4875).
+#[test]
+fn find_looks_in_notes() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A3", "values": [["plain"], ["plain"], ["Budget"]]})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "Check the Budget total", "author": "Ann"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "C5", "text": "budget", "author": "Ann"})).unwrap();
+    s.execute("review.newComment", json!({"cell": "B2", "text": "Budget thread", "author": "Ann"})).unwrap();
+    // A1's value does not hold the word but its note does; A3's value does but it has no note.
+    let notes = found_cells(&s.execute("edit.find", json!({"what": "budget", "lookIn": "notes", "all": true})).unwrap());
+    assert!(notes.contains(&"A1".to_string()) && notes.contains(&"C5".to_string()), "{notes:?}");
+    assert!(!notes.contains(&"A3".to_string()) && !notes.contains(&"B2".to_string()), "values and comments are not notes: {notes:?}");
+    let formulas = found_cells(&s.execute("edit.find", json!({"what": "budget", "all": true})).unwrap());
+    assert!(formulas.contains(&"A3".to_string()) && !formulas.contains(&"A1".to_string()), "formulas skip notes: {formulas:?}");
+    // The listed value is the note's text.
+    let r = s.execute("edit.find", json!({"what": "budget", "lookIn": "notes", "all": true})).unwrap();
+    assert!(r["results"].as_array().unwrap().iter().all(|x| x["value"].as_str().is_some_and(|v| v.to_lowercase().contains("budget"))));
+    // Match case and whole cell narrow the hits.
+    let cased = found_cells(&s.execute("edit.find", json!({"what": "budget", "lookIn": "notes", "matchCase": true, "all": true})).unwrap());
+    assert_eq!(cased, ["C5"]);
+    let whole = found_cells(&s.execute("edit.find", json!({"what": "budget", "lookIn": "notes", "wholeCell": true, "all": true})).unwrap());
+    assert_eq!(whole, ["C5"]);
+    let wild = found_cells(&s.execute("edit.find", json!({"what": "check*total", "lookIn": "notes", "wholeCell": true, "all": true})).unwrap());
+    assert_eq!(wild, ["A1"]);
+    // Find Next moves to the note's cell, past the active one, and wraps.
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    assert_eq!(s.execute("edit.find", json!({"what": "budget", "lookIn": "notes"})).unwrap()["cell"], "C5");
+    assert_eq!(s.execute("edit.find", json!({"what": "budget", "lookIn": "notes"})).unwrap()["cell"], "A1");
+    // Within the selection.
+    s.execute("selection.set", json!({"range": "B1:D9"})).unwrap();
+    let sel = found_cells(&s.execute("edit.find", json!({"what": "budget", "lookIn": "notes", "within": "selection", "all": true})).unwrap());
+    assert_eq!(sel, ["C5"]);
+}
+
+/// Look in Comments searches each threaded comment and its replies, across the workbook and in
+/// column order (#4875).
+#[test]
+fn find_looks_in_comments_and_replies() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("selection.set", json!({"sheet": 0})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["nothing here"]]})).unwrap();
+    s.execute("review.newComment", json!({"cell": "A1", "text": "first", "author": "Ann"})).unwrap();
+    s.execute("review.replyComment", json!({"cell": "A1", "text": "ship it", "author": "Bob"})).unwrap();
+    s.execute("review.newComment", json!({"cell": "B1", "text": "ship later", "author": "Ann"})).unwrap();
+    s.execute("review.newComment", json!({"cell": "A2", "text": "ship now", "author": "Ann"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "C1", "text": "ship", "author": "Ann"})).unwrap();
+    s.execute("review.newComment", json!({"sheet": 1, "cell": "A1", "text": "ship too", "author": "Ann"})).unwrap();
+    let r = s.execute("edit.find", json!({"what": "ship", "lookIn": "comments", "all": true})).unwrap();
+    let cells = found_cells(&r);
+    assert!(cells.contains(&"A1".to_string()), "a reply matches its thread: {cells:?}");
+    assert!(!cells.contains(&"C1".to_string()), "a note is not a comment: {cells:?}");
+    let a1 = r["results"].as_array().unwrap().iter().find(|x| x["cell"] == "A1").unwrap();
+    let thread = a1["value"].as_str().unwrap();
+    assert!(thread.contains("first") && thread.contains("ship it"), "the value is the thread: {thread:?}");
+    // Whole cell applies to each entry of the thread.
+    let whole = found_cells(&s.execute("edit.find", json!({"what": "ship it", "lookIn": "comments", "wholeCell": true, "all": true})).unwrap());
+    assert_eq!(whole, ["A1"]);
+    // By rows B1 comes before A2; by columns A2 does.
+    let by_rows = found_cells(&s.execute("edit.find", json!({"what": "ship", "lookIn": "comments", "all": true})).unwrap());
+    let by_cols = found_cells(&s.execute("edit.find", json!({"what": "ship", "lookIn": "comments", "byColumns": true, "all": true})).unwrap());
+    let pos = |v: &[String], a: &str| v.iter().position(|c| c == a);
+    assert!(pos(&by_rows, "B1") < pos(&by_rows, "A2") && pos(&by_cols, "A2") < pos(&by_cols, "B1"), "{by_rows:?} {by_cols:?}");
+    // The workbook scope reaches the other sheet's comment.
+    let sheet = s.execute("edit.find", json!({"what": "ship", "lookIn": "comments", "all": true})).unwrap()["count"].as_u64();
+    let book = s.execute("edit.find", json!({"what": "ship", "lookIn": "comments", "within": "workbook", "all": true})).unwrap()["count"].as_u64();
+    assert!(book > sheet, "{book:?} vs {sheet:?}");
+}
+
+/// An unknown Look in is an error rather than a search of formulas, and Replace refuses notes
+/// and comments (#4875).
+#[test]
+fn find_rejects_an_unknown_look_in() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["kiwi"]]})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "kiwi", "author": "Ann"})).unwrap();
+    assert!(s.execute("edit.find", json!({"what": "kiwi"})).is_ok());
+    assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": "everywhere"})).is_err());
+    assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": 7})).is_err(), "a non-string is not the default");
+    assert!(s.execute("edit.find", json!({"what": "kiwi", "lookIn": null})).is_ok(), "null keeps the default");
+    for look in ["notes", "comments"] {
+        assert!(s.execute("edit.replace", json!({"what": "kiwi", "with": "fig", "lookIn": look})).is_err(), "{look}");
+    }
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::text("kiwi"), "nothing was replaced");
+}
