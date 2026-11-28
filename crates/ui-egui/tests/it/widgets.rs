@@ -60,3 +60,26 @@ fn big_button_without_dropdown_keeps_centered_labels_and_width() {
         assert!((rect.width() - (widest + 12.0).max(44.0)).abs() < 0.01);
     }
 }
+
+#[test]
+fn icon_toggle_exposes_localized_name_and_pressed_state() {
+    use egui::accesskit::{Role, Toggled};
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    use gridcraft_ui_egui::i18n::{self, Language};
+
+    for enabled in [true, false] {
+        for on in [true, false] {
+            let mut h = crate::common::builder().with_size(vec2(300.0, 200.0)).build_ui(move |ui| {
+                i18n::set_current(ui.ctx(), Language::De);
+                ui.add_enabled_ui(enabled, |ui| {
+                    let _ = widgets::toggle_button(ui, Icon::Bold, on, "Bold");
+                });
+            });
+            h.run_steps(2);
+            let toggle = h.get_by_role_and_label(Role::Button, "Fett");
+            let node = toggle.accesskit_node();
+            assert_eq!(node.is_disabled(), !enabled);
+            assert_eq!(node.toggled(), Some(if on { Toggled::True } else { Toggled::False }));
+        }
+    }
+}
