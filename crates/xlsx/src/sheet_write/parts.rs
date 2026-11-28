@@ -97,6 +97,9 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
             FilterCriterion::FontColor(c) => {
                 let mut st = Style::default();
                 st.font.color = *c;
+                if *c != Color::Auto {
+                    st.fill = gridcraft_model::Fill::solid(*c);
+                }
                 let _ = write!(s, "<colorFilter dxfId=\"{}\" cellColor=\"0\"/>", dxf_id(&mut out.dxfs, &st));
             }
             FilterCriterion::Icon { set, id } => {

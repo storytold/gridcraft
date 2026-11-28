@@ -25,6 +25,10 @@ pub struct StylesIn {
     pub xfs: Vec<Style>,
     /// Differential formats (`dxfs`) in file order.
     pub dxfs: Vec<Style>,
+    /// The solid fill colour each dxf states for a colour filter: foreground first, then background.
+    pub dxf_fill_colors: Vec<Color>,
+    /// Whether each dxf has an explicit font colour element, even one that normalizes to `Auto`.
+    pub dxf_has_font_color: Vec<bool>,
     pub palette: Vec<u32>,
     /// Named cell styles (`cellStyles` with their `cellStyleXfs`).
     pub named: Vec<(String, Style)>,
@@ -414,7 +418,21 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
     // Inline dxf format codes are interned: a code repeated by many dxfs is one allocation.
     let mut inline_fmts = HashMap::new();
     let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
-    StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
+    let dxf_fill_colors = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf_fill_color(x, &palette)).collect()).unwrap_or_default();
+    let dxf_has_font_color =
+        root.child("dxfs").map(|d| d.kids("dxf").map(|x| x.child("font").and_then(|f| f.child("color")).is_some()).collect()).unwrap_or_default();
+    StylesIn { xfs, dxfs, dxf_fill_colors, dxf_has_font_color, palette, named, num_fmts: fmts }
+}
+
+/// The solid fill colour a colour filter's dxf states: its foreground first (the reference's
+/// swatch), then its background for files that state only that. `Auto` when it states neither.
+fn read_dxf_fill_color(x: &El, palette: &[u32]) -> Color {
+    let Some(p) = x.child("fill").and_then(|f| f.child("patternFill")) else { return Color::Auto };
+    if !matches!(p.attr("patternType"), None | Some("solid")) {
+        return Color::Auto;
+    }
+    let fg = opt_color(p.child("fgColor"), palette);
+    if fg != Color::Auto { fg } else { opt_color(p.child("bgColor"), palette) }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.

@@ -1,3 +1,5 @@
+use gridcraft_model::Color;
+
 use super::{
     AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, MAX_COLS, MAX_ROWS, NoteBox, NoteCorner, RangeRef, Sheet, Table, TableColumn,
     TotalsFn, XmlColumnPr, from_file, xml,
@@ -163,8 +165,24 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
                 }
             }
         } else if let Some(c) = fc.child("colorFilter") {
-            let Some(dxf) = c.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)) else { continue };
-            if c.flag("cellColor", true) { FilterCriterion::FillColor(dxf.fill.fg) } else { FilterCriterion::FontColor(dxf.font.color) }
+            let Some(dxf_id) = c.attr_u32("dxfId") else { continue };
+            let Some(dxf) = cx.dxfs.get(dxf_id as usize) else { continue };
+            let fill_color = cx.dxf_fill_colors.get(dxf_id as usize).copied().unwrap_or(Color::Auto);
+            let has_font_color = cx.dxf_has_font_color.get(dxf_id as usize).copied().unwrap_or(false);
+            let font_color = dxf.font.color;
+            let cell_color = c.flag("cellColor", true);
+            let swatch = if cell_color {
+                if fill_color != Color::Auto { fill_color } else { font_color }
+            } else if has_font_color {
+                font_color
+            } else if fill_color == Color::Theme(1, 0) {
+                // Text 1 is Excel's automatic text. The explicit-font path normalizes it to Auto,
+                // so a fill-sourced Text 1 must normalize too or the criterion changes on save.
+                Color::Auto
+            } else {
+                fill_color
+            };
+            if cell_color { FilterCriterion::FillColor(swatch) } else { FilterCriterion::FontColor(swatch) }
         } else if let Some(i) = fc.child("iconFilter") {
             let Some(set) = i.attr("iconSet") else { continue };
             FilterCriterion::Icon { set: set.to_string(), id: i.attr_u32("iconId") }

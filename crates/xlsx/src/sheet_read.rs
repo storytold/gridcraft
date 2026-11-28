@@ -1108,6 +1108,8 @@ mod tests {
             phonetics: vec![],
             xf_map: vec![],
             dxfs: vec![],
+            dxf_fill_colors: vec![],
+            dxf_has_font_color: vec![],
             palette: vec![],
             date_system: DateSystem::D1900,
             styles: Default::default(),
