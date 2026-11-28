@@ -184,8 +184,14 @@ pub(super) fn pricemat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn yieldmat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (dim, dsm, ai, rate, pr) = mat_terms(a, c.date_system())?;
-    if pr <= 0.0 || dsm == 0.0 {
+    if pr <= 0.0 {
         return Err(CellError::Num);
+    }
+    // Distinct dates can still have zero 30/360 days left (Jan 30 to Jan 31
+    // under basis 4). Excel returns a zero yield there instead of dividing
+    // by zero (#4094).
+    if dsm == 0.0 {
+        return num_val(0.0);
     }
     let base = pr / 100.0 + ai * rate;
     num_val(((1.0 + dim * rate) - base) / base / dsm)

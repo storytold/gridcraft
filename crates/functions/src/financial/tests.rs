@@ -394,6 +394,19 @@ fn securities() {
     close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
 }
 
+/// #4094: distinct dates can have zero 30/360 days between settlement and
+/// maturity; Excel returns a zero yield rather than #NUM!.
+#[test]
+fn yieldmat_zero_30_360_days_is_zero() {
+    close_tol(ev("YIELDMAT", vec![d(2025, 1, 30), d(2025, 1, 31), d(2025, 1, 29), n(0.05), n(100.0), n(4.0)]), 0.0, 0.0);
+    close_tol(ev("YIELDMAT", vec![d(2025, 1, 30), d(2025, 1, 31), d(2025, 1, 29), n(0.05), n(95.0), n(4.0)]), 0.0, 0.0);
+    close_tol(ev("YIELDMAT", vec![d(2025, 5, 30), d(2025, 5, 31), d(2025, 4, 30), n(0.05), n(100.0), n(0.0)]), 0.0, 0.0);
+    close_tol(ev("YIELDMAT", vec![d(2025, 5, 30), d(2025, 5, 31), d(2025, 4, 30), n(0.05), n(100.0), n(2.0)]), 0.04979253112033974, 1e-15);
+    // A non-positive price and equal dates stay errors.
+    is_err(ev("YIELDMAT", vec![d(2025, 1, 30), d(2025, 1, 31), d(2025, 1, 29), n(0.05), n(0.0), n(4.0)]), CellError::Num);
+    is_err(ev("YIELDMAT", vec![d(2025, 1, 30), d(2025, 1, 30), d(2025, 1, 29), n(0.05), n(100.0), n(4.0)]), CellError::Num);
+}
+
 fn number(v: Value) -> f64 {
     match v {
         Value::Number(x) => x,
