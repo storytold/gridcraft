@@ -3211,6 +3211,41 @@ fn ods_import_never_reuses_source_as_save_target() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4355: an export path whose extension names the format, in any case or spelling, is written as
+/// given; any other path gets the format's extension.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn exports_keep_a_path_whose_extension_names_the_format() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-export-ext-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "visible"})).unwrap();
+    for (cmd, name, written) in [
+        ("file.exportHtml", "page.htm", "page.htm"),
+        ("file.exportHtml", "page.HTML", "page.HTML"),
+        ("file.exportHtml", "page.Htm", "page.Htm"),
+        ("file.exportHtml", "page.html", "page.html"),
+        ("file.exportHtml", "page", "page.html"),
+        ("file.exportHtml", "page.csv", "page.csv.html"),
+        ("file.exportCsv", "data.CSV", "data.CSV"),
+        ("file.exportCsv", "data.csv", "data.csv"),
+        ("file.exportCsv", "data", "data.csv"),
+        ("file.exportCsv", "data.htm", "data.htm.csv"),
+        ("file.exportCsv", "data.txt", "data.txt.csv"),
+    ] {
+        let out = s.execute(cmd, json!({"path": dir.join(name)})).unwrap();
+        let expected = dir.join(written);
+        assert_eq!(out["path"].as_str(), expected.to_str(), "{cmd} {name}");
+        assert!(std::fs::read_to_string(&expected).unwrap().contains("visible"), "{cmd} {name}");
+    }
+    // Nothing was written under a doubled extension.
+    for doubled in ["page.htm.html", "page.HTML.html", "data.CSV.csv"] {
+        assert!(!dir.join(doubled).exists(), "{doubled}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Open a `;` CSV by path (a double-click), edit, Save: the file keeps its `;` separator.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
