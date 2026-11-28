@@ -265,7 +265,7 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
                         ui.painter().line_segment([egui::pos2(m.x + 5.0, m.y - 5.0), egui::pos2(m.x + 5.0, m.y + 3.0)], stroke);
                     }
                     "maximize" => {
-                        ui.painter().rect_stroke(r.shrink(15.0), 0.0, stroke, egui::StrokeKind::Inside);
+                        ui.painter().rect_stroke(egui::Rect::from_center_size(m, egui::vec2(10.0, 10.0)), 0.0, stroke, egui::StrokeKind::Inside);
                     }
                     _ => {
                         ui.painter().line_segment([m - egui::vec2(5.0, 5.0), m + egui::vec2(5.0, 5.0)], stroke);
