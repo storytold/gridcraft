@@ -6,7 +6,16 @@ use super::{
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        // All UI entry points share this boundary: remember a border preset only
+        // after the engine accepts it. Without a preset, the engine uses "bottom".
+        let border_preset =
+            if id == "home.borders" { Some(params.get("preset").and_then(Json::as_str).unwrap_or("bottom").to_owned()) } else { None };
         let r = self.run_command(id, params);
+        if r.is_ok()
+            && let Some(preset) = border_preset
+        {
+            self.grid.last_border = preset;
+        }
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
         // that GridCraft's copy is newer while that text is still there.
         if matches!(id, "edit.copy" | "edit.cut") && r.is_ok() {
