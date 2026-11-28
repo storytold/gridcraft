@@ -170,6 +170,15 @@ impl KeptReader {
         self.keep_through(cx, p, roots, seen, &[])
     }
 
+    /// Charges `bytes` of kept XML (not a part of its own) to the kept total.
+    fn charge(&mut self, bytes: usize) -> Result<(), String> {
+        if bytes > self.budget {
+            return Err("it is too large".into());
+        }
+        self.budget -= bytes;
+        Ok(())
+    }
+
     /// [`Self::keep`] for roots whose graph may reach the rewritten kinds in `through`.
     fn keep_through(
         &mut self,
@@ -181,8 +190,13 @@ impl KeptReader {
     ) -> Result<(), String> {
         let mut new_parts: Vec<PreservedPart> = vec![];
         let mut scratch = seen.clone();
+        // All or nothing, quotas too: a group that fails gives back what its earlier roots took.
+        let (budget, parts_left) = (self.budget, self.parts_left);
         for r in roots {
-            let parts = self.closure(cx, r, &scratch, through)?;
+            let parts = self.closure(cx, r, &scratch, through).inspect_err(|_| {
+                self.budget = budget;
+                self.parts_left = parts_left;
+            })?;
             scratch.extend(parts.iter().map(|q| normalize(&q.name)));
             new_parts.extend(parts);
         }
@@ -241,12 +255,13 @@ impl KeptReader {
             }
         }
         if self.custom_views {
-            match cx.pkg.read(wb_part).ok().flatten().and_then(|b| top_fragment(&b, b"customWorkbookViews")) {
-                Some(x) => {
+            let views = cx.pkg.read(wb_part).ok().flatten().and_then(|b| top_fragment(&b, b"customWorkbookViews"));
+            match views.ok_or_else(|| "they could not be read".to_string()).and_then(|x| self.charge(x.len()).map(|()| x)) {
+                Ok(x) => {
                     p.elements.push(PreservedXml { slot: "customWorkbookViews".into(), xml: x });
                     cx.warn("custom views can't be shown or changed here; they are kept for saving");
                 }
-                None => cx.warn("custom views could not be read and were dropped"),
+                Err(why) => cx.warn(format!("custom views were dropped: {why}")),
             }
         }
         // The Data Model: its tables are loaded through the workbook's connections, so it is kept
@@ -480,6 +495,9 @@ impl KeptReader {
             cx.warn(format!("sheet \"{name}\": controls and embedded objects could not be read and were dropped"));
             return;
         };
+        if scan.views_too_large {
+            cx.warn(format!("sheet \"{name}\": {CUSTOM_SHEET_VIEWS} were dropped: they are too large"));
+        }
         // Printer settings (a binary part per sheet) hang off <pageSetup r:id>.
         if let Some(id) = scan.page_setup.as_deref()
             && let Some(r) = rels.iter().find(|r| r.id == id && is_kind(r, &["printerSettings"]))
@@ -532,8 +550,12 @@ impl KeptReader {
             })
             .is_some();
             let roots: Option<Vec<PreservedRel>> = ids.iter().map(|id| rels.iter().find(|r| r.id == *id).cloned()).collect();
+            // Custom views are kept XML of any size (other slots are bounded by what they refer to).
+            let cost = if slot == CUSTOM_SHEET_VIEWS { x.len() } else { 0 };
             let kept = match (ok, roots) {
-                (true, Some(roots)) => self.keep(cx, p, &roots, seen),
+                (true, Some(roots)) => {
+                    self.charge(cost).and_then(|()| self.keep(cx, p, &roots, seen).inspect_err(|_| self.budget = self.budget.saturating_add(cost)))
+                }
                 (false, _) => Err("its XML is damaged".into()),
                 (_, None) => Err("it refers to a missing relationship".into()),
             };
@@ -657,6 +679,8 @@ struct SheetScan {
     legacy_drawing_hf: Option<String>,
     /// The relationship id on `<pageSetup>` (printer settings).
     page_setup: Option<String>,
+    /// `<customSheetViews>` was there but over [`MAX_FRAGMENT`].
+    views_too_large: bool,
 }
 
 /// Finds the sheet's `<picture>`, `<oleObjects>`, `<controls>` (also inside
@@ -666,7 +690,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
     let text = std::str::from_utf8(&data).ok()?;
     let mut reader = Reader::from_str(text);
     let mut decls: Vec<(String, String)> = vec![];
-    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, legacy_drawing_hf: None, page_setup: None };
+    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, legacy_drawing_hf: None, page_setup: None, views_too_large: false };
     let mut in_root = false;
     loop {
         let start = usize::try_from(reader.buffer_position()).ok()?;
@@ -690,6 +714,8 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
                 if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
                     let frag = text.get(start..end)?;
                     push_fragment(&mut out, frag, &local, &decls);
+                } else if local == b"customSheetViews" {
+                    out.views_too_large = true;
                 }
             }
             Event::Empty(e) if in_root => {

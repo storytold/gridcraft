@@ -38,7 +38,7 @@ const STYLES: &str = r#"<?xml version="1.0"?><styleSheet xmlns="http://schemas.o
 
 /// Sheet "Data" has a view with a filter and its own printer settings, sheet "Other" one
 /// without (nothing else on it would make the reader look for kept elements).
-fn shared_package() -> Vec<u8> {
+fn shared_parts() -> Vec<(String, Vec<u8>)> {
     let types = format!(
         r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="bin" ContentType="{CT}.printerSettings"/><Override PartName="/xl/styles.xml" ContentType="{CT}.styles+xml"/><Override PartName="/xl/workbook.xml" ContentType="{CT}.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="{CT}.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="{CT}.worksheet+xml"/><Override PartName="/xl/revisions/revisionHeaders.xml" ContentType="{CT}.revisionHeaders+xml"/><Override PartName="/xl/revisions/revisionLog1.xml" ContentType="{CT}.revisionLog+xml"/><Override PartName="/xl/revisions/userNames.xml" ContentType="{CT}.userNames+xml"/></Types>"#
     );
@@ -63,7 +63,7 @@ fn shared_package() -> Vec<u8> {
     let sheet1_rels = rels(&[("rId1", "printerSettings", "../printerSettings/printerSettings1.bin")]);
     let headers_rels = rels(&[("rId1", "revisionLog", "revisionLog1.xml")]);
     let (headers, log, users) = (headers(), log(), users());
-    make_zip(&[
+    [
         ("[Content_Types].xml", types.as_bytes()),
         ("_rels/.rels", root_rels.as_bytes()),
         ("xl/workbook.xml", workbook.as_bytes()),
@@ -77,7 +77,44 @@ fn shared_package() -> Vec<u8> {
         ("xl/revisions/_rels/revisionHeaders.xml.rels", headers_rels.as_bytes()),
         ("xl/revisions/revisionLog1.xml", log.as_bytes()),
         ("xl/revisions/userNames.xml", users.as_bytes()),
-    ])
+    ]
+    .iter()
+    .map(|(n, d)| ((*n).to_string(), d.to_vec()))
+    .collect()
+}
+
+fn zip(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
+    make_zip(&parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect::<Vec<_>>())
+}
+
+fn shared_package() -> Vec<u8> {
+    zip(&shared_parts())
+}
+
+/// The package without `name`.
+fn without(name: &str) -> Vec<(String, Vec<u8>)> {
+    shared_parts().into_iter().filter(|(n, _)| n != name).collect()
+}
+
+/// Warnings of reading `pkg` with `budget` bytes allowed for kept content.
+fn warnings_with_budget(pkg: &[u8], budget: usize) -> Vec<String> {
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(budget));
+    let read = read_xlsx(pkg);
+    crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(crate::passthrough::MAX_KEPT_TOTAL));
+    read.unwrap().1.warnings
+}
+
+/// The smallest kept-content budget at which reading `pkg` keeps the custom views and their
+/// printer settings.
+fn views_budget(pkg: &[u8]) -> usize {
+    let fits = |b| !warnings_with_budget(pkg, b).iter().any(|w| w.contains("views were dropped") || w.contains("printer settings were dropped"));
+    let (mut lo, mut hi) = (0usize, 1 << 20);
+    assert!(fits(hi));
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if fits(mid) { hi = mid } else { lo = mid + 1 }
+    }
+    lo
 }
 
 fn pos(x: &str, tag: &str) -> usize {
@@ -143,4 +180,41 @@ fn custom_views_and_their_printer_settings_survive_a_save() {
     let twice = Unpacked::new(&write_xlsx(&again).unwrap());
     assert!(twice.text(&sheet_part(&twice, "Data")).contains(VIEW));
     assert!(twice.text("xl/workbook.xml").contains("<customWorkbookViews"));
+}
+
+#[test]
+fn change_history_that_cannot_be_kept_leaves_its_share_of_the_kept_total_to_the_views() {
+    // The user list is missing, so the history group fails after its headers and log were read.
+    // The workbook's views (kept after the history) are larger than the history, so a budget
+    // that fits only the views would also fit the history's headers and log.
+    let mut parts = without("xl/revisions/userNames.xml");
+    let wb = &mut parts.iter_mut().find(|(n, _)| n == "xl/workbook.xml").unwrap().1;
+    let long = String::from_utf8(wb.clone()).unwrap().replace("Ana - Personal View", &"Ana ".repeat(1000));
+    *wb = long.into_bytes();
+    let failing = zip(&parts);
+    let warnings = warnings_with_budget(&failing, crate::passthrough::MAX_KEPT_TOTAL);
+    assert!(warnings.iter().any(|w| w.contains("change history was dropped")), "{warnings:?}");
+    // Without any history at all (the workbook still names it, so it keeps its relationships).
+    parts.retain(|(n, _)| n != "xl/revisions/revisionHeaders.xml");
+    assert_eq!(views_budget(&failing), views_budget(&zip(&parts)));
+}
+
+#[test]
+fn custom_views_count_towards_the_kept_total() {
+    // The views on "Other" refer to no part; only their own XML takes room.
+    let warnings = warnings_with_budget(&shared_package(), 0);
+    assert!(warnings.iter().any(|w| w.contains("\"Other\"") && w.contains("customSheetViews were dropped")), "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.starts_with("custom views were dropped")), "{warnings:?}");
+}
+
+#[test]
+fn custom_views_too_large_to_keep_are_reported() {
+    let mut parts = shared_parts();
+    let views: String = (0..80_000).map(|i| format!(r#"<customSheetView guid="{{6A3F0C2E-1B4D-4E5F-9A7B-{i:012X}}}"/>"#)).collect();
+    let sheet2 = format!(r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData/><customSheetViews>{views}</customSheetViews></worksheet>"#);
+    assert!(sheet2.len() > 4 * 1024 * 1024);
+    parts.iter_mut().find(|(n, _)| n == "xl/worksheets/sheet2.xml").unwrap().1 = sheet2.into_bytes();
+    let (_, rep) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("\"Other\"") && w.contains("customSheetViews were dropped")), "{:?}", rep.warnings);
+    assert!(!rep.warnings.iter().any(|w| w.contains("\"Data\"") && w.contains("dropped")), "{:?}", rep.warnings);
 }
