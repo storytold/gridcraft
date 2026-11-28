@@ -1229,7 +1229,7 @@ pub(super) fn col_edge(geo: &Geo, sh: &Sheet, x: f32) -> Option<(u32, f32)> {
 pub(super) fn row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<(u32, f32)> {
     let r = geo.row_at(sh, y);
     for rr in [r, r.saturating_sub(1)] {
-        let edge = geo.y(sh, rr) + sh.row_height(rr) * geo.z;
+        let edge = geo.y_end(sh, rr);
         if (y - edge).abs() <= 3.0 {
             return Some((rr, edge));
         }
@@ -1381,7 +1381,7 @@ fn chart_data_target(geo: &Geo, sh: &Sheet, orig: RangeRef, corner: crate::objec
     let (x, y) = (p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0), p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
     // Gridline `k` is the top (left) edge of row (column) `k`; the last one closes the sheet.
     let row = geo.row_at(sh, y);
-    let row_line = nearest_line(geo.y(sh, row), sh.row_height(row) * geo.z, row, y, MAX_ROWS);
+    let row_line = nearest_line(geo.y(sh, row), geo.row_height(sh, row) * geo.z, row, y, MAX_ROWS);
     let col = geo.col_at(sh, x);
     let col_line = nearest_line(geo.x(sh, col), sh.col_width(col) * geo.z, col, x, MAX_COLS);
     let (r0, r1) = between_lines(if sy < 0 { orig.end.row.saturating_add(1) } else { orig.start.row }, row_line, sy);

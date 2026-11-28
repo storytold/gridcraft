@@ -137,7 +137,7 @@ impl Dir<'_> {
         if self.rows { self.geo.y(self.sh, line) } else { self.geo.x(self.sh, line) }
     }
     fn size(&self, line: u32) -> f32 {
-        self.geo.z * if self.rows { self.sh.row_height(line) } else { self.sh.col_width(line) }
+        self.geo.z * if self.rows { self.geo.row_height(self.sh, line) } else { self.sh.col_width(line) }
     }
     fn lane(&self, step: f32, k: u8) -> f32 {
         self.lane0 + (k as f32 - 0.5) * step

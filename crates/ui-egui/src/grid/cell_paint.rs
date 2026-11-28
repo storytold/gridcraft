@@ -218,7 +218,7 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
     }
     let (rs, re) = (m.start.row.max(rows.0), m.end.row.min(rows.1));
     for row in rs..=re {
-        if sh.row_height(row) == 0.0 {
+        if geo.row_height(sh, row) == 0.0 {
             continue;
         }
         let (y0, y1) = (geo.y(sh, row), geo.y_end(sh, row));

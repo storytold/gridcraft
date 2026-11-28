@@ -556,11 +556,13 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
         return;
     }
     let metric = metric(app);
-    // Screen points per unit: an inch is 96 sheet pixels at the print scale.
-    let inch = 96.0 / pg.scale.clamp(0.1, 4.0) * geo.z;
-    let unit = if metric { inch / 2.54 } else { inch };
+    // Screen points per inch along each axis (matching PageGrid's per-axis col/row layout scale).
+    let inch_for = |horizontal: bool| pt_per_unit(&pg, horizontal).map_or(96.0 / pg.scale.clamp(0.1, 4.0), |k| (72.0 / k) as f32) * geo.z;
+    let unit_for = |horizontal: bool| {
+        let inch = inch_for(horizontal);
+        if metric { inch / 2.54 } else { inch }
+    };
     let minor = if metric { 2.0 } else { 4.0 };
-    let label_every = ((22.0 / unit).ceil() as usize).max(1);
     let font = theme::ui_font(9.5);
     let (hr, vr) = ruler_rects(outer, geo);
     // Right-to-left sheets: the horizontal ruler is mirrored with the pages (ticks run from the
@@ -572,6 +574,8 @@ pub(crate) fn paint_rulers(app: &SheetApp, p: &Painter, outer: Rect, geo: &Geo, 
     let [ml, mr, mt, mb, mh, mf] = pg.margins;
     // One ruler span per page: margins shaded, the printable part light, ticks from the margin.
     let span = |p: &Painter, from: f32, to: f32, m0: f32, m1: f32, horizontal: bool, area: Rect| {
+        let unit = unit_for(horizontal);
+        let label_every = ((22.0 / unit).ceil() as usize).max(1);
         let band = |a: f32, b: f32| {
             if horizontal {
                 let (a, b) = (mx(a), mx(b));
@@ -755,9 +759,9 @@ pub(crate) fn with_dragged_margin(app: &mut SheetApp, wb: &Workbook, si: usize, 
     g
 }
 
-/// Points per layout unit of the grid (paper size over the layout page size).
-fn pt_per_unit(pg: &PageGrid) -> Option<f64> {
-    let k = f64::from(pg.paper_pt.0) / pg.page_w;
+/// Points per layout unit along the horizontal or vertical axis of the grid.
+fn pt_per_unit(pg: &PageGrid, horizontal: bool) -> Option<f64> {
+    let k = if horizontal { f64::from(pg.paper_pt.0) / pg.page_w } else { f64::from(pg.paper_pt.1) / pg.page_h };
     (k.is_finite() && k > 0.0).then_some(k)
 }
 
@@ -831,7 +835,7 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
         let down = ui.input(|i| i.pointer.primary_down());
         let pos = ui.input(|i| i.pointer.latest_pos()).map(|p| geo.mirror_pos(p));
         let mut cur = d.clone();
-        if let (Some(pos), Some(k)) = (pos, pt_per_unit(pg)) {
+        if let (Some(pos), Some(k)) = (pos, pt_per_unit(pg, d.edge.horizontal())) {
             let rel = if d.edge.horizontal() {
                 let page_x = pg.page_x(d.page);
                 f64::from(geo.scroll.x) + f64::from((pos.x - geo.cells.left()) / geo.z) - page_x
@@ -994,5 +998,23 @@ mod tests {
         assert_eq!(margin_from_drag(Edge::Top, 300.0, A4, [0.7, 0.7, 0.75, 0.75, -5.0, f32::INFINITY]), Some(4.17));
         assert_eq!(margin_from_drag(Edge::Header, f64::NAN, A4, m), None);
         assert!(margin_from_drag(Edge::Footer, 10.0, A4, [0.0, 0.0, 1e9, 1e9, 0.3, 1e9]).is_some_and(|v| (0.0..=11.7).contains(&v)));
+    }
+
+    #[test]
+    fn per_axis_pt_per_unit_round_trips_horizontal_and_vertical_margins() {
+        let wb = Workbook::new();
+        let sh = wb.sheet(0).unwrap();
+        let m = [sh.print.margins[0], sh.print.margins[1], sh.print.margins[2], sh.print.margins[3], sh.print.margins[4], sh.print.margins[5]];
+        let pg = PageGrid::build(&wb, 0, 10, 10).unwrap();
+        let kx = pt_per_unit(&pg, true).unwrap();
+        let ky = pt_per_unit(&pg, false).unwrap();
+        assert!((kx - ky).abs() > 0.01, "expected distinct horizontal ({kx}) and vertical ({ky}) scales");
+        // Dragging each edge to its own current layout position must round-trip with zero drift.
+        assert_eq!(margin_from_drag(Edge::Left, pg.margins[0] * kx, pg.paper_pt, m), Some((m[0] * 100.0).round() / 100.0));
+        assert_eq!(margin_from_drag(Edge::Right, (pg.page_w - pg.margins[1]) * kx, pg.paper_pt, m), Some((m[1] * 100.0).round() / 100.0));
+        assert_eq!(margin_from_drag(Edge::Top, pg.margins[2] * ky, pg.paper_pt, m), Some((m[2] * 100.0).round() / 100.0));
+        assert_eq!(margin_from_drag(Edge::Bottom, (pg.page_h - pg.margins[3]) * ky, pg.paper_pt, m), Some((m[3] * 100.0).round() / 100.0));
+        assert_eq!(margin_from_drag(Edge::Header, pg.margins[4] * ky, pg.paper_pt, m), Some((m[4] * 100.0).round() / 100.0));
+        assert_eq!(margin_from_drag(Edge::Footer, (pg.page_h - pg.margins[5]) * ky, pg.paper_pt, m), Some((m[5] * 100.0).round() / 100.0));
     }
 }
