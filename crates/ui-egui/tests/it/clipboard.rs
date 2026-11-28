@@ -46,7 +46,8 @@ fn copy_and_cut_publish_html_and_text_without_overwriting_rich_clipboard() {
         assert_eq!(calls.len(), 1);
         assert!(calls[0].0.contains("<table"));
         assert!(calls[0].0.contains("Ada"));
-        assert_eq!(calls[0].1, "Name\tScore\nAda\t42\n");
+        let expected = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n" } else { "Name\tScore\nAda\t42\n" };
+        assert_eq!(calls[0].1, expected);
         assert!(!h.output().platform_output.commands.iter().any(|c| matches!(c, OutputCommand::CopyText(_))));
         assert_eq!(h.state().session.clipboard.as_ref().map(|c| c.cut), Some(matches!(event, Event::Cut)));
     }
@@ -62,9 +63,8 @@ fn missing_or_failed_rich_clipboard_falls_back_to_plain_text() {
         let mut h = harness(services);
         h.input_mut().events.push(Event::Copy);
         h.step();
-        assert!(
-            h.output().platform_output.commands.iter().any(|c| { matches!(c, OutputCommand::CopyText(text) if text == "Name\tScore\nAda\t42\n") })
-        );
+        let expected = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n" } else { "Name\tScore\nAda\t42\n" };
+        assert!(h.output().platform_output.commands.iter().any(|c| { matches!(c, OutputCommand::CopyText(text) if text == expected) }));
     }
 }
 
@@ -108,7 +108,8 @@ fn copying_multiple_areas_copies_lined_up_areas_and_explains_the_rest() {
     h.state_mut().session.execute("selection.set", json!({"range": "B1:B2,A1:A2"})).unwrap();
     h.input_mut().events.push(Event::Copy);
     h.step();
-    assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, OutputCommand::CopyText(text) if text == "Name\tScore\nAda\t42\n")));
+    let expected = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n" } else { "Name\tScore\nAda\t42\n" };
+    assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, OutputCommand::CopyText(text) if text == expected)));
     assert!(h.state().message.is_none());
     assert_eq!(h.state().session.clipboard.as_ref().map(|c| c.areas.len()), Some(2));
 
@@ -295,7 +296,8 @@ fn keytip_copy_and_cut_reach_the_system_clipboard_and_ribbon_paste_pastes_them()
             press(&mut h, key);
         }
         assert_eq!(h.state().session.clipboard.as_ref().map(|c| c.cut), Some(cut), "{letter:?}");
-        assert_eq!(clipboard.borrow().0, "Name\tScore\nAda\t42\n", "{letter:?} publishes to the system clipboard");
+        let expected = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n" } else { "Name\tScore\nAda\t42\n" };
+        assert_eq!(clipboard.borrow().0, expected, "{letter:?} publishes to the system clipboard");
 
         h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
         h.get_by_role_and_label(Role::Button, "Paste").click();
@@ -361,7 +363,8 @@ fn a_pasted_ribbon_cut_is_not_pasted_again_from_the_system_clipboard() {
     for key in [egui::Key::F10, egui::Key::H, egui::Key::X] {
         press(&mut h, key);
     }
-    assert_eq!(clipboard.borrow().0, "Name\tScore\nAda\t42\n\t84\n", "the cut is published");
+    let expected_cut = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n\t84\r\n" } else { "Name\tScore\nAda\t42\n\t84\n" };
+    assert_eq!(clipboard.borrow().0, expected_cut, "the cut is published");
     h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
     click_paste(&mut h);
     assert_eq!(value_at(&h, "E6"), Some(Value::number(84.0)));
@@ -442,7 +445,7 @@ fn cmd_v_after_a_pasted_cut_does_not_paste_the_cut_text_again() {
     assert!(has_formula(&h, "E6"), "the cut moves the formula");
 
     // The host may hand the text back with CRLF line endings.
-    h.input_mut().events.push(Event::Paste(text.replace('\n', "\r\n")));
+    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
     h.run_steps(2);
     assert!(has_formula(&h, "E6"), "a second Cmd/Ctrl+V leaves the moved formula alone");
     assert_eq!(value_at(&h, "E6"), Some(Value::number(84.0)));
@@ -558,4 +561,238 @@ fn ribbon_paste_prefers_clipboard_text_over_a_picture() {
     click_paste(&mut h);
     assert_eq!(value_at(&h, "D2"), Some(Value::from("words")));
     assert!(pictures(&h).is_empty());
+}
+
+#[test]
+fn tsv_to_crlf_converts_row_delimiters_across_various_shapes() {
+    // Two rows, one col
+    assert_eq!(SheetApp::tsv_to_crlf("A\nB\n"), "A\r\nB\r\n");
+
+    // Multi-row, multi-col
+    assert_eq!(SheetApp::tsv_to_crlf("A1\tB1\tC1\nA2\tB2\tC2\nA3\tB3\tC3\n"), "A1\tB1\tC1\r\nA2\tB2\tC2\r\nA3\tB3\tC3\r\n");
+
+    // Single cell with trailing LF
+    assert_eq!(SheetApp::tsv_to_crlf("A1\n"), "A1\r\n");
+
+    // Empty input
+    assert_eq!(SheetApp::tsv_to_crlf(""), "");
+
+    // Only newlines (empty rows)
+    assert_eq!(SheetApp::tsv_to_crlf("\n\n"), "\r\n\r\n");
+
+    // Empty cells
+    assert_eq!(SheetApp::tsv_to_crlf("\t\n\t\n"), "\t\r\n\t\r\n");
+
+    // Empty quoted cells
+    assert_eq!(SheetApp::tsv_to_crlf("\"\"\t\"\"\n"), "\"\"\t\"\"\r\n");
+
+    // Without trailing newline
+    assert_eq!(SheetApp::tsv_to_crlf("A\tB\nC\tD"), "A\tB\r\nC\tD");
+}
+
+#[test]
+fn tsv_to_crlf_preserves_internal_newlines_in_quoted_cells() {
+    // Cell with internal LF
+    assert_eq!(SheetApp::tsv_to_crlf("\"line1\nline2\"\n"), "\"line1\nline2\"\r\n");
+
+    // Cell with multiple internal LFs
+    assert_eq!(SheetApp::tsv_to_crlf("\"line1\nline2\nline3\"\n"), "\"line1\nline2\nline3\"\r\n");
+
+    // Cell with internal CRLF
+    assert_eq!(SheetApp::tsv_to_crlf("\"line1\r\nline2\"\n"), "\"line1\r\nline2\"\r\n");
+
+    // Mixed quoted and unquoted across columns and rows
+    assert_eq!(
+        SheetApp::tsv_to_crlf("\"line1\nline2\"\tplain\n\"line3\r\nline4\"\tother\n"),
+        "\"line1\nline2\"\tplain\r\n\"line3\r\nline4\"\tother\r\n"
+    );
+}
+
+#[test]
+fn tsv_to_crlf_handles_tabs_and_escaped_quotes_in_quoted_cells() {
+    // Quoted field with internal tab and escaped quotes
+    assert_eq!(SheetApp::tsv_to_crlf("\"a\tb\t\"\"c\"\"\"\t1\n"), "\"a\tb\t\"\"c\"\"\"\t1\r\n");
+
+    // Quoted field with escaped quotes and internal newline
+    assert_eq!(SheetApp::tsv_to_crlf("\"say \"\"hello\"\"\nworld\"\t42\n"), "\"say \"\"hello\"\"\nworld\"\t42\r\n");
+
+    // Multiple escaped quotes and newlines
+    assert_eq!(SheetApp::tsv_to_crlf("\"x \"\"q\"\"\ny\"\tplain\n"), "\"x \"\"q\"\"\ny\"\tplain\r\n");
+}
+
+#[test]
+fn tsv_to_crlf_handles_quotes_in_unquoted_cells() {
+    // Unquoted cell with quote in middle (#2225)
+    assert_eq!(SheetApp::tsv_to_crlf("say \"hi\"\tplain\n"), "say \"hi\"\tplain\r\n");
+
+    // Unquoted cell starting with quote but not a closed quote field
+    assert_eq!(SheetApp::tsv_to_crlf("\"hi\" there\tx\n"), "\"hi\" there\tx\r\n");
+
+    // Unquoted cell ending with quote
+    assert_eq!(SheetApp::tsv_to_crlf("12\"\tlength\n"), "12\"\tlength\r\n");
+
+    // Unquoted cells across multiple rows
+    assert_eq!(SheetApp::tsv_to_crlf("say \"hi\"\t1\n\"hi\" there\t2\n12\"\t3\n"), "say \"hi\"\t1\r\n\"hi\" there\t2\r\n12\"\t3\r\n");
+}
+
+#[test]
+fn tsv_to_crlf_does_not_introduce_duplicate_cr() {
+    // Already CRLF row endings
+    assert_eq!(SheetApp::tsv_to_crlf("A1\tB1\r\nA2\tB2\r\n"), "A1\tB1\r\nA2\tB2\r\n");
+
+    // Quoted cell with internal LF and already CRLF row ending
+    assert_eq!(SheetApp::tsv_to_crlf("\"line1\nline2\"\r\n"), "\"line1\nline2\"\r\n");
+
+    // Quoted cell with internal CRLF and already CRLF row ending
+    assert_eq!(SheetApp::tsv_to_crlf("\"line1\r\nline2\"\r\n"), "\"line1\r\nline2\"\r\n");
+}
+
+#[test]
+fn copy_cells_with_multiline_content_and_quotes() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let received = calls.clone();
+    let mut h = harness(Services {
+        copy_html: Some(Box::new(move |html, text| {
+            received.borrow_mut().push((html.to_string(), text.to_string()));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+    h.state_mut()
+        .session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["say \"hi\"", "line1\nline2"],
+                    ["\"hi\" there", "a\tb"]
+                ]
+            }),
+        )
+        .unwrap();
+    h.state_mut().session.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 1);
+    let expected = if cfg!(windows) {
+        "say \"hi\"\t\"line1\nline2\"\r\n\"hi\" there\t\"a\tb\"\r\n"
+    } else {
+        "say \"hi\"\t\"line1\nline2\"\n\"hi\" there\t\"a\tb\"\n"
+    };
+    assert_eq!(calls[0].1, expected);
+}
+
+#[test]
+fn cut_cells_with_multiline_content_and_quotes() {
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let received = calls.clone();
+    let mut h = harness(Services {
+        copy_html: Some(Box::new(move |html, text| {
+            received.borrow_mut().push((html.to_string(), text.to_string()));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+    h.state_mut()
+        .session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["say \"hi\"", "line1\nline2"],
+                    ["\"hi\" there", "a\tb"]
+                ]
+            }),
+        )
+        .unwrap();
+    h.state_mut().session.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Cut);
+    h.step();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 1);
+    let expected = if cfg!(windows) {
+        "say \"hi\"\t\"line1\nline2\"\r\n\"hi\" there\t\"a\tb\"\r\n"
+    } else {
+        "say \"hi\"\t\"line1\nline2\"\n\"hi\" there\t\"a\tb\"\n"
+    };
+    assert_eq!(calls[0].1, expected);
+    assert_eq!(h.state().session.clipboard.as_ref().map(|c| c.cut), Some(true));
+}
+
+#[test]
+fn plain_text_fallback_preserves_crlf_on_windows() {
+    let mut h = harness(Services::default());
+    h.state_mut()
+        .session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [
+                    ["say \"hi\"", "line1\nline2"],
+                    ["\"hi\" there", "a\tb"]
+                ]
+            }),
+        )
+        .unwrap();
+    h.state_mut().session.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Copy);
+    h.step();
+
+    let expected = if cfg!(windows) {
+        "say \"hi\"\t\"line1\nline2\"\r\n\"hi\" there\t\"a\tb\"\r\n"
+    } else {
+        "say \"hi\"\t\"line1\nline2\"\n\"hi\" there\t\"a\tb\"\n"
+    };
+    assert!(h.output().platform_output.commands.iter().any(|c| matches!(c, OutputCommand::CopyText(text) if text == expected)));
+}
+
+#[test]
+fn crlf_paste_moves_a_multirow_cut_with_formulas_and_formatting() {
+    let mut h = harness(Services::default());
+    let multiline = "line1\nline2\r\nline3";
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": multiline})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "A2", "input": "=B2*2"})).unwrap();
+    h.state_mut().run("home.bold", json!({"range": "A2", "on": true})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:A2"})).unwrap();
+    h.input_mut().events.push(Event::Cut);
+    h.step();
+    let text = h
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .expect("cut is published");
+    let text = SheetApp::tsv_to_crlf(&text);
+    assert_eq!(text, format!("\"{multiline}\"\r\n84\r\n"));
+    h.run_steps(2);
+    h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
+    h.input_mut().events.push(Event::Paste(text.clone()));
+    h.run_steps(2);
+    assert_eq!(value_at(&h, "A1"), Some(Value::Empty));
+    assert_eq!(value_at(&h, "A2"), Some(Value::Empty));
+    assert_eq!(value_at(&h, "D4"), Some(Value::from(multiline)));
+    assert_eq!(value_at(&h, "D5"), Some(Value::number(84.0)));
+    assert!(has_formula(&h, "D5"));
+    let doc = h.state().session.active().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    assert!(doc.wb.styles.get(sheet.style_id(CellRef::parse("D5").unwrap())).font.bold);
+
+    // The host still holds the cut text, but the block can only be moved once.
+    h.input_mut().events.push(Event::Paste(text));
+    h.run_steps(2);
+    assert!(has_formula(&h, "D5"));
+    assert!(h.state().toast.is_some() || h.state().message.is_some());
 }
