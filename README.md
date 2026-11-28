@@ -132,7 +132,7 @@ browser's file picker (dropping files works too) and Save downloads the workbook
 ### Ribbon access keys
 
 Press and release **left Alt** on Windows/Linux/BSD, or press **F10** on any platform,
-then type a sequence below one key at a time. Keytips appear on the supported Home
+then type a sequence below one key at a time. Keytips appear on supported ribbon
 controls and menu items. On macOS, use F10 (Fn+F10 if required by your keyboard); Option
 remains available for entering accented characters.
 
@@ -141,6 +141,8 @@ remains available for entering accented characters.
 | `H A L` / `H A C` / `H A R` | Align left / center / right |
 | `H V S` or legacy `E S` | Open Paste Special |
 | `H O I` or legacy `O C A` | AutoFit selected columns |
+| `R N` | Open Notes. Press `N` for New Note or `E` to edit the selected cell's note. |
+| `R X` | Go to the next threaded comment |
 
 In Paste Special, **T/V/F/C** select formats/values/formulas/comments, and **E** toggles
 Transpose. **Enter** applies the selected options; **Escape** cancels the dialog.

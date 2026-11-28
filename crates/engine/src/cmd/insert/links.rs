@@ -103,12 +103,17 @@ pub(super) fn comment(s: &mut Session, p: &Json, threaded: bool) -> Result<Json>
         let comments = &mut cx.sheet_mut(sheet)?.comments;
         // Writing a note on a cell that has one edits it, as Excel's Edit Note does: the box, the
         // replies, the dates and who wrote it stay. A note replaces a comment and vice versa.
-        if let Some(c) = comments.get_mut(&at).filter(|c| c.threaded == threaded) {
-            c.text = text.clone();
-            if let Some(author) = named.clone() {
-                c.author = author;
+        if let Some(c) = comments.get_mut(&at) {
+            if c.threaded == threaded {
+                c.text = text.clone();
+                if let Some(author) = named.clone() {
+                    c.author = author;
+                }
+                return Ok(json!({"cell": at.a1()}));
             }
-            return Ok(json!({"cell": at.a1()}));
+            if text.trim().is_empty() {
+                return Err(EngineError::Other("Enter text before replacing an existing note or comment.".into()));
+            }
         }
         comments.insert(
             at,

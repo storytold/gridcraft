@@ -2265,11 +2265,39 @@
   },
   {
    "seq": "RN",
+   "kind": "continue",
+   "excel": "Notes",
+   "note": "group level"
+  },
+  {
+   "seq": "RNN",
+   "kind": "control",
+   "target": "review.newNote",
+   "excel": "New Note"
+  },
+  {
+   "seq": "RNE",
+   "kind": "control",
+   "target": "review.editNote",
+   "excel": "Edit Note"
+  },
+  {
+   "seq": "RNH",
    "kind": "command",
-   "target": "review.nextComment",
-   "pending": false,
-   "excel": "Next Comment",
-   "note": ""
+   "target": "review.showNote",
+   "excel": "Show/Hide Note"
+  },
+  {
+   "seq": "RNS",
+   "kind": "command",
+   "target": "review.showAllNotes",
+   "excel": "Show All Notes"
+  },
+  {
+   "seq": "RNC",
+   "kind": "command",
+   "target": "review.convertToComments",
+   "excel": "Convert to Comments"
   },
   {
    "seq": "RO",
@@ -2308,7 +2336,7 @@
   },
   {
    "seq": "RTN",
-   "kind": "command",
+   "kind": "control",
    "target": "review.newNote",
    "excel": "New Note",
    "note": ""
@@ -2320,6 +2348,13 @@
    "pending": false,
    "excel": "Previous Comment",
    "note": ""
+  },
+  {
+   "seq": "RX",
+   "kind": "command",
+   "target": "review.nextComment",
+   "excel": "Next Comment",
+   "note": "GridCraft keytip"
   },
   {
    "seq": "WA",
