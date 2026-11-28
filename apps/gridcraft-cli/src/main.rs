@@ -152,7 +152,7 @@ impl Args {
                 if with_value.contains(&name) {
                     let v = match inline {
                         Some(v) => v,
-                        None => it.next().cloned().ok_or_else(|| format!("--{name} needs a value"))?,
+                        None => it.next().filter(|value| !value.starts_with("--")).cloned().ok_or_else(|| format!("--{name} needs a value"))?,
                     };
                     out.opts.push((name.to_string(), v));
                 } else if switches.contains(&name) && inline.is_none() {
@@ -686,6 +686,10 @@ mod tests {
         assert!(a.has("csv"));
         assert!(Args::parse(&["--nope".to_string()], &[], &[]).is_err());
         assert!(Args::parse(&["--range".to_string()], &["range"], &[]).is_err());
+        let missing = ["--range", "--csv"].map(str::to_string);
+        assert_eq!(Args::parse(&missing, &["range"], &["csv"]).err().as_deref(), Some("--range needs a value"));
+        let literal = Args::parse(&["--range=--literal".to_string()], &["range"], &[]).unwrap();
+        assert_eq!(literal.opt("range"), Some("--literal"));
     }
 
     #[test]
