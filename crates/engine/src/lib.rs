@@ -1149,12 +1149,15 @@ impl Session {
         std::mem::take(&mut self.ui_requests)
     }
 
-    /// Runs a command for a caller with no UI (MCP, CLI): queued UI requests are dropped, and a command that only
-    /// queued a file dialog because it got no file (`file.open`, `file.saveAs`, `file.save` on a workbook with no
-    /// file yet, `data.getData`) is an error instead of a silent success.
+    /// Runs a command for a caller with no UI (MCP, CLI): queued UI requests are dropped. A command
+    /// that returns no result and only asks for a dialog is an error instead of a silent success;
+    /// explicit inspection and noncompletion results are preserved.
     pub fn execute_headless(&mut self, id: &str, params: Json) -> Result<Json> {
+        let queued = self.ui_requests.len();
         let r = self.execute(id, params);
         let requests = self.take_ui_requests();
+        // A dialog queued before this call does not make this command incomplete.
+        let requests = requests.get(queued..).unwrap_or_default();
         let asked_for_file = requests.iter().any(|q| matches!(q, UiRequest::Dialog(name, _) if name == "open" || name == "saveAs"));
         // A call that only opened a dialog is not recorded (see `execute`), so the recording
         // has no step to take back here.
@@ -1165,6 +1168,13 @@ impl Session {
                 _ => "`path`",
             };
             let msg = format!("missing {what}: programmatic calls never open dialogs");
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg });
+        }
+        if r.as_ref().is_ok_and(Json::is_null)
+            && let Some(UiRequest::Dialog(dialog, _)) = requests.iter().find(|q| matches!(q, UiRequest::Dialog(..)))
+        {
+            let params = find_command(id).map_or("", |spec| spec.params);
+            let msg = format!("the {dialog} dialog is unavailable in headless mode; supply the command parameters: {params}");
             return Err(EngineError::BadParams { cmd: id.to_string(), msg });
         }
         r
