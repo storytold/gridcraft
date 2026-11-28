@@ -532,7 +532,7 @@ impl Dialog {
                         key: "operation",
                         label: "Operation",
                         options: vec![
-                            ("none", "None"),
+                            ("none", "Paste Special|None"),
                             ("add", "Paste Special|Add"),
                             ("subtract", "Subtract"),
                             ("multiply", "Multiply"),
