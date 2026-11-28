@@ -144,7 +144,7 @@ pub fn specs() -> Vec<CommandSpec> {
             fill_series
         ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
-        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook|selection} (selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
+        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, previous?: bool, within?: sheet|workbook|selection} (previous: the last match before the active cell, wrapping backwards; selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
         cmd!(
             "edit.replace",
             "Replace…",

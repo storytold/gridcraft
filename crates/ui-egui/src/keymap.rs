@@ -43,6 +43,11 @@ pub enum Shortcut {
     PythonMode,
     /// Excel for Mac Control+Q: Quick Analysis (Windows Ctrl+Q is in `ribbon::shortcut`).
     QuickAnalysis,
+    /// Shift+F4 / Ctrl+Shift+F4 (Cmd+G / Cmd+Shift+G on a Mac): repeat the last Find, forwards
+    /// or (`previous`) backwards, with the dialog closed.
+    RepeatFind {
+        previous: bool,
+    },
 }
 
 fn run(id: &'static str) -> Shortcut {
@@ -224,6 +229,9 @@ fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
         E if ctrl && mac && !s => run("edit.flashFill"),
         F if cmd && s && !mac => Shortcut::Dialog("formatCells", json!({"tab": "Font"})),
         G if cmd && s && !mac => Shortcut::Dialog("statistics", json!({})),
+        // Excel for Mac: Cmd+G repeats the last Find, so Go To is Control+G there.
+        G if cmd && mac && !m.ctrl => Shortcut::RepeatFind { previous: s },
+        G if ctrl && mac && !m.command && !s => Shortcut::Dialog("goTo", json!({})),
         H if cmd && s && mac => Shortcut::Dialog("find", json!({"replace": true})),
         R if cmd && s && mac => Shortcut::Dialog("sort", json!({})),
         K if cmd && s && mac => run("data.group"),
@@ -320,6 +328,8 @@ fn lookup_function_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
         F3 if plain && s => Shortcut::Dialog("insertFunction", json!({})),
         F3 if plain => Shortcut::Dialog("pasteName", json!({"shortcut": true})),
         F4 if cmd && !s => run("file.close"),
+        F4 if plain && s => Shortcut::RepeatFind { previous: false },
+        F4 if ctrl && s && !mac => Shortcut::RepeatFind { previous: true },
         F5 if plain && s => Shortcut::Dialog("find", json!({})),
         F5 if plain => Shortcut::Dialog("goTo", json!({})),
         F7 if plain && !s => Shortcut::Dialog("spelling", json!({})),
@@ -394,6 +404,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::PythonMode => app.toggle_python_mode(),
         Shortcut::QuickAnalysis => crate::ribbon::quick_analysis(app),
+        Shortcut::RepeatFind { previous } => repeat_find(app, previous),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {
@@ -409,6 +420,24 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         }
     }
     true
+}
+
+/// Finds the next (or previous) match of the session's last Find, with the options it used, and
+/// says so when nothing matches, as Find Next does. With no Find yet, opens the Find dialog.
+fn repeat_find(app: &mut SheetApp, previous: bool) {
+    let Some(mut p) = app.session.last_find.clone().filter(Json::is_object) else {
+        app.open_dialog("find", json!({}));
+        return;
+    };
+    if let Some(o) = p.as_object_mut() {
+        o.insert("previous".into(), json!(previous));
+        // After a Find All, the shortcut still goes to one match, as Find Next does.
+        o.insert("all".into(), json!(false));
+    }
+    if let Err(e) = app.run("edit.find", p) {
+        app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
+    }
+    app.grid.ensure_visible = true;
 }
 
 /// Starts editing the active cell with `text` and the caret at its end.

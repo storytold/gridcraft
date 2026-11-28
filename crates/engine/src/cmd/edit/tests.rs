@@ -937,3 +937,62 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// `previous` (Shift+Find Next) steps back to where Find Next came from, in the same row or
+/// column order, wrapping round the sheet, the selection or the workbook (#4873).
+#[test]
+fn find_previous_undoes_find_next_and_wraps() {
+    // Row order A1, C1, B2, A3 differs from column order A1, A3, B2, C1, so a step back in the
+    // wrong order lands somewhere else.
+    let at = |s: &Session| {
+        let d = s.doc().unwrap();
+        (d.wb.active_sheet(), d.selection.active.a1())
+    };
+    for within in ["sheet", "selection", "workbook"] {
+        for by_cols in [false, true] {
+            let mut s = Session::new();
+            s.new_workbook();
+            if within == "workbook" {
+                s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+                s.execute("cell.set", json!({"cell": "B2", "input": "pear"})).unwrap();
+                s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+            }
+            s.execute(
+                "range.setValues",
+                json!({"range": "A1:D3", "values": [["pear", "", "pear", "pear"], ["", "pear", "", ""], ["pear", "", "", ""]]}),
+            )
+            .unwrap();
+            if within == "selection" {
+                // D1 is outside the range.
+                s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+            }
+            let find = |s: &mut Session, previous: bool| {
+                s.execute("edit.find", json!({"what": "pear", "within": within, "byColumns": by_cols, "previous": previous})).unwrap();
+                at(s)
+            };
+            let count = s.execute("edit.find", json!({"what": "pear", "within": within, "all": true})).unwrap()["count"].as_u64().unwrap();
+            // Every hit, including the last (Find Next wraps to the first) and the first (back wraps to the last).
+            let mut seen = Vec::new();
+            for _ in 0..count {
+                let from = find(&mut s, false);
+                seen.push(from.clone());
+                let next = find(&mut s, false);
+                assert_ne!(next, from, "{within} byColumns={by_cols}");
+                assert_eq!(find(&mut s, true), from, "{within} byColumns={by_cols}: back from {next:?}");
+                if within == "selection" {
+                    assert_eq!(s.doc().unwrap().selection.a1(), "A1:C3", "the range stays selected");
+                }
+            }
+            let distinct: std::collections::HashSet<_> = seen.iter().collect();
+            assert_eq!(distinct.len() as u64, count, "{within} byColumns={by_cols}: every hit visited");
+            // The visits climb in row order, or column order with `byColumns`, and drop back only
+            // once round the cycle: at the wrap. Both directions ignoring `byColumns` fails here.
+            let key = |(si, a1): &(usize, String)| {
+                let c = CellRef::parse(a1).unwrap();
+                if by_cols { (*si, c.col, c.row) } else { (*si, c.row, c.col) }
+            };
+            let drops = (0..seen.len()).filter(|&i| key(&seen[(i + 1) % seen.len()]) < key(&seen[i])).count();
+            assert_eq!(drops, 1, "{within} byColumns={by_cols}: visited in order, {seen:?}");
+        }
+    }
+}
