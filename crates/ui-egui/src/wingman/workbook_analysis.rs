@@ -332,6 +332,19 @@ mod tests {
     }
 
     #[test]
+    fn visual_selector_resolves_a_long_title_written_by_the_chart_tool() {
+        let mut app = app();
+        app.run("range.setValues", json!({"range":"A1","values":[[1,2],[2,4],[3,6]]})).unwrap();
+        let id = app.run("insert.chart", json!({"range":"A1:B3","type":"auto"})).unwrap()["chart"].clone();
+        let sheet = app.session.active().unwrap().wb.active().unwrap().name.clone();
+        let title = "Δ".repeat(1024);
+        super::super::execute(&mut app, "update_chart", &json!({"sheet":sheet,"chart":id,"title":title}), true).unwrap();
+        let by_id = super::super::resolve_visual(&app, &json!({"chart":id})).unwrap();
+        let by_title = super::super::resolve_visual(&app, &json!({"chartTitle":title})).unwrap();
+        assert_eq!(by_title.description, by_id.description);
+    }
+
+    #[test]
     fn recommended_type_is_the_inserted_type_and_readback_resolves_series() {
         let mut app = app();
         app.run("range.setValues", json!({"range":"A1","values":[[1,2],[2,4],[3,6]]})).unwrap();

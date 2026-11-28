@@ -1,5 +1,7 @@
 //! A mention is explicit workbook context, not an instruction hidden in pasted code or an email.
 
+use std::ops::Range;
+
 use super::MENTIONS;
 
 pub(super) fn boundary(before: &str) -> bool {
@@ -100,7 +102,7 @@ pub(super) fn in_code(text: &str) -> bool {
     code.len != 0
 }
 
-// Syntax only. Bounds and actual cell resolution belong to workbook::mention.
+// Recognize the shape separately so an out-of-bounds address cannot silently fall back to @read.
 pub(super) fn looks_like_a1(token: &str) -> bool {
     fn cell(s: &str) -> bool {
         let s = s.strip_prefix('$').unwrap_or(s);
@@ -126,7 +128,26 @@ struct Target<'a> {
     consumed: usize,
 }
 
-fn sheet_prefix(s: &str) -> Result<Option<(String, usize)>, String> {
+fn sheet_word(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '$')
+}
+
+fn has_sheet_operand(tail: &str) -> bool {
+    tail.strip_prefix('!').and_then(|s| s.chars().next()).is_some_and(|c| sheet_word(c) || matches!(c, '[' | '\'' | ':'))
+}
+
+pub(super) fn starts_qualified(s: &str) -> bool {
+    has_sheet_operand(s.trim_start_matches(sheet_word))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ReadForm {
+    Direct,   // @B2:D8
+    Optional, // @read with an optional address
+    Required, // @read: must be followed by an address
+}
+
+fn sheet_prefix(s: &str, explicit: bool) -> Result<Option<(String, usize)>, String> {
     if s.starts_with('[') {
         return Err("Workbook references cannot attach an external workbook.".into());
     }
@@ -146,8 +167,9 @@ fn sheet_prefix(s: &str) -> Result<Option<(String, usize)>, String> {
         }
         return Err(BAD_TARGET.into());
     }
-    let end = s.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '$'))).unwrap_or(s.len());
-    if s[end..].starts_with('!') {
+    let tail = s.trim_start_matches(sheet_word);
+    if has_sheet_operand(tail) || (explicit && tail.starts_with('!') && !looks_like_a1(&s[..s.len() - tail.len()])) {
+        let end = s.len() - tail.len();
         if end == 0 || end > 256 {
             return Err(BAD_TARGET.into());
         }
@@ -155,23 +177,28 @@ fn sheet_prefix(s: &str) -> Result<Option<(String, usize)>, String> {
     }
     // Do not silently attach the selection (or a range like Q1) when an unquoted sheet
     // name with a space was intended, as in @read Q1 Sales!B3.
-    let end = s.find(|ch: char| !(ch.is_alphanumeric() || matches!(ch, ' ' | '\t' | '_' | '-' | '.' | '$'))).unwrap_or(s.len());
-    if let Some(rest) = s[end..].strip_prefix('!')
-        && looks_like_a1(&rest[..token_len(rest)])
-    {
-        return Err(BAD_TARGET.into());
+    if explicit && tail.starts_with([' ', '\t']) {
+        let words = tail.trim_start_matches(|ch| sheet_word(ch) || matches!(ch, ' ' | '\t'));
+        if let Some(rest) = words.strip_prefix('!')
+            && looks_like_a1(&rest[..token_len(rest)])
+        {
+            return Err(BAD_TARGET.into());
+        }
     }
     Ok(None)
 }
 
-fn target_prefix(s: &str, required: bool) -> Result<Option<Target<'_>>, String> {
-    let (sheet, start) = sheet_prefix(s)?.map_or((None, 0), |(s, n)| (Some(s), n));
+fn target_prefix(s: &str, form: ReadForm) -> Result<Option<Target<'_>>, String> {
+    let (sheet, start) = sheet_prefix(s, form != ReadForm::Direct)?.map_or((None, 0), |(s, n)| (Some(s), n));
     let rest = &s[start..];
     let n = token_len(rest);
     let address = &rest[..n];
-    if looks_like_a1(address) && !rest[n..].starts_with('!') {
+    if looks_like_a1(address) && !has_sheet_operand(&rest[n..]) {
+        if gridcraft_engine::core::RangeRef::parse(address).is_none() {
+            return Err(BAD_TARGET.into());
+        }
         Ok(Some(Target { sheet, address, consumed: start + n }))
-    } else if required || sheet.is_some() || (address.contains(':') && address.bytes().any(|c| c.is_ascii_digit())) {
+    } else if form == ReadForm::Required || sheet.is_some() || (address.contains(':') && address.bytes().any(|c| c.is_ascii_digit())) {
         Err(BAD_TARGET.into())
     } else {
         Ok(None)
@@ -182,11 +209,23 @@ pub(super) fn quote_sheet(sheet: &str) -> String {
     format!("'{}'", sheet.replace('\'', "''"))
 }
 
-fn canonical(target: Target<'_>) -> String {
-    let addr = target.address.to_ascii_uppercase();
-    match target.sheet {
-        Some(s) => format!("@read:{}!{addr}", quote_sheet(&s)),
-        None => format!("@read:{addr}"),
+enum Reference<'a> {
+    Object(&'static str),
+    Cells(Target<'a>),
+}
+
+impl Reference<'_> {
+    fn canonical(self) -> String {
+        match self {
+            Self::Object(name) => name.to_owned(),
+            Self::Cells(target) => {
+                let addr = target.address.to_ascii_uppercase();
+                match target.sheet {
+                    Some(s) => format!("@read:{}!{addr}", quote_sheet(&s)),
+                    None => format!("@read:{addr}"),
+                }
+            }
+        }
     }
 }
 
@@ -194,63 +233,81 @@ fn canonical(target: Target<'_>) -> String {
 /// the workbook layer rechecks visibility and range size against the active document.
 pub(in super::super) fn read_target(token: &str) -> Result<(Option<String>, String), String> {
     let arg = token.strip_prefix("@read:").or_else(|| token.strip_prefix('@')).ok_or(BAD_TARGET)?;
-    let t = target_prefix(arg, true)?.filter(|t| t.consumed == arg.len()).ok_or(BAD_TARGET)?;
+    let t = target_prefix(arg, ReadForm::Required)?.filter(|t| t.consumed == arg.len()).ok_or(BAD_TARGET)?;
     Ok((t.sheet, t.address.to_ascii_uppercase()))
 }
 
-fn explicit_read(after: &str) -> Option<(&str, bool)> {
+fn explicit_read(after: &str) -> Option<(&str, ReadForm)> {
     if !after.get(..4)?.eq_ignore_ascii_case("read") {
         return None;
     }
     let tail = &after[4..];
     if let Some(s) = tail.strip_prefix(':') {
-        Some((s, true))
+        Some((s, ReadForm::Required))
     } else if tail.starts_with([' ', '\t']) {
-        Some((tail.trim_start_matches([' ', '\t']), false))
+        Some((tail.trim_start_matches([' ', '\t']), ReadForm::Optional))
     } else {
         None
     }
 }
 
-/// Capture each referenced workbook object once. A bare @read attaches the selection.
-pub(in super::super) fn mentions(text: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
+/// Returns the source length, including the sigil, without swallowing prose after a bare @read.
+fn parse_mention(source: &str) -> Result<Option<(usize, Reference<'_>)>, String> {
+    let after = &source[1..];
+    if let Some((arg, form)) = explicit_read(after) {
+        return Ok(Some(match target_prefix(arg, form)? {
+            Some(target) => (source.len() - arg.len() + target.consumed, Reference::Cells(target)),
+            None => ("@read".len(), Reference::Object("@read")),
+        }));
+    }
+    let end = 1 + token_len(after);
+    let named = MENTIONS.iter().copied().find(|name| source[..end].eq_ignore_ascii_case(name));
+    // A sheet qualifier (e.g. "@cell.archive!B2") takes precedence over an object name.
+    if let Some(name) = named
+        && !starts_qualified(after)
+    {
+        return Ok(Some((end, Reference::Object(name))));
+    }
+    Ok(target_prefix(after, ReadForm::Direct)?.map(|target| (1 + target.consumed, Reference::Cells(target))))
+}
+
+/// Both the editor and submission consume this scan. Source spans are UTF-8 byte offsets;
+/// every occurrence has its own span even when several spellings refer to the same attachment.
+fn scan(text: &str) -> impl Iterator<Item = Result<(Range<usize>, Reference<'_>), String>> {
     let mut at = 0;
     let mut code = Code::new(text);
-    while at < text.len() {
-        let b = text.as_bytes()[at];
-        if b != b'@' || code.len != 0 || !boundary(&text[..at]) {
-            at += code.advance(text, at);
-            continue;
+    std::iter::from_fn(move || {
+        while at < text.len() {
+            let start = at;
+            if text.as_bytes()[at] != b'@' || code.len != 0 || !boundary(&text[..at]) {
+                at += code.advance(text, at);
+                continue;
+            }
+            at += 1;
+            match parse_mention(&text[start..]) {
+                Ok(Some((len, reference))) => {
+                    at = start + len;
+                    return Some(Ok((start..at, reference)));
+                }
+                Ok(None) => {}
+                Err(err) => return Some(Err(err)),
+            }
         }
-        let after = &text[at + 1..];
-        at += 1;
-        let tag = if let Some((arg, required)) = explicit_read(after) {
-            at += after.len() - arg.len();
-            if let Some(target) = target_prefix(arg, required)? {
-                at += target.consumed;
-                canonical(target)
-            } else {
-                "@read".into()
-            }
-        } else {
-            let n = token_len(after);
-            let raw = &after[..n];
-            at += n;
-            if looks_like_a1(raw) {
-                if after[n..].starts_with('!') {
-                    return Err(BAD_TARGET.into());
-                }
-                format!("@read:{}", raw.to_ascii_uppercase())
-            } else {
-                let name = format!("@{}", raw.to_ascii_lowercase());
-                if !MENTIONS.contains(&name.as_str()) {
-                    continue;
-                }
-                name
-            }
-        };
-        if !out.contains(&tag) {
+        None
+    })
+}
+
+pub(in super::super) fn mention_spans(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    scan(text).filter_map(|item| item.ok().map(|(span, _)| span))
+}
+
+/// Capture each referenced workbook object once. A bare @read attaches the selection.
+pub(in super::super) fn mentions(text: &str) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for item in scan(text) {
+        let (_, reference) = item?;
+        let tag = reference.canonical();
+        if !out.iter().any(|existing| existing.eq_ignore_ascii_case(&tag)) {
             if out.len() == 8 {
                 return Err("Attach up to eight workbook references per message.".into());
             }
@@ -258,4 +315,44 @@ pub(in super::super) fn mentions(text: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_spellings_paint_the_typed_text_and_share_attachments() {
+        let text = "🧮 (@b2:D8), @read:B2:d8, @read B2:D8; @Période!$c$3:e4 or @READ:'Période'!$C$3:E4; @'Q1 Sales'' East'!A1.";
+        let spans: Vec<_> = mention_spans(text).map(|r| &text[r]).collect();
+        assert_eq!(spans, ["@b2:D8", "@read:B2:d8", "@read B2:D8", "@Période!$c$3:e4", "@READ:'Période'!$C$3:E4", "@'Q1 Sales'' East'!A1"]);
+        let objects = mentions(text).unwrap();
+        assert_eq!(objects, ["@read:B2:D8", "@read:'Période'!$C$3:E4", "@read:'Q1 Sales'' East'!A1"]);
+        assert_eq!(read_target(&objects[2]).unwrap(), (Some("Q1 Sales' East".into()), "A1".into()));
+    }
+
+    #[test]
+    fn prose_code_and_email_do_not_become_attachments() {
+        let text = "@read   this report from user@A1: `@Data!A1`\n> ~~~\n> @'Q 1'!B2:D3\n> ~~~\n@cell on Sheet1!B2, @selection!";
+        assert_eq!(mention_spans(text).map(|r| &text[r]).collect::<Vec<_>>(), ["@read", "@cell", "@selection"]);
+        assert_eq!(mentions(text).unwrap(), ["@read", "@cell", "@selection"]);
+    }
+
+    #[test]
+    fn invalid_targets_do_not_paint_or_fall_back_to_the_selection() {
+        for bad in ["@read:", "@read:Q1 Sales!B2", "@B2:D", "@Sales!B2:D3:E4", "@'Q1 Sales'!", "@[External]Data!A1", "@read XFE1"] {
+            let text = format!("{bad}, then @C3");
+            assert!(mentions(&text).is_err(), "{bad}");
+            assert_eq!(mention_spans(&text).map(|r| &text[r]).collect::<Vec<_>>(), ["@C3"], "{bad}");
+        }
+    }
+
+    #[test]
+    fn direct_references_do_not_consume_prose_or_sentence_punctuation() {
+        let text = "Compare @A1 with Sheet2!B2. Check @Data!B2:D8! Then (@A1!), @cell! Ignore @nobody!";
+        assert_eq!(mention_spans(text).map(|r| &text[r]).collect::<Vec<_>>(), ["@A1", "@Data!B2:D8", "@A1", "@cell"]);
+        assert_eq!(mentions(text).unwrap(), ["@read:A1", "@read:'Data'!B2:D8", "@cell"]);
+        assert!(mentions("@read Q1 Sales!B2").is_err());
+        assert!(mentions("@Data!B2!C4").is_err());
+    }
 }

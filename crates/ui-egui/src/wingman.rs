@@ -107,6 +107,7 @@ struct Thread {
 struct Line {
     speaker: &'static str,
     text: String,
+    references: Vec<std::ops::Range<usize>>,
     detail: Option<ToolDetail>,
 }
 
@@ -117,18 +118,26 @@ struct ToolDetail {
 
 impl Thread {
     fn line(&mut self, speaker: &'static str, text: impl Into<String>) {
-        self.record(Line { speaker, text: text.into(), detail: None });
+        let text = text.into();
+        let references =
+            if matches!(speaker, "You" | "Assistant") && text.contains('@') { composer::mention_spans(&text).collect() } else { Vec::new() };
+        self.record(Line { speaker, text, references, detail: None });
     }
 
     fn tool(&mut self, speaker: &'static str, caption: impl Into<String>, details: String) {
-        self.record(Line { speaker, text: caption.into(), detail: Some(ToolDetail { text: details, expanded: None }) });
+        self.record(Line { speaker, text: caption.into(), references: Vec::new(), detail: Some(ToolDetail { text: details, expanded: None }) });
     }
 
     fn record(&mut self, line: Line) {
         self.log.push_back(line);
         while self.log.len() > 160
             || (self.log.len() > 1
-                && self.log.iter().map(|l| l.text.len() + l.detail.as_ref().map_or(0, |d| d.text.len())).sum::<usize>() > 512 * 1024)
+                && self
+                    .log
+                    .iter()
+                    .map(|l| l.text.len() + size_of_val(l.references.as_slice()) + l.detail.as_ref().map_or(0, |d| d.text.len()))
+                    .sum::<usize>()
+                    > 512 * 1024)
         {
             self.log.pop_front();
         }

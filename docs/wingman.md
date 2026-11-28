@@ -51,7 +51,7 @@ For a vision-capable model, set `"snap_tool_results": true` in its `available_mo
 
 For a model that accepts both images and tools, set `"capabilities": { "tools": true, "image": true }` in its `available_models` entry and reload. Model discovery alone does not enable image sharing. Select an embedded picture, a single cell containing a picture, or a chart and ask Wingman to inspect it. You can also ask it to find a chart by title: it can list charts and choose one by ID without changing your selection.
 
-**Send image** approves the named preview for the configured model, including a retry of that request. With **Always allow** in a write-enabled mode, that preview can be sent without another prompt. Only the picture or rendered chart is attached—not a desktop screenshot, a file path, or the workbook. Chart previews support bounded cell references and constant arrays; for calculated or indirect sources, use `inspect_chart` to read the definition instead. The chat keeps the inspection receipt, not the pixels; ask for another inspection if the model needs to look again.
+Wingman asks before each visual inspection, even with **Always allow**. The card names the picture or chart and the model that will receive it. **Send image** approves only that preview for that request, including a retry. Only the picture or rendered chart is attached—not a desktop screenshot, a file path, or the workbook. Chart previews support bounded cell references and constant arrays; for calculated or indirect sources, use `inspect_chart` to read the definition instead. The chat keeps the inspection receipt, not the pixels; ask for another inspection if the model needs to look again.
 
 ### Thinking modes
 
@@ -70,16 +70,20 @@ Wingman runs its own tool loop against the configured model API. In Zed these ar
 | Read / write | Change cells, formulas, formatting, charts, tables, comments and native scripts. By default, review the arguments and choose **Apply edit**. |
 | Read / write / MCP | The same workbook permissions, plus tools from servers you explicitly connect. By default, review the destination, tool and arguments and choose **Allow call**. |
 
-**Approval** starts at **Ask every time**. Choose **Always allow** to skip confirmations for actions already permitted in this thread and access mode. In MCP mode that includes connected external tools; workbook Undo cannot reverse their actions. Changing thread, agent or access mode, reloading settings, or closing the pane restores **Ask every time**.
+**Approval** starts at **Ask every time**. Choose **Always allow** to skip confirmations for workbook edits permitted in this thread and access mode. In MCP mode this also skips confirmations for connected external tools; workbook Undo cannot reverse their actions. Visual inspections still require **Send image**. Changing thread, agent or access mode, reloading settings, or closing the pane restores **Ask every time**.
 
 **Tool rounds** defaults to **12**. A round is one exchange with the model, which can request several tools together. A finite budget reserves its last exchange for the answer. **Unlimited** removes the round count limit; request-size limits and **Stop** still apply. If the provider finishes without a final answer, Wingman asks once more for text using the results already received. That follow-up cannot run more tools.
 
-The initial access setting accepts `ask`, `write`, `write_mcp`, or `minimal` in `agent.default_profile`; an individual agent can override it. Type `@` for references. Arrow keys select a completion; Tab or Enter accepts it, Escape dismisses it. For example:
+The initial access setting accepts `ask`, `write`, `write_mcp`, or `minimal` in `agent.default_profile`; an individual agent can override it. Type `@` for references. Arrow keys select a completion; Tab or Enter accepts it, Escape dismisses it.
+
+Type `@B2:D8` to attach that rectangle on the current sheet, or `@'Q1 Sales'!B2:D8` to name a sheet. `@read:B2:D8` and `@read B2:D8` also work. References appear underlined in the draft and chat. A reference in a reply is just text; only sending your own message attaches cells. Inline code, fenced code and email addresses stay literal.
+
+For example:
 
 - `Why does @read D3:D12 return different margins from @selection?`
 - `Which cells contain XYZ anywhere in this workbook? Give me the sheet names and addresses.`
 - `Find formulas using XLOOKUP on the Orders sheet, then explain what the first match depends on.`
-- `Compare @read 'Q1 Sales'!B2:D8 with @read 'Q2 Sales'!B2:D8.`
+- `Compare @'Q1 Sales'!B2:D8 with @Forecast!B2:D8.`
 - `Add a column chart for @read A1:B12 and give it the title “Weekly sales”.`
 - `Summarize @comments, then propose a reply for the active cell.`
 - `Sort @read A1:E30 by column C descending and keep the header row.`

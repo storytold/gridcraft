@@ -1,4 +1,4 @@
-use super::{AgentKey, Approval, Mode, PanelState, ToolRounds, provider};
+use super::{AgentKey, Approval, Mode, PanelState, ToolRounds, chat::CallPolicy, provider};
 use crate::{SheetApp, i18n::Language, theme::Tokens};
 use egui::{Align, Align2, Button, Context, Layout, Rect, RichText, ScrollArea, Stroke, StrokeKind, Ui, pos2, vec2};
 use serde_json::json;
@@ -300,7 +300,7 @@ impl PanelState {
                                 self.composer.request_focus();
                             }
                         });
-                        message(ui, l, &line.text, true);
+                        message(ui, l, &line.text, true, &line.references);
                     }
                     ui.separator();
                 });
@@ -309,10 +309,10 @@ impl PanelState {
                 let (thinking, answer) = super::transcript::assistant_parts(&t.partial_thinking, &t.partial, false);
                 if self.show_thinking && !thinking.is_empty() {
                     ui.strong(l.tr("Thinking"));
-                    message(ui, l, thinking, false);
+                    message(ui, l, thinking, false, &[]);
                 }
                 if !answer.is_empty() {
-                    message(ui, l, answer, false);
+                    message(ui, l, answer, false, &[]);
                 }
             }
         });
@@ -457,11 +457,10 @@ impl PanelState {
                 .on_hover_text(l.tr("Finite limits reserve the last round for an answer. Unlimited runs until the model finishes or you stop it."));
         };
         let may_change_approval = physical && self.mode.writes();
-        let approvals =
-            |ui: &mut Ui, approval: &mut Approval| {
-                let label = ui.label(l.tr("Approval"));
-                let mut choice = *approval;
-                ui.add_enabled_ui(may_change_approval, |ui| {
+        let approvals = |ui: &mut Ui, approval: &mut Approval| {
+            let label = ui.label(l.tr("Approval"));
+            let mut choice = *approval;
+            ui.add_enabled_ui(may_change_approval, |ui| {
                     egui::ComboBox::from_id_salt("wingman_approval")
                         .width(ui.available_width().min(170.0))
                         .truncate()
@@ -474,14 +473,14 @@ impl PanelState {
                         .response
                         .labelled_by(label.id)
                         .on_hover_text(l.tr(
-                            "Always allow skips confirmations for edits, visual inspections and connected MCP tools in this thread and access mode.",
+                            "Always allow skips confirmations for edits and connected MCP tools in this thread and access mode. Wingman still asks before sending each workbook image.",
                         ))
-                        .on_disabled_hover_text(l.tr("In read-only mode, visual inspections ask before sending workbook pixels."));
+                        .on_disabled_hover_text(l.tr("Wingman asks before sending each workbook image."));
                 });
-                if may_change_approval {
-                    *approval = choice;
-                }
-            };
+            if may_change_approval {
+                *approval = choice;
+            }
+        };
         if ui.available_width() >= 275.0 {
             ui.columns(2, |cols| {
                 rounds(&mut cols[0], &mut self.tool_rounds);
@@ -503,8 +502,8 @@ impl PanelState {
             let waiting = self
                 .turn
                 .as_ref()
-                .filter(|t| t.external.is_none() && t.approval == Approval::Ask)
-                .and_then(|t| t.queue.front().filter(|c| self.requires_consent(t, c)).map(|c| (c, t.offered.get(&c.name))));
+                .filter(|t| t.external.is_none())
+                .and_then(|t| t.queue.front().filter(|c| self.call_policy(t, c) == CallPolicy::Review).map(|c| (c, t.offered.get(&c.name))));
             if let Some((call, external)) = waiting {
                 let visual = call.name == "inspect_visual" && external.is_none();
                 status(
@@ -603,11 +602,10 @@ impl PanelState {
 }
 
 // Render code as copyable, selectable text; response text never activates links or commands.
-fn message(ui: &mut Ui, l: Language, text: &str, finished: bool) {
-    message_parts(text, |language, value, closed| {
+fn message(ui: &mut Ui, l: Language, text: &str, finished: bool, references: &[std::ops::Range<usize>]) {
+    message_parts(text, |language, start, value, closed| {
         let visible = value.strip_suffix("\r\n").or_else(|| value.strip_suffix('\n')).unwrap_or(value);
-        let mut label = RichText::new(visible);
-        if let Some(language) = language {
+        let label: egui::WidgetText = if let Some(language) = language {
             ui.horizontal_wrapped(|ui| {
                 if !language.is_empty() {
                     ui.weak(language);
@@ -616,15 +614,20 @@ fn message(ui: &mut Ui, l: Language, text: &str, finished: bool) {
                     ui.ctx().copy_text(value.to_owned());
                 }
             });
-            label = label.monospace();
-        }
+            RichText::new(visible).monospace().into()
+        } else {
+            // The parser sees the entire message, including any surrounding code fences.
+            let i = references.partition_point(|s| s.start < start);
+            let mut local = references[i..].iter().take_while(|s| s.end <= start + visible.len()).map(|s| s.start - start..s.end - start).peekable();
+            if local.peek().is_some() { super::composer::reference_layout(ui, visible, local).into() } else { visible.into() }
+        };
         ui.add(egui::Label::new(label).wrap().selectable(true));
     });
 }
 
 /// Borrow the original code, including indentation and line endings, for the clipboard.
 /// Only a matching fence with no trailing text can close a block.
-fn message_parts<'a>(text: &'a str, mut emit: impl FnMut(Option<&'a str>, &'a str, bool)) {
+fn message_parts<'a>(text: &'a str, mut emit: impl FnMut(Option<&'a str>, usize, &'a str, bool)) {
     let mut fence: Option<(u8, usize, &str)> = None;
     let (mut start, mut offset) = (0, 0);
     for line in text.split_inclusive('\n') {
@@ -638,13 +641,13 @@ fn message_parts<'a>(text: &'a str, mut emit: impl FnMut(Option<&'a str>, &'a st
             let info = rest[count..].trim();
             match fence {
                 Some((open, n, lang)) if open == mark && count >= n && info.is_empty() => {
-                    emit(Some(lang), &text[start..offset], true);
+                    emit(Some(lang), start, &text[start..offset], true);
                     fence = None;
                     start = next;
                 }
                 None if count >= 3 && (mark != b'`' || !info.contains('`')) => {
                     if offset > start {
-                        emit(None, &text[start..offset], true);
+                        emit(None, start, &text[start..offset], true);
                     }
                     fence = Some((mark, count, info.split_whitespace().next().unwrap_or("")));
                     start = next;
@@ -655,7 +658,7 @@ fn message_parts<'a>(text: &'a str, mut emit: impl FnMut(Option<&'a str>, &'a st
         offset = next;
     }
     if start < text.len() {
-        emit(fence.map(|(_, _, lang)| lang), &text[start..], fence.is_none());
+        emit(fence.map(|(_, _, lang)| lang), start, &text[start..], fence.is_none());
     }
 }
 
@@ -672,7 +675,7 @@ mod message_tests {
     #[test]
     fn copyable_blocks_keep_source_and_exclude_surrounding_prose() {
         let mut parts = Vec::new();
-        super::message_parts("First\n````vba\r\nSub Update()\r\n  ' ```\r\nEnd Sub\r\n````\r\nNext\n~~~\n  x\n~~~\nLast", |lang, s, closed| {
+        super::message_parts("First\n````vba\r\nSub Update()\r\n  ' ```\r\nEnd Sub\r\n````\r\nNext\n~~~\n  x\n~~~\nLast", |lang, _, s, closed| {
             parts.push((lang, s, closed));
         });
         assert_eq!(
@@ -686,7 +689,7 @@ mod message_tests {
             ]
         );
         parts.clear();
-        super::message_parts("```vb\nSub Pending()", |lang, s, closed| parts.push((lang, s, closed)));
+        super::message_parts("```vb\nSub Pending()", |lang, _, s, closed| parts.push((lang, s, closed)));
         assert_eq!(parts, vec![(Some("vb"), "Sub Pending()", false)]);
     }
 }

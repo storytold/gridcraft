@@ -14,7 +14,7 @@ use crate::i18n::Language;
 use gridcraft_engine::model::Visibility;
 
 mod references;
-pub(super) use references::{mentions, read_target};
+pub(super) use references::{mention_spans, mentions, read_target};
 
 const COMMANDS: &[&str] = &["/help", "/new", "/clear", "/compact", "/mode", "/settings"];
 const MODE_COMMANDS: &[&str] = &["/mode chat", "/mode read", "/mode write", "/mode mcp"];
@@ -22,7 +22,7 @@ const MODE_COMMANDS: &[&str] = &["/mode chat", "/mode read", "/mode write", "/mo
 fn hint(name: &str) -> &'static str {
     match name {
         "@selection" => "Selected cells",
-        "@read" => "Read a range: @read B2:D8 or @read 'Q1 Sales'!B2:D8",
+        "@read" => "Read a range: @B2:D8 or @'Q1 Sales'!B2:D8",
         "@cell" => "Active cell",
         "@editor" => "Active worksheet or open native macro draft",
         "@sheet" => "Current sheet",
@@ -43,6 +43,26 @@ fn hint(name: &str) -> &'static str {
         "/settings" => "Open the configuration file",
         _ => "",
     }
+}
+
+/// Format the original text, not normalized addresses: selection, copying and caret offsets
+/// must continue to refer to exactly what the user typed.
+pub(super) fn reference_layout(ui: &egui::Ui, text: &str, spans: impl IntoIterator<Item = Range<usize>>) -> egui::text::LayoutJob {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let plain = egui::TextFormat::simple(font.clone(), ui.visuals().text_color());
+    let color = ui.visuals().hyperlink_color;
+    let reference = egui::TextFormat { underline: egui::Stroke::new(1.0, color), ..egui::TextFormat::simple(font, color) };
+    let mut job = egui::text::LayoutJob { keep_trailing_whitespace: true, ..Default::default() };
+    let mut last = 0;
+    for range in spans {
+        if last < range.start {
+            job.append(&text[last..range.start], 0.0, plain.clone());
+        }
+        job.append(&text[range.clone()], 0.0, reference.clone());
+        last = range.end;
+    }
+    job.append(&text[last..], 0.0, plain);
+    job
 }
 
 #[derive(Default)]
@@ -103,7 +123,9 @@ impl Query {
         }
         // A caret inside an explicit range must not replace just the '@read' part.
         let suffix_end = after.trim_start_matches(char::is_alphabetic);
-        if matches!(suffix_end.as_bytes().first(), Some(b':' | b'0'..=b'9' | b'_')) {
+        if matches!(suffix_end.as_bytes().first(), Some(b':' | b'0'..=b'9' | b'_'))
+            || (sigil == '@' && references::starts_qualified(&text[start + 1..]))
+        {
             return None;
         }
         let end = pos + after.len() - suffix_end.len();
@@ -377,6 +399,12 @@ impl Composer {
             .show(ui, |ui| {
                 TextEdit::multiline(&mut self.text)
                     .id(id)
+                    .layouter(&mut |ui, buf, wrap| {
+                        let text = buf.as_str();
+                        let mut job = reference_layout(ui, text, mention_spans(text));
+                        job.wrap.max_width = wrap;
+                        ui.fonts_mut(|f| f.layout_job(job))
+                    })
                     .interactive(enabled)
                     .char_limit(65_536)
                     .hint_text(lang.tr("Type @ for workbook context or / for commands"))
@@ -513,6 +541,10 @@ mod reference_tests {
         session.new_workbook();
         let app = SheetApp::new(session, crate::Services::default());
         let text = "@read 'Q1 Sales'' East'!B2";
+        for direct in ["@cell!B2", "@cell.archive!B2:D9"] {
+            let caret = CCursorRange::one(CCursor::new(3));
+            assert!(Query::at(direct, caret, &app).is_none());
+        }
         for position in 7..=23 {
             assert!(Query::sheet_at(text, position, &app).is_none(), "{position}");
         }

@@ -384,7 +384,6 @@ fn field(k: &str) -> Json {
     let boolean = || json!({"type":"boolean"});
     match k {
         "tab" => json!({"type":"string","enum":ribbon::SECTIONS}),
-        "chartTitle" => string(255),
         "section" | "group" => string(120),
         "actions" => {
             json!({"type":"array","minItems":1,"maxItems":16,"items":object(json!({"tool":string(64),"args":{"type":"object"}}), &["tool","args"])})
@@ -443,7 +442,7 @@ fn field(k: &str) -> Json {
             json!({"type":"array","minItems":1,"maxItems":64,"items":object(json!({"tool":string(64),"args":{"type":"object"}}), &["tool","args"])})
         }
         "input" | "text" => string(32767),
-        "title" | "xTitle" | "yTitle" => string(1024),
+        "title" | "chartTitle" | "xTitle" | "yTitle" => string(1024),
         _ => buttons::field(k).or_else(|| layout::field(k)).unwrap_or_else(|| string(255)),
     }
 }

@@ -8,6 +8,33 @@ const WIRE_LIMIT: usize = 512 * 1024;
 
 const SEARCH_GUIDE: &str = "When asked which cells contain text, use grep first; do not walk addresses with inspect_cell or read_range. For 'which cells have XYZ?' use grep with pattern XYZ, searchIn value and scope workbook unless a particular sheet or range is requested. Report the matching sheet names and addresses. A null nextCursor means the search is finished: do not retry a completed miss. If fields were skipped, disclose that limitation. Use searchIn formula for formula text, inspect_formula for direct dependencies, formula_diagnostics for cached errors, and check_formula to check proposed syntax.";
 
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CallPolicy {
+    NoGrant,
+    StandingGrant,
+    Review,
+}
+
+impl CallPolicy {
+    fn edit_or_external(approval: Approval) -> Self {
+        match approval {
+            Approval::Ask => Self::Review,
+            Approval::AlwaysAllow => Self::StandingGrant,
+        }
+    }
+
+    fn native(mode: Mode, approval: Approval, name: &str, rendering: bool) -> Self {
+        if name == "inspect_visual" && !rendering {
+            // Polling an already-confirmed capture is not a new request to share pixels.
+            Self::Review
+        } else if mode.writes() && workbook::is_write(name) == Ok(true) {
+            Self::edit_or_external(approval)
+        } else {
+            Self::NoGrant
+        }
+    }
+}
+
 /// One provider tool call can span many local scan slices. Yield between slices so sparse
 /// sheets do not cost extra model turns and Stop remains responsive on large workbooks.
 #[derive(Default)]
@@ -334,11 +361,10 @@ impl PanelState {
         }
         if let Some(call) = turn.queue.front() {
             Self::check_target(app, turn)?;
-            let needs_consent = self.requires_consent(turn, call);
-            if needs_consent && turn.approval == Approval::Ask {
+            if self.call_policy(turn, call) == CallPolicy::Review {
                 return Ok(true);
             }
-            self.resolve(app, turn, needs_consent, ctx)?;
+            self.resolve(app, turn, false, ctx)?;
             if turn.visual_job.is_some() {
                 return Ok(true);
             }
@@ -353,10 +379,14 @@ impl PanelState {
         Ok(true)
     }
 
-    pub(super) fn requires_consent(&self, turn: &Turn, call: &provider::ToolCall) -> bool {
-        (call.name == "inspect_visual" && turn.native_offered.contains(&call.name) && turn.visual_job.is_none())
-            || (self.mode.writes() && turn.native_offered.contains(&call.name) && workbook::is_write(&call.name) == Ok(true))
-            || (self.mode == Mode::Mcp && turn.offered.contains_key(&call.name))
+    pub(super) fn call_policy(&self, turn: &Turn, call: &provider::ToolCall) -> CallPolicy {
+        if self.mode == Mode::Mcp && turn.offered.contains_key(&call.name) {
+            CallPolicy::edit_or_external(turn.approval)
+        } else if turn.native_offered.contains(&call.name) {
+            CallPolicy::native(self.mode, turn.approval, &call.name, turn.visual_job.is_some())
+        } else {
+            CallPolicy::NoGrant
+        }
     }
 
     fn check_target(app: &SheetApp, turn: &Turn) -> Result<(), String> {
@@ -375,9 +405,10 @@ impl PanelState {
         Ok(())
     }
 
-    fn resolve(&mut self, app: &mut SheetApp, turn: &mut Turn, approve: bool, ctx: &Context) -> Result<(), String> {
+    fn resolve(&mut self, app: &mut SheetApp, turn: &mut Turn, confirmed: bool, ctx: &Context) -> Result<(), String> {
         Self::check_target(app, turn)?;
         let call = turn.queue.front().ok_or("No tool request is waiting.")?;
+        let approve = confirmed || self.call_policy(turn, call) == CallPolicy::StandingGrant;
         if let Some(entry) = turn.offered.get(&call.name) {
             if self.mode != Mode::Mcp || !approve {
                 return Err("External tool calls require MCP mode and explicit approval.".into());
@@ -407,7 +438,7 @@ impl PanelState {
                     turn.visual = Some(image);
                     return Ok(Some(receipt));
                 }
-                if !approve {
+                if !confirmed {
                     return Err("Sending workbook pixels requires permission.".into());
                 }
                 if turn.visual.is_some() {
@@ -499,6 +530,14 @@ impl PanelState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standing_edit_consent_never_covers_a_new_visual() {
+        let policy = |tool, rendering| CallPolicy::native(Mode::Edit, Approval::AlwaysAllow, tool, rendering);
+        assert_eq!(policy("set_cell", false), CallPolicy::StandingGrant);
+        assert_eq!(policy("inspect_visual", false), CallPolicy::Review);
+        assert_eq!(policy("inspect_visual", true), CallPolicy::NoGrant);
+    }
 
     #[test]
     fn sparse_search_yields_one_complete_receipt_even_for_a_miss() {

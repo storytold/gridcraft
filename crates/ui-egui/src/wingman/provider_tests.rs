@@ -94,17 +94,73 @@ fn stream_framing_and_completion_reasons_gate_tool_dispatch() {
 
 #[test]
 fn a_fragmented_function_batch_keeps_its_arguments_and_waits_for_completion() {
-    let head = json!({"index":0,"id":"one","type":"function","function":{"name":"read","arguments":"{\"cell\":\""}});
-    let tail = json!({"index":0,"function":{"arguments":"É1\"}"}});
+    let head = json!({"index":0,"id":"on","type":"function","function":{"name":"read","arguments":"{\"cell\":\""}});
+    let tail = json!({"index":0,"id":"e","function":{"arguments":"É1\"}"}});
     let next = json!({"index":1,"id":"two","type":"function","function":{"name":"list","arguments":"{}"}});
     let partial = event(json!({"tool_calls":[head,next]}), Value::Null) + &event(json!({"tool_calls":[tail]}), Value::Null);
     assert!(receive(partial.as_bytes(), false).is_err(), "A disconnect after valid arguments must not release the calls.");
     let data = partial + &event(json!({}), json!("tool_calls")) + "data: [DONE]\r\n\r\n";
     let reply = receive(data.as_bytes(), false).unwrap();
     let [first, second] = reply.tool_calls.as_slice() else { panic!("both calls must survive") };
+    assert_eq!(first.id, "one");
     assert_eq!((&*first.name, &*second.name), ("read", "list"));
     assert_eq!(serde_json::from_str::<Value>(&first.arguments).unwrap(), json!({"cell":"É1"}));
     assert_eq!(reply.message["tool_calls"][1]["id"], second.id);
+}
+
+#[test]
+fn indexless_calls_keep_their_ids_arguments_and_first_seen_order() {
+    let delta = |calls: Value| event(json!({"tool_calls":calls}), Value::Null);
+    let first = json!({"id":"first","function":{"name":"read","arguments":"{\"cell\":"}});
+    let second = json!({"id":"second","function":{"name":"list","arguments":"{"}});
+    let tail = delta(json!([{"id":"second","function":{"arguments":"}"}},{"id":"first","function":{"arguments":"\"B2\"}"}}]));
+    for heads in [delta(json!([first])) + &delta(json!([second])), delta(json!([first, second]))] {
+        let reply = receive((heads + &tail + &event(json!({}), json!("tool_calls"))).as_bytes(), false).unwrap();
+        let [a, b] = reply.tool_calls.as_slice() else { panic!("both indexless calls must survive") };
+        assert_eq!((&*a.id, &*a.name, &*b.id, &*b.name), ("first", "read", "second", "list"));
+        assert_eq!(serde_json::from_str::<Value>(&a.arguments).unwrap(), json!({"cell":"B2"}));
+        assert_eq!(serde_json::from_str::<Value>(&b.arguments).unwrap(), json!({}));
+    }
+}
+
+#[test]
+fn anonymous_tool_fragments_require_a_single_known_destination() {
+    let start = |id| json!({"id":id,"function":{"name":"read","arguments":"{"}});
+    let tail = json!({"function":{"arguments":"}"}});
+    let finish = event(json!({"tool_calls":[tail]}), json!("tool_calls"));
+    let first = event(json!({"tool_calls":[start("first")]}), Value::Null);
+    let reply = receive((first.clone() + &finish).as_bytes(), false).unwrap();
+    assert_eq!(reply.message["tool_calls"][0]["function"]["arguments"], "{}");
+    let two = first + &event(json!({"tool_calls":[start("second")]}), Value::Null);
+    // Both calls are otherwise valid; guessing either slot would change workbook actions.
+    let close_both =
+        event(json!({"tool_calls":[{"id":"first","function":{"arguments":"}"}},{"id":"second","function":{"arguments":"}"}}]}), Value::Null);
+    let ambiguous = event(json!({"tool_calls":[{"function":{"name":"More"}}]}), json!("tool_calls"));
+    assert!(receive((two + &close_both + &ambiguous).as_bytes(), false).is_err());
+}
+
+#[test]
+fn mixed_tool_fragments_bind_wire_indices_without_changing_stable_ids() {
+    let fragment = |call: Value| event(json!({"tool_calls":[call]}), Value::Null);
+    let start = |id| fragment(json!({"id":id,"function":{"name":"read","arguments":"{"}}));
+    let end = event(json!({}), json!("tool_calls"));
+    let a = start("a");
+    let tail = fragment(json!({"index":0,"function":{"arguments":"}"}}));
+    let single = receive((a.clone() + &tail + &end).as_bytes(), false).unwrap();
+    assert_eq!((&*single.tool_calls[0].id, &*single.tool_calls[0].arguments), ("a", "{}"));
+
+    let heads = a + &start("b");
+    assert!(receive((heads.clone() + &tail + &end).as_bytes(), false).is_err());
+    let bound = heads
+        + &fragment(json!({"index":1,"id":"a","function":{"arguments":"}"}}))
+        + &fragment(json!({"index":0,"id":"b","function":{"arguments":"}"}}));
+    let reply = receive((bound.clone() + &end).as_bytes(), false).unwrap();
+    let [b, a] = reply.tool_calls.as_slice() else { panic!("both mixed-key calls must survive") };
+    assert_eq!((&*b.id, &*a.id), ("b", "a"));
+    for id in ["a", "unknown"] {
+        let conflict = fragment(json!({"index":0,"id":id,"function":{"name":"More"}}));
+        assert!(receive((bound.clone() + &conflict + &end).as_bytes(), false).is_err());
+    }
 }
 
 #[test]

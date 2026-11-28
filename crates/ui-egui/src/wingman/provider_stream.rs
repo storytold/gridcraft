@@ -85,10 +85,17 @@ impl ToolCall {
 }
 
 #[derive(Default)]
+struct PendingCall {
+    call: ToolCall,
+    index: Option<usize>,
+    stable_id: bool,
+}
+
+#[derive(Default)]
 pub(super) struct Assembly {
     content: String,
     reasoning: String,
-    calls: BTreeMap<usize, ToolCall>,
+    calls: Vec<PendingCall>,
     finish: Option<String>,
     refusal: bool,
 }
@@ -112,12 +119,11 @@ impl Assembly {
             if !message["tool_calls"].is_null() {
                 let calls = message["tool_calls"].as_array().ok_or("Invalid provider tool-call list.")?;
                 for (i, c) in calls.iter().enumerate() {
-                    let index = match c["index"].as_u64() {
-                        Some(n) => usize::try_from(n).map_err(|_| "Invalid tool index.")?,
-                        None if partial.is_none() || calls.len() == 1 => i,
-                        None => return Err("Streamed parallel tool calls need distinct indices.".into()),
+                    let index = match &c["index"] {
+                        Value::Null => partial.is_none().then_some(i),
+                        n => Some(n.as_u64().and_then(|n| usize::try_from(n).ok()).ok_or("Invalid tool index.")?),
                     };
-                    self.call(index, c)?;
+                    self.call(index, c, calls.len() == 1)?;
                 }
             }
         }
@@ -142,7 +148,7 @@ impl Assembly {
                         return Err("Invalid Ollama function arguments.".into());
                     }
                     let native = json!({"id":format!("ollama_{i}"),"function":{"name":c["function"]["name"],"arguments":args.to_string()}});
-                    self.call(i, &native)?;
+                    self.call(Some(i), &native, false)?;
                 }
             }
         }
@@ -194,15 +200,60 @@ impl Assembly {
         }
         Ok(())
     }
-    fn call(&mut self, index: usize, c: &Value) -> Result<(), String> {
-        if index >= MAX_CALLS {
+    fn call(&mut self, index: Option<usize>, c: &Value, singleton: bool) -> Result<(), String> {
+        const AMBIGUOUS: &str = "Streamed parallel tool calls need a distinct index or ID.";
+        if index.is_some_and(|i| i >= MAX_CALLS) {
             return Err("Too many tool calls in one reply.".into());
         }
         if c["type"].as_str().is_some_and(|kind| kind != "function") {
             return Err("Unsupported tool-call type.".into());
         }
-        let call = self.calls.entry(index).or_default();
-        if let Some(s) = c["id"].as_str() {
+        let id = match &c["id"] {
+            Value::Null => None,
+            Value::String(id) => Some(id.as_str()).filter(|id| !id.is_empty()),
+            _ => return Err("Invalid tool-call ID.".into()),
+        };
+        let indexed = index.and_then(|i| self.calls.iter().position(|p| p.index == Some(i)));
+        // Indexed IDs can arrive in pieces. An ID used as an indexless key, however,
+        // is stable and must agree with any wire index supplied later.
+        let mut by_id = self.calls.iter().enumerate().filter(|(_, p)| (index.is_none() || p.stable_id) && Some(p.call.id.as_str()) == id);
+        let keyed = by_id.next().map(|(i, _)| i);
+        if by_id.next().is_some() || indexed.zip(keyed).is_some_and(|(a, b)| a != b) {
+            return Err(AMBIGUOUS.into());
+        }
+        let mut unbound = self.calls.iter().enumerate().filter(|(_, p)| p.index.is_none());
+        let slot = if let Some(i) = indexed.or(keyed) {
+            i
+        } else if id.is_none() && index.is_none() {
+            if !singleton || self.calls.len() != 1 {
+                return Err(AMBIGUOUS.into());
+            }
+            0
+        } else if id.is_none()
+            && let Some((i, _)) = unbound.next()
+        {
+            // A lone unbound call may continue at its provisional position. A
+            // different position (or several unbound calls) needs a stable ID.
+            let first_free = (0..MAX_CALLS).find(|k| !self.calls.iter().any(|p| p.index == Some(*k)));
+            if !singleton || unbound.next().is_some() || index != first_free {
+                return Err(AMBIGUOUS.into());
+            }
+            i
+        } else {
+            if self.calls.len() == MAX_CALLS {
+                return Err("Too many tool calls in one reply.".into());
+            }
+            self.calls.push(PendingCall::default());
+            self.calls.len() - 1
+        };
+        let pending = &mut self.calls[slot];
+        if index.zip(pending.index).is_some_and(|(a, b)| a != b) || (pending.stable_id && id.is_some_and(|id| id != pending.call.id)) {
+            return Err(AMBIGUOUS.into());
+        }
+        pending.index = index.or(pending.index);
+        pending.stable_id |= index.is_none() && id.is_some();
+        let call = &mut pending.call;
+        if let Some(s) = id.filter(|_| keyed.is_none()) {
             call.id.push_str(s);
         }
         if let Some(s) = c["function"]["name"].as_str() {
@@ -242,7 +293,16 @@ impl Assembly {
         if self.finish.as_deref().is_some_and(|r| !matches!(r, "stop" | "tool_calls")) {
             return Err("The provider stopped before completing the reply; no tool calls were applied.".into());
         }
-        let calls: Vec<_> = self.calls.into_values().collect();
+        // Explicit indices give canonical order. Fill their gaps with the remaining
+        // indexless calls in first-seen order without confusing that order with identity.
+        let taken: BTreeSet<_> = self.calls.iter().filter_map(|p| p.index).collect();
+        let mut free = (0..MAX_CALLS).filter(|i| !taken.contains(i));
+        let mut ordered = BTreeMap::new();
+        for p in self.calls {
+            let i = p.index.or_else(|| free.next()).ok_or("Too many tool calls in one reply.")?;
+            ordered.insert(i, p.call);
+        }
+        let calls: Vec<_> = ordered.into_values().collect();
         if calls.is_empty() && self.finish.as_deref() == Some("tool_calls") {
             return Err("The provider indicated a tool call but supplied none.".into());
         }
