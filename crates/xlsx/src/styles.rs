@@ -82,6 +82,9 @@ fn model_font(f: &craft_xlsx::Font, palette: &[u32]) -> Font {
         italic: f.italic == Some(true),
         strike: f.strike == Some(true),
         outline: f.outline == Some(true),
+        shadow: f.shadow == Some(true),
+        condense: f.condense == Some(true),
+        extend: f.extend == Some(true),
         underline: match f.underline {
             Some(craft_xlsx::Underline::Single) => Underline::Single,
             Some(craft_xlsx::Underline::Double) => Underline::Double,
@@ -409,6 +412,9 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
         st.italic = shared.italic == Some(false);
         st.strike = shared.strike == Some(false);
         st.outline = shared.outline == Some(false);
+        st.shadow = shared.shadow == Some(false);
+        st.condense = shared.condense == Some(false);
+        st.extend = shared.extend == Some(false);
         st.underline = shared.underline == Some(craft_xlsx::Underline::None);
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -491,6 +497,9 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
         italic: flag(f.italic, stated.italic),
         strike: flag(f.strike, stated.strike),
         outline: flag(f.outline, stated.outline),
+        shadow: flag(f.shadow, stated.shadow),
+        condense: flag(f.condense, stated.condense),
+        extend: flag(f.extend, stated.extend),
         underline: (f.underline != Underline::None || stated.underline).then_some(match f.underline {
             Underline::None => craft_xlsx::Underline::None,
             Underline::Single => craft_xlsx::Underline::Single,
@@ -509,7 +518,6 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
         family: dxf.is_none().then(|| u32::from(f.family.filter(|v| *v <= MAX_FONT_FAMILY).unwrap_or(DEFAULT_FONT_FAMILY))),
         charset: if dxf.is_none() { f.charset.map(u32::from) } else { None },
         scheme,
-        ..Default::default()
     };
     let mut font = shared.to_el("font", false);
     // The model preserves an unrecognized differential scheme as opaque text.
@@ -804,6 +812,9 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
         || d.font.italic
         || d.font.strike
         || d.font.outline
+        || d.font.shadow
+        || d.font.condense
+        || d.font.extend
         || d.font.underline != Underline::None
         || d.font.color != Color::Auto
         || d.font.vert != VertAlign::Baseline
@@ -813,6 +824,9 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
         || d.dxf_stated.italic
         || d.dxf_stated.strike
         || d.dxf_stated.outline
+        || d.dxf_stated.shadow
+        || d.dxf_stated.condense
+        || d.dxf_stated.extend
         || d.dxf_stated.underline
         || d.dxf_stated.size
         || d.dxf_stated.name

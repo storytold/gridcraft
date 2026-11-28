@@ -270,6 +270,63 @@ fn dxf_outline_font_survives_save() {
     assert_eq!(written, Some(format!(r#" count="3">{dxfs}"#).as_str()));
 }
 
+/// Our hand-written SpreadsheetML keeps each font flag on, explicitly off in a differential
+/// format, or absent; saving must preserve those three meanings without adding flags to Normal.
+#[test]
+fn shadow_condense_and_extend_survive_save() {
+    fn flags(style: &gridcraft_model::Style) -> ([bool; 3], [bool; 3]) {
+        let font = &style.font;
+        let stated = &style.dxf_stated;
+        ([font.shadow, font.condense, font.extend], [stated.shadow, stated.condense, stated.extend])
+    }
+
+    for (index, name) in ["shadow", "condense", "extend"].into_iter().enumerate() {
+        let styles = format!(
+            r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+              <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><{name}/><sz val="11"/><name val="Calibri"/></font></fonts>
+              <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+              <borders count="1"><border/></borders>
+              <cellXfs count="2"><xf fontId="0"/><xf fontId="1"/></cellXfs>
+              <dxfs count="3"><dxf><font><{name}/></font></dxf><dxf><font><{name} val="0"/></font></dxf><dxf><font><i/></font></dxf></dxfs>
+            </styleSheet>"#
+        );
+        let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+        let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1" s="1"><v>2</v></c></row></sheetData>
+          <conditionalFormatting sqref="A3"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+          <conditionalFormatting sqref="A4"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+          <conditionalFormatting sqref="A5"><cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+        let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+        let (wb, _) = read_xlsx(&bytes).unwrap();
+        let saved = crate::write_xlsx(&wb).unwrap();
+        let (back, _) = read_xlsx(&saved).unwrap();
+        let mut on = [false; 3];
+        on[index] = true;
+        for book in [&wb, &back] {
+            let sheet = book.sheet(0).unwrap();
+            assert_eq!(flags(book.styles.get(sheet.style_id(at("A1")))), ([false; 3], [false; 3]), "Normal: {name}");
+            assert_eq!(flags(book.styles.get(sheet.style_id(at("B1")))), (on, [false; 3]), "cell font: {name}");
+            for (cell, expected) in [("A3", (on, [false; 3])), ("A4", ([false; 3], on)), ("A5", ([false; 3], [false; 3]))] {
+                let rule = sheet.cond_formats.iter().find(|cf| cf.ranges.iter().any(|range| range.contains(at(cell)))).unwrap();
+                assert_eq!(flags(rule.rule.style().unwrap()), expected, "{name} at {cell}");
+            }
+        }
+
+        let mut package = crate::package::Package::open(&saved).unwrap();
+        let written = package.read_xml("xl/styles.xml").unwrap().unwrap();
+        let fonts = written.child("fonts").unwrap();
+        assert!(fonts.kids("font").next().unwrap().child(name).is_none(), "Normal gained {name}");
+        assert_eq!(fonts.kids("font").filter(|font| font.child(name).is_some_and(|flag| flag.flag("val", true))).count(), 1, "{name}");
+        let mut stated: Vec<Option<bool>> = written
+            .child("dxfs")
+            .unwrap()
+            .kids("dxf")
+            .map(|dxf| dxf.child("font").and_then(|font| font.child(name)).map(|flag| flag.flag("val", true)))
+            .collect();
+        stated.sort_unstable();
+        assert_eq!(stated, [None, Some(false), Some(true)], "DXF on/off/absent: {name}");
+    }
+}
+
 /// A dxf writes its parts in schema order: the border comes before the protection.
 #[test]
 fn dxf_border_is_written_before_protection() {
