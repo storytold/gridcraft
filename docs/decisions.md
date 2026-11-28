@@ -185,3 +185,14 @@ such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`
 
 From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour
 `sep=`) is another part of #1446.
+
+## The dark sheet, dark charts and dark pictures are opt-in view settings (#1264)
+
+Three user preferences show the workbook light-on-dark on screen: the cells (`view.darkSheet`),
+charts (`view.darkCharts`) and pictures (`view.darkPictures`). They are off by default and
+separate from Display theme and from each other, turned on from the View tab or File › Options,
+like WordCraft's dark page (storytold/wordcraft#194). Display theme Dark and System do not turn
+them on: that would change the default look for everyone, a product decision (#177). Every
+workbook colour has its HSL lightness inverted with hue and saturation kept, lifted so white
+becomes `#333333`; a contrast guard keeps mapped text at min(4.5:1, the authored contrast).
+Files, printing and export are unchanged. Details: `docs/dark-sheet.md`.

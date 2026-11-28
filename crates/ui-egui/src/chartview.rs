@@ -40,11 +40,19 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
     let data = gridcraft_chart::resolve(wb, sheet, chart);
     let m = EguiMeasure { painter: p, z };
     let prims = gridcraft_chart::render(chart, &data, w, h, &m);
-    paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
+    paint_prims_dark(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z, theme::dark_charts(p.ctx()));
 }
 
 /// Paints chart primitives at `origin`, scaled by `z`.
 pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
+    paint_prims_dark(p, origin, prims, z, false);
+}
+
+/// [`paint_prims`] with the dark-charts colour rule when `dark` (`theme::ink`; text keeps its
+/// contrast against the chart's white area). Screen only: print and export rasterise on their own.
+pub fn paint_prims_dark(p: &Painter, origin: Pos2, prims: &[Prim], z: f32, dark: bool) {
+    let plain = rgba;
+    let rgba = |c: [u8; 4]| if dark { theme::ink(plain(c)) } else { plain(c) };
     let pt = |x: f32, y: f32| pos2(origin.x + x * z, origin.y + y * z);
     for prim in prims {
         match prim {
@@ -121,8 +129,9 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                 }
             }
             Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
+                let tc = if dark { theme::ink_guarded(plain(*color), Color32::WHITE, theme::INK_TEXT_MIN) } else { plain(*color) };
                 let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
-                let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
+                let galley = p.layout_no_wrap(text.clone(), font, tc);
                 let sz = galley.size();
                 let ax = match align {
                     HAlign::Left => 0.0,
@@ -136,13 +145,13 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                 };
                 let anchor = pt(*x, *y);
                 if *rotation == 0.0 {
-                    p.galley(pos2(anchor.x - sz.x * ax, anchor.y - sz.y * ay), galley, rgba(*color));
+                    p.galley(pos2(anchor.x - sz.x * ax, anchor.y - sz.y * ay), galley, tc);
                 } else {
                     // Rotate about the anchor: offset the galley origin by the rotated alignment.
                     let (s, c) = rotation.sin_cos();
                     let off = vec2(-sz.x * ax, -sz.y * ay);
                     let rot = vec2(off.x * c - off.y * s, off.x * s + off.y * c);
-                    let mut shape = egui::epaint::TextShape::new(anchor + rot, galley, rgba(*color));
+                    let mut shape = egui::epaint::TextShape::new(anchor + rot, galley, tc);
                     shape.angle = *rotation;
                     p.add(shape);
                 }
@@ -197,6 +206,15 @@ fn area_mesh(v: &[Pos2], col: Color32) -> egui::Mesh {
 /// A shape's text with its formatting: size, bold/italic, typeface, colour, outline, horizontal
 /// alignment and vertical anchor. Shapes other than text boxes default to white text centred in
 /// the shape; text boxes to black text at the top left.
+/// Colour of a shape's text on this sheet: the authored (or automatic) colour, mapped and held
+/// legible over the shape's authored fill (white when it has none) on the dark sheet. The in-place
+/// text box editor uses the same colour.
+pub(crate) fn shape_text_color(ctx: &egui::Context, wb: &Workbook, sp: &gridcraft_engine::model::Shape, default_color: Color32) -> Color32 {
+    let authored = sp.format.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
+    let paper = sp.fill.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE);
+    Tokens::get(ctx).on_sheet_over(authored, paper, theme::INK_TEXT_MIN)
+}
+
 fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Shape, r: Rect, z: f32) {
     use gridcraft_engine::model::{ShapeTextAlign, ShapeTextAnchor};
     let f = &sp.format;
@@ -205,7 +223,7 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     let align = f.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = f.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
     let default_color = if text_box || word_art { Color32::BLACK } else { Color32::WHITE };
-    let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
+    let color = shape_text_color(p.ctx(), wb, sp, default_color);
     // Default 14 px (as before); a set size is in points.
     let size = f.font_size.map_or(14.0, |pt| pt * 96.0 / 72.0).clamp(1.0, 2000.0) * z;
     let family = theme::cell_family(f.font.as_deref().unwrap_or(""), f.bold, f.italic);
@@ -292,6 +310,9 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
+/// Paints the sheet's floating objects (the selected chart's source outlines, then shapes, pictures,
+/// charts and slicers) and returns each one's painted shapes and rectangle. Nothing is painted when
+/// objects are hidden; charts and pictures follow their own dark settings.
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Workbook>, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
@@ -327,9 +348,17 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         }
         let start = p.add(egui::Shape::Noop);
         let mut label = true;
-        let fill = sp.fill.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::TRANSPARENT);
-        let line =
-            if sp.format.no_line { Color32::TRANSPARENT } else { sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY) };
+        let tk = Tokens::get(p.ctx());
+        // Authored colours are for the white sheet: the dark sheet maps fills, and holds lines and
+        // ink legible against the authored paper (the fill, else white).
+        let authored_fill = sp.fill.resolve(&wb.theme).map(theme::color32);
+        let paper = authored_fill.unwrap_or(Color32::WHITE);
+        let fill = authored_fill.map_or(Color32::TRANSPARENT, |c| tk.on_sheet(c));
+        let line = if sp.format.no_line {
+            Color32::TRANSPARENT
+        } else {
+            tk.on_sheet_over(sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY), paper, theme::INK_LINE_MIN)
+        };
         match sp.kind {
             // WordArt is only its text (no fill or outline of its own).
             ShapeKind::WordArt => {}
@@ -416,7 +445,7 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         p.rect_filled(r.translate(vec2(0.0, 1.5)), 2.0, Color32::from_black_alpha(18));
         p.rect_filled(r, 0.0, Tokens::get(p.ctx()).grid_bg);
         let prims = chart_prims(app, p, geo.z, wb, si, ci, ch);
-        paint_prims(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z);
+        paint_prims_dark(&p.with_clip_rect(r.intersect(p.clip_rect())), r.min, &prims, geo.z, theme::dark_charts(p.ctx()));
         done(start, r);
     }
     paint_slicers(p, geo, wb, si, sh);

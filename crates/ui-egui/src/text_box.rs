@@ -146,6 +146,9 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
         // A new editing session must not reuse the previous box's caret/undo history.
         egui::text_edit::TextEditState::default().store(ui.ctx(), id);
     }
+    let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
+    let default_color = if shape.kind == ShapeKind::TextBox || shape.kind == ShapeKind::WordArt { Color32::BLACK } else { Color32::WHITE };
+    let text_color = crate::chartview::shape_text_color(ui.ctx(), &wb, shape, default_color);
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     child.set_clip_rect(rect);
     egui::ScrollArea::vertical().id_salt(id).max_height(rect.height()).auto_shrink([false, false]).show(&mut child, |ui| {
@@ -162,7 +165,7 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
                         } * geo.z,
                         egui::FontFamily::Name(theme::CELL.into()),
                     ))
-                    .text_color(Color32::BLACK)
+                    .text_color(text_color)
                     .frame(egui::Frame::NONE)
                     .margin(egui::Margin::ZERO)
                     .desired_width(rect.width())
