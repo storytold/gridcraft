@@ -341,9 +341,11 @@ fn decode(raw: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(rest.get(..amp).unwrap_or_default());
         rest = rest.get(amp..).unwrap_or_default();
-        // `.min(len)` (not an `unwrap_or(rest)`) — a `get(..12)` that fails on a multibyte
-        // boundary used to fall back to the complete suffix, re-scanning per '&'.
-        let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
+        // `.min(len)` (not an `unwrap_or(rest)`) — the window never grows into the complete
+        // suffix, which would re-scan per '&'. The window may end inside a multi-byte
+        // character, so `;` is searched in raw bytes; `&` and `;` are ASCII, and a name with
+        // non-ASCII bytes fails the `get` below like any unknown name.
+        let semi = rest.as_bytes()[..ENTITY_WINDOW.min(rest.len())].iter().position(|&b| b == b';');
         let entity = semi.and_then(|e| rest.get(1..e));
         let ch = entity.and_then(|e| {
             greek_entity(e).or_else(|| match e {
@@ -461,6 +463,9 @@ mod tests {
         assert_eq!(decode("&pi;&lambda;&sigma;&theta;"), "\u{3c0}\u{3bb}\u{3c3}\u{3b8}");
         assert_eq!(decode("X&#x3B1;Y"), "X\u{3b1}Y", "the numeric form already decoded");
         assert_eq!(decode("X&alphay;Y"), "X&alphay;Y", "an unknown name stays literal");
+        // The 12-byte window ends inside a multi-byte character here; that must not hide the
+        // entity behind it.
+        assert_eq!(decode("&alpha;ααα"), "\u{3b1}\u{3b1}\u{3b1}\u{3b1}");
     }
 
     #[test]
