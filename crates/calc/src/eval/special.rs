@@ -38,7 +38,13 @@ const MAX_PRECEDENT_NODES: usize = 1_000_000;
 /// (`1+1+…`, about 4,000 levels deep) never recurses. Past [`MAX_PRECEDENT_NODES`] the result
 /// is conservative: `dynamic` is set so the formula recalculates every time.
 pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
-    let mut c = Precedents { wb, sheet, out: Vec::new(), dynamic: false, boxes: Vec::new() };
+    precedents_at(wb, sheet, CellRef::default(), e)
+}
+
+/// Like [`precedents`], also resolving structured table references (`Table1[Col]`, `[@Col]`,
+/// `Table1[]`) and bare table names from a formula at `(sheet, at)`.
+pub fn precedents_at(wb: &Workbook, sheet: usize, at: CellRef, e: &Expr) -> (Vec<Area>, bool) {
+    let mut c = Precedents { wb, sheet, at, out: Vec::new(), dynamic: false, boxes: Vec::new() };
     c.collect(e);
     (c.out, c.dynamic)
 }
@@ -64,6 +70,7 @@ enum PrecedentStep<'e> {
 struct Precedents<'w> {
     wb: &'w Workbook,
     sheet: usize,
+    at: CellRef,
     out: Vec<Area>,
     dynamic: bool,
     /// Per-sheet bounding boxes, one list per range operator (`A1:INDEX(…)`) met so far.
@@ -156,11 +163,31 @@ impl Precedents<'_> {
                 _ => self.dynamic = true,
             },
             Expr::Call(n, _)
-                if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
+                if matches!(
+                    n.as_str(),
+                    "INDIRECT" | "OFFSET" | "GETPIVOTDATA" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO"
+                ) =>
             {
                 self.dynamic = true
             }
-            Expr::Name(_) | Expr::Struct(_) => self.dynamic = true,
+            Expr::Name(n) => {
+                self.dynamic = true;
+                if !n.starts_with('[')
+                    && !n.contains('!')
+                    && self.wb.name(n, self.sheet).is_none()
+                    && let Some((si, ti)) = self.wb.table(n)
+                    && let Some(t) = self.wb.sheet(si).and_then(|s| s.tables.get(ti))
+                    && let Some(d) = t.data_range()
+                {
+                    self.add(Area { sheet: si, range: d }, boxes);
+                }
+            }
+            Expr::Struct(s) => {
+                self.dynamic = true;
+                if let Ok(area) = super::resolve_structured(self.wb, self.sheet, self.at, s) {
+                    self.add(area, boxes);
+                }
+            }
             Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => self.dynamic = true,
             // A range ending in a function's result (`A1:INDEX(B1:B9,n)`), or a chain of plain
             // references the parser can't fold into one (`A1:B2:C3`), covers the cells between the

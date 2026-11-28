@@ -110,7 +110,13 @@ impl Evaluator<'_> {
         }
         let wb = self.host.workbook();
         let sheet = wb.sheet(area.sheet).ok_or(CellError::Ref)?;
-        let pt = sheet.pivots.iter().find(|p| p.last_range.is_some_and(|r| r.intersects(&area.range))).ok_or(CellError::Ref)?;
+        let Some(pt) = sheet.pivots.iter().find(|p| p.last_range.is_some_and(|r| r.intersects(&area.range)) || p.anchor == area.range.start) else {
+            return match self.getpivotdata_fallback(args) {
+                Ev::V(Value::Error(e)) => Err(e),
+                Ev::V(v) => Ok(v),
+                _ => Err(CellError::Ref),
+            };
+        };
         // A report filter field may be named when the report shows exactly that one item.
         let mut axis_pairs = Vec::with_capacity(pairs.len());
         for (field, item) in pairs {
@@ -132,7 +138,13 @@ impl Evaluator<'_> {
         // refresh — never an index cached from a failed build, because the shared lookup keeps
         // the first one set and undo or reopen could then never rebuild it.
         if pt.data_index.cells().is_none() {
-            let build = PIVOT_INDEXER.get().ok_or(CellError::Ref)?;
+            let Some(build) = PIVOT_INDEXER.get() else {
+                return match self.getpivotdata_fallback(args) {
+                    Ev::V(Value::Error(e)) => Err(e),
+                    Ev::V(v) => Ok(v),
+                    _ => Err(CellError::Ref),
+                };
+            };
             if let Ok(cells) = build(wb, area.sheet, pt) {
                 pt.data_index.set_cells(cells);
             }

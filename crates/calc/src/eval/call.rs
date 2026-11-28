@@ -81,6 +81,8 @@ impl<'h> Evaluator<'h> {
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
             "XLOOKUP" => self.xlookup(args),
+            "VLOOKUP" | "HLOOKUP" => self.vh_lookup(name == "VLOOKUP", args),
+            "LOOKUP" => self.lookup_call(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "GETPIVOTDATA" => self.getpivotdata(args),
