@@ -587,6 +587,24 @@ fn rebuilt_results_have_a_budget_across_the_workbook() {
 }
 
 #[test]
+fn a_python_result_with_a_damaged_nested_array_is_dropped() {
+    // #2160: the result is 1×2 as it says, but its second value is an array that claims four
+    // values and holds one. Indexing that would read past its end, so the result is dropped, as
+    // a result of the wrong shape is.
+    let (mut s, _) = build();
+    let bytes = save(&mut s, "json");
+    let mut wb: Workbook = serde_json::from_slice(&bytes).unwrap();
+    let sh = wb.sheet_mut(0).unwrap();
+    let c1 = sh.cells.get_mut(CellRef::parse("C1").unwrap()).unwrap();
+    let out = Arc::make_mut(c1.py.as_mut().unwrap()).output.as_mut().unwrap();
+    let damaged = Value::Array(Arc::new(Array { rows: 2, cols: 2, data: vec![Value::Number(1.0)] }));
+    out.value = Value::Array(Arc::new(Array { rows: 1, cols: 2, data: vec![Value::Number(1.0), damaged] }));
+    let (wb, _) = crate::io::open_bytes("evil.json", &serde_json::to_vec(&wb).unwrap()).unwrap();
+    let c1 = wb.sheet(0).unwrap().cell(CellRef::parse("C1").unwrap()).unwrap();
+    assert!(c1.py.as_ref().unwrap().output.is_none(), "the damaged result is dropped");
+}
+
+#[test]
 fn hostile_python_content_in_files_is_capped() {
     let (mut s, _) = build();
     let bytes = save(&mut s, "json");
