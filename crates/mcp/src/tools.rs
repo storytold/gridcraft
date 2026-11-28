@@ -582,9 +582,13 @@ fn sort_range(b: &mut dyn Backend, a: &Args) -> Result<Value, String> {
                 let mut it = c.split_whitespace();
                 let col = it.next().unwrap_or_default();
                 let order = match it.next().map(str::to_ascii_lowercase).as_deref() {
+                    None | Some("asc" | "ascending") => "asc",
                     Some("desc" | "descending") => "desc",
-                    _ => "asc",
+                    Some(_) => return Err(format!("invalid sort key `{c}`: expected a column followed by asc or desc")),
                 };
+                if it.next().is_some() {
+                    return Err(format!("invalid sort key `{c}`: expected a column followed by asc or desc"));
+                }
                 json!({"column": col, "order": order})
             }
             Value::Object(o) => {
