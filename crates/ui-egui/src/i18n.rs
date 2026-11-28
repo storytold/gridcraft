@@ -29,6 +29,7 @@ mod tr;
 mod uk;
 mod vi;
 mod zh;
+mod zh_hant;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -38,6 +39,8 @@ pub enum Language {
     Es,
     El,
     Zh,
+    #[serde(rename = "zh-hant")]
+    ZhHant,
     Ja,
     Ko,
     Ru,
@@ -57,11 +60,12 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
         Self::Zh,
+        Self::ZhHant,
         Self::Ja,
         Self::Ko,
         Self::Ru,
@@ -95,6 +99,7 @@ impl Language {
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
+            Self::ZhHant => "繁體中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
             Self::Ru => "Русский",
@@ -120,6 +125,7 @@ impl Language {
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
+            Self::ZhHant => "zh-hant",
             Self::Ja => "ja",
             Self::Ko => "ko",
             Self::Ru => "ru",
@@ -149,7 +155,20 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        // Drop a charset or modifier (`zh_TW.UTF-8`, `zh@x`), then read the subtags.
+        let tag = tag.trim().split(['.', '@']).next()?.to_ascii_lowercase();
+        let mut subtags = tag.split(['-', '_']);
+        // Traditional Chinese: an explicit script (`zh-Hant`) or a Traditional-using region
+        // (`zh-TW`, `zh-HK`, `zh-MO`) without an explicit `Hans` script. Any other Chinese tag
+        // stays Simplified.
+        if subtags.next() == Some("zh") {
+            let rest: Vec<&str> = subtags.collect();
+            let traditional_region = rest.iter().any(|s| matches!(*s, "tw" | "hk" | "mo"));
+            if rest.contains(&"hant") || (traditional_region && !rest.contains(&"hans")) {
+                return Some(Self::ZhHant);
+            }
+        }
+        match tag.split(['-', '_']).next()? {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
@@ -213,6 +232,7 @@ impl Language {
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
+            Self::ZhHant => zh_hant::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -722,6 +742,15 @@ mod tests {
         assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
         assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hans-TW"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant"), Some(Language::ZhHant));
+        assert_eq!(Language::from_tag("zh-Hant-HK"), Some(Language::ZhHant));
+        assert_eq!(Language::from_tag("zh-TW"), Some(Language::ZhHant));
+        assert_eq!(Language::from_tag("zh-HK"), Some(Language::ZhHant));
+        assert_eq!(Language::from_tag("zh_TW.UTF-8"), Some(Language::ZhHant));
+        assert_eq!(Language::parse("zh-hant"), Some(Language::ZhHant));
+        assert_eq!(Language::ZhHant.code(), "zh-hant");
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
