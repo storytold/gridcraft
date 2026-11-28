@@ -27,7 +27,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
-    let mut autosave = app.ui.autosave;
+    let mut autosave = app.autosave_active();
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }

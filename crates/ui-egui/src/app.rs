@@ -539,7 +539,10 @@ mod lifecycle_tests {
         app.run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
         app.ui.autosave = true;
         app.session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
-        app.grid.last_autosave = monotonic_ms() - 3000.0;
+        // The change has waited out the AutoSave delay.
+        let d = app.session.active().unwrap();
+        app.grid.autosave_batch =
+            Some(crate::grid::AutosaveBatch { doc: d.uid, base_revision: d.revision - 1, since: monotonic_ms() - files::AUTOSAVE_DELAY_MS - 1.0 });
 
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         assert!(path.exists(), "a hidden logic-only tick saves a dirty workbook with a file");
@@ -547,6 +550,118 @@ mod lifecycle_tests {
         let saved_at = app.grid.last_autosave;
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         assert_eq!(app.grid.last_autosave, saved_at, "the same change is not saved a second time");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A test app whose workbook has an .xlsx file in a fresh folder, with AutoSave on.
+    fn autosaving_app(name: &str) -> (SheetApp, std::path::PathBuf) {
+        let mut app = app();
+        let dir = std::env::temp_dir().join(format!("gridcraft-autosave-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.xlsx");
+        app.session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
+        app.ui.autosave = true;
+        (app, path)
+    }
+
+    #[test]
+    /// One change is not saved at once: AutoSave waits for more changes or for its delay.
+    fn autosave_waits_after_a_single_change() {
+        let ctx = egui::Context::default();
+        let (mut app, path) = autosaving_app("single");
+        app.run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!path.exists(), "a single fresh change is not saved yet");
+        assert!(app.session.active().unwrap().is_dirty());
+        assert!(app.grid.autosave_batch.is_some(), "the change waits in a batch");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    /// A burst of changes is saved without waiting for the delay.
+    fn autosave_saves_a_burst_of_changes_at_once() {
+        let ctx = egui::Context::default();
+        let (mut app, path) = autosaving_app("burst");
+        app.run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!path.exists(), "the first change alone waits");
+        for row in 2..=files::AUTOSAVE_EDITS {
+            app.run("cell.set", serde_json::json!({"cell": format!("A{row}"), "input": "1"})).unwrap();
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        }
+        assert!(path.exists(), "enough changes in a row are saved before the delay");
+        assert!(!app.session.active().unwrap().is_dirty(), "the save covers every change of the burst");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    /// The title bar tells apart changes still waiting to be saved, a saved file, and a workbook
+    /// AutoSave cannot write to, and shows nothing while AutoSave is off.
+    fn autosave_status_follows_the_unsaved_changes() {
+        let ctx = egui::Context::default();
+        let (mut app, path) = autosaving_app("status");
+        let clean = app.autosave_status();
+        app.run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        let waiting = app.autosave_status();
+        assert_ne!(waiting, clean, "unsaved changes read differently from a saved file");
+        let d = app.session.active().unwrap();
+        app.grid.autosave_batch =
+            Some(crate::grid::AutosaveBatch { doc: d.uid, base_revision: d.revision - 1, since: monotonic_ms() - files::AUTOSAVE_DELAY_MS - 1.0 });
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert_eq!(app.autosave_status(), clean, "once AutoSave has saved, it reads as saved again");
+
+        app.session.active_mut().unwrap().path = None;
+        let no_file = app.autosave_status();
+        assert!(no_file.is_some() && no_file != clean && no_file != waiting, "a workbook without a file is not shown as saved or saving");
+        app.ui.autosave = false;
+        assert_eq!(app.autosave_status(), None, "nothing is shown while AutoSave is off");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    /// Turning AutoSave on for a workbook without an .xlsx file asks where to save it first.
+    fn turning_autosave_on_asks_to_save_a_workbook_without_a_file() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-autosave-ask-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let picked = dir.join("picked");
+
+        // No way to pick a file (the web build): AutoSave stays off and says why.
+        let mut web = app();
+        web.toggle_autosave();
+        assert!(!web.ui.autosave, "nothing to save to, so AutoSave stays off");
+        assert!(web.message.is_some(), "the user is told why");
+
+        // The save is cancelled: AutoSave stays off.
+        let mut cancelled = app();
+        cancelled.services.pick_save = Some(Box::new(|_| None));
+        cancelled.toggle_autosave();
+        assert!(!cancelled.ui.autosave, "a cancelled save leaves AutoSave off");
+
+        // A file is picked: the workbook is saved there as .xlsx and AutoSave turns on.
+        let mut chosen = app();
+        let to = picked.to_string_lossy().into_owned();
+        chosen.services.pick_save = Some(Box::new(move |_| Some(to.clone())));
+        chosen.toggle_autosave();
+        let saved = dir.join("picked.xlsx");
+        assert!(saved.exists(), "the workbook is saved where the user chose");
+        assert!(chosen.ui.autosave, "AutoSave turns on once the workbook has a file");
+        chosen.toggle_autosave();
+        assert!(!chosen.ui.autosave, "turning it off needs no file");
+
+        // The preference is on, but this workbook has no file: the switch shows off, and
+        // clicking it asks where to save this workbook rather than turning AutoSave off.
+        let mut fresh = app();
+        fresh.ui.autosave = true;
+        assert!(!fresh.autosave_active(), "a workbook without a file is not shown as autosaving");
+        let to = dir.join("fresh").to_string_lossy().into_owned();
+        fresh.services.pick_save = Some(Box::new(move |_| Some(to.clone())));
+        fresh.toggle_autosave();
+        assert!(dir.join("fresh.xlsx").exists(), "clicking the switch saves the workbook first");
+        assert!(fresh.autosave_active(), "and then AutoSave is on for it");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

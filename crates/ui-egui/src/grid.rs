@@ -296,6 +296,17 @@ pub struct ListPickerItems {
     pub source: gridcraft_engine::cmd::data::ListSource,
 }
 
+/// The unsaved changes AutoSave is collecting for one workbook.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AutosaveBatch {
+    /// The workbook (`DocState::uid`) the batch belongs to: switching workbooks starts a new one.
+    pub doc: u64,
+    /// `DocState::revision` before the batch's first change.
+    pub base_revision: u64,
+    /// When the batch's first change was seen (`monotonic_ms`).
+    pub since: f64,
+}
+
 #[derive(Default)]
 pub struct GridState {
     /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
@@ -349,6 +360,8 @@ pub struct GridState {
     pub last_click: Option<(CellRef, f64)>,
     pub hover_cell: Option<CellRef>,
     pub last_autosave: f64,
+    /// The unsaved changes AutoSave is waiting to save, if any (see `SheetApp::autosave`).
+    pub autosave_batch: Option<AutosaveBatch>,
     pub last_border: String,
     pub last_fill: String,
     pub last_font_color: String,

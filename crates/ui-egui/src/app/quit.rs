@@ -41,21 +41,28 @@ impl SheetApp {
     }
 
     /// Asks about the next unsaved workbook before quitting, in its window, or closes the app
-    /// once none is left.
+    /// once none is left. With AutoSave on, a workbook that has an .xlsx file is saved instead of
+    /// asked about; one AutoSave cannot save is still asked about.
     pub(crate) fn continue_quit(&mut self, ctx: &egui::Context) {
-        let dirty = self.session.documents().iter().find(|d| d.is_dirty()).map(|d| d.uid);
-        match dirty.and_then(|uid| self.session.doc_window(uid)) {
-            Some(window) => {
-                // Its window comes forward (the native window too: see `doc_windows`).
-                self.enter_window(window);
-                let title = self.session.active().map(|d| d.display_title()).unwrap_or_default();
-                self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
-                self.bring_forward = true;
+        loop {
+            let dirty = self.session.documents().iter().find(|d| d.is_dirty()).map(|d| d.uid);
+            match dirty.and_then(|uid| self.session.doc_window(uid)) {
+                Some(window) => {
+                    // Its window comes forward (the native window too: see `doc_windows`).
+                    self.enter_window(window);
+                    if self.autosave_before_close() {
+                        continue;
+                    }
+                    let title = self.session.active().map(|d| d.display_title()).unwrap_or_default();
+                    self.open_dialog("saveChanges", json!({"title": title, "quit": true}));
+                    self.bring_forward = true;
+                }
+                None => {
+                    self.allow_close = true;
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
+                }
             }
-            None => {
-                self.allow_close = true;
-                ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Close);
-            }
+            return;
         }
     }
 

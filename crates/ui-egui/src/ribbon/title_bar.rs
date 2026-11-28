@@ -49,7 +49,7 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.add_space(TITLE_LEFT_PAD);
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new(app.ui.language.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
-            let on = app.ui.autosave;
+            let on = app.autosave_active();
             let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
             ui.painter().rect_filled(r, 8.0, if on { t.accent } else { Color32::TRANSPARENT });
             ui.painter().rect_stroke(r, 8.0, Stroke::new(1.0, if on { t.accent } else { t.text_dim }), StrokeKind::Inside);
@@ -57,6 +57,11 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().circle_filled(knob, 5.0, if on { t.on_accent } else { t.text_dim });
             if resp.on_hover_text(app.ui.language.tr("AutoSave: save after every change (workbooks saved to a file)")).clicked() {
                 app.toggle_autosave();
+            }
+            // Whether AutoSave has caught up: changes waiting for their batch, or all saved.
+            if let Some(status) = app.autosave_status() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(app.ui.language.tr(status)).font(theme::ui_font(11.5)).color(t.text_dim));
             }
             ui.add_space(6.0);
             let __k = icon_button(ui, Icon::Home, t.text_dim, "Home", vec2(26.0, ch));
