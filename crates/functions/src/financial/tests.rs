@@ -537,6 +537,52 @@ fn securities_read_dates_in_the_1904_system() {
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
 
+/// Serial 0 is 1900-01-00 in Excel's 1900 calendar: 30/360 counts it as day 0, a day before
+/// serial 1 (#4071). Serials 59, 60 (the fictitious 1900-02-29) and 61 stay as observed.
+/// Values are Excel 16.0 (build 20527) results from the issue.
+#[test]
+fn thirty_360_counts_serial_0_as_day_0() {
+    let m = d(2025, 6, 30);
+    let s = d(2024, 1, 15);
+    for (serial, disc, intrate, pricedisc, accrintm, pricemat, yieldmat) in [
+        (0.0, 0.00039840637450199237, 0.0004193751310547284, -527.5, 6275.0, 67.19324146981614, 0.006942435637836217),
+        (1.0, 0.00039841519289935626, 0.00041938441357826936, -527.4861111111111, 6274.861111111111, 67.19400699912501, 0.0069425695221197415),
+        (59.0, 0.0003989184876556894, 0.0004199141975323042, -526.6944444444445, 6266.944444444444, 67.2376421697287, 0.006950209471590961),
+        (60.0, 0.00039892732873828186, 0.0004199235039350332, -526.6805555555555, 6266.805555555556, 67.23840769903757, 0.006950343655880791),
+        (61.0, 0.00039894501207916877, 0.000419942117978072, -526.6527777777778, 6266.527777777777, 67.23993875765541, 0.006950612040004662),
+    ] {
+        close_tol(ev("DISC", vec![n(serial), m.clone(), n(95.0), n(100.0), n(4.0)]), disc, 1e-10);
+        close_tol(ev("INTRATE", vec![n(serial), m.clone(), n(95.0), n(100.0), n(4.0)]), intrate, 1e-10);
+        close_tol(ev("YIELDDISC", vec![n(serial), m.clone(), n(95.0), n(100.0), n(4.0)]), intrate, 1e-10);
+        close_tol(ev("PRICEDISC", vec![n(serial), m.clone(), n(0.05), n(100.0), n(4.0)]), pricedisc, 1e-10);
+        close_tol(ev("ACCRINTM", vec![n(serial), m.clone(), n(0.05), n(1000.0), n(4.0)]), accrintm, 1e-10);
+        close_tol(ev("PRICEMAT", vec![s.clone(), m.clone(), n(serial), n(0.05), n(0.04), n(4.0)]), pricemat, 1e-10);
+        close_tol(ev("YIELDMAT", vec![s.clone(), m.clone(), n(serial), n(0.05), n(100.0), n(4.0)]), yieldmat, 1e-10);
+    }
+}
+
+/// US/NASD 30/360 (basis 0) treats 1900-02-28 (serial 59) as the end of February but not the
+/// fictitious 1900-02-29 (serial 60), which counts as day 29 (#4072). Values are Excel 16.0
+/// (build 20527) results from the issue.
+#[test]
+fn us_30_360_does_not_end_february_on_serial_60() {
+    let m = d(2025, 6, 30);
+    let s = d(2024, 1, 15);
+    for (serial, disc, intrate, pricedisc, accrintm, pricemat, yieldmat) in [
+        (59.0, 0.00039893617021276626, 0.0004199328107502799, -526.6666666666666, 6266.666666666666, 67.23917322834643, 0.00695047784535181),
+        (60.0, 0.00039892732873828186, 0.0004199235039350332, -526.6805555555555, 6266.805555555556, 67.23840769903757, 0.006950343655880791),
+        (61.0, 0.00039894501207916877, 0.000419942117978072, -526.6527777777778, 6266.527777777777, 67.23993875765541, 0.006950612040004662),
+    ] {
+        close_tol(ev("DISC", vec![n(serial), m.clone(), n(95.0), n(100.0), n(0.0)]), disc, 1e-10);
+        close_tol(ev("INTRATE", vec![n(serial), m.clone(), n(95.0), n(100.0), n(0.0)]), intrate, 1e-10);
+        close_tol(ev("YIELDDISC", vec![n(serial), m.clone(), n(95.0), n(100.0), n(0.0)]), intrate, 1e-10);
+        close_tol(ev("PRICEDISC", vec![n(serial), m.clone(), n(0.05), n(100.0), n(0.0)]), pricedisc, 1e-10);
+        close_tol(ev("ACCRINTM", vec![n(serial), m.clone(), n(0.05), n(1000.0), n(0.0)]), accrintm, 1e-10);
+        close_tol(ev("PRICEMAT", vec![s.clone(), m.clone(), n(serial), n(0.05), n(0.04), n(0.0)]), pricemat, 1e-10);
+        close_tol(ev("YIELDMAT", vec![s.clone(), m.clone(), n(serial), n(0.05), n(100.0), n(0.0)]), yieldmat, 1e-10);
+    }
+}
+
 /// Excel truncates ACCRINTM's dates to whole days and accrues nothing when issue equals
 /// settlement, in every basis and both date systems; only issue after settlement is #NUM! (#4096).
 #[test]
