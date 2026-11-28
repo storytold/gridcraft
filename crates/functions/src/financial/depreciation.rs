@@ -22,15 +22,23 @@ pub(super) fn syd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn db(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life, period) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?.trunc());
+    let (cost, salvage, life, period) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
     let month = opt_num(a, 4, 12.0)?.trunc();
     if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || !(1.0..=12.0).contains(&month) {
         return Err(CellError::Num);
     }
+    // Excel checks that the period is positive, then truncates it. The last period is a partial
+    // one when the first year is, so a life under a year has one whole period, and with a full
+    // first year none (#4047).
+    let whole = period.trunc();
     let max_period = if month == 12.0 { life.trunc() } else { life.trunc() + 1.0 };
-    if period > max_period.max(1.0) || period > 1e7 {
+    if whole > max_period || whole > 1e7 {
         return Err(CellError::Num);
     }
+    // A period below one is the first period, not a zero Excel refuses (#3966), and it stays the
+    // first even when the life is under a year.
+    let first = whole < 1.0;
+    let period = whole.max(1.0);
     if cost == 0.0 {
         return num_val(0.0);
     }
@@ -48,6 +56,11 @@ pub(super) fn db(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         };
         total += dep;
         p += 1.0;
+    }
+    if period == 1.0 && life < 1.0 && !first {
+        // With a life under a year, period 1 is also the last, partial period, and Excel answers
+        // it as the last: the rest of the year on what the first months left (#4047).
+        dep = (cost - total) * rate * (12.0 - month) / 12.0;
     }
     num_val(dep)
 }
