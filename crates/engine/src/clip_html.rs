@@ -381,12 +381,16 @@ fn decode_with_runs(raw: &str, runs: &[SpaceRun]) -> String {
     let mut from = 0;
     let mut after_ordinary = false;
     for run in runs {
-        fold_after_run(&mut text, &mut space, raw.get(from..run.at).unwrap_or_default(), after_ordinary);
+        let gap = raw.get(from..run.at).unwrap_or_default();
+        // An ordinary space ending the previous run and one starting this run, with only
+        // collapsible whitespace between them, show as one space.
+        let shared = after_ordinary && run.starts_ordinary && entities(gap).chars().all(|c| c.is_whitespace() && c != '\u{a0}');
+        fold_after_run(&mut text, &mut space, gap, after_ordinary);
         if space && !text.is_empty() && !run.starts_ordinary {
             text.push(' ');
         }
         space = false;
-        text.push_str(&" ".repeat(run.n));
+        text.push_str(&" ".repeat(run.n.saturating_sub(usize::from(shared))));
         from = run.at;
         after_ordinary = run.ends_ordinary;
     }
