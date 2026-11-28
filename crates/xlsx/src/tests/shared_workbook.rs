@@ -107,7 +107,8 @@ fn warnings_with_budget(pkg: &[u8], budget: usize) -> Vec<String> {
 /// The smallest kept-content budget at which reading `pkg` keeps the custom views and their
 /// printer settings.
 fn views_budget(pkg: &[u8]) -> usize {
-    let fits = |b| !warnings_with_budget(pkg, b).iter().any(|w| w.contains("views were dropped") || w.contains("printer settings were dropped"));
+    let dropped = ["custom views were dropped", "customSheetViews were dropped", "printer settings were dropped"];
+    let fits = |b| !warnings_with_budget(pkg, b).iter().any(|w| dropped.iter().any(|d| w.contains(d)));
     let (mut lo, mut hi) = (0usize, 1 << 20);
     assert!(fits(hi));
     while lo < hi {
