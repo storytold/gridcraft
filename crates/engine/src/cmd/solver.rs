@@ -314,7 +314,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
             }
             if count > 0 {
                 // Inserting sheets makes this structural, so retain the variable edit's array check.
-                check_arrays(&before, &cx.wb)?;
+                check_arrays(&before, &cx.wb, &[])?;
             }
             Ok(write_reports(cx, sheet, built))
         })?
