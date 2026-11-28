@@ -182,15 +182,51 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
     }
 }
 
+/// Whether typing `text` into A1 stored a formula.
+fn is_formula(app: &mut SheetApp, text: &str) -> bool {
+    assert!(enter(app, text), "{text}");
+    app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_some())
+}
+
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn signed_accented_words_are_read_like_unaccented_ones() {
+    // After `+` or `-`, an accented word is a formula exactly when the same word without the
+    // accent is one (#2023's rule), in Spanish and in Brazilian Portuguese.
+    for (language, pairs) in [("es", [("+Árbol", "+Arbol"), ("-Árbol", "-Arbol")]), ("pt", [("+Ótimo", "+Otimo"), ("-Árvore", "-Arvore")])] {
+        let mut app = app();
+        app.run("app.language.set", json!({"language": language})).unwrap();
+        assert_eq!(app.ui.language.code(), language);
+        for (accented, plain) in pairs {
+            assert_eq!(is_formula(&mut app, accented), is_formula(&mut app, plain), "{language}: {accented} vs {plain}");
+        }
+    }
+}
+
+#[test]
+fn portuguese_formulas_use_brazilian_names_and_separators() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
     assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=SE(VERDADEIRO;SOMA(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    // The file keeps English; reopening shows Portuguese again.
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"pt.xlsx", "base64":saved["base64"]})).unwrap();
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SE(VERDADEIRO;SOMA(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    // Accented names match in any case; English separators are refused, as in Spanish.
+    assert!(enter(&mut app, "=média(1;3)"));
+    assert_eq!(formula(&app), "AVERAGE(1,3)");
+    // `+` and `-` start a formula before an accented name as before an unaccented one.
+    assert!(enter(&mut app, "+ÍNDICE({1\\2};1;2)"));
+    assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
+    assert!(enter(&mut app, "+INDICE({1\\2};1;2)"));
+    assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
+    assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
+    // The API keeps English syntax.
+    assert!(app.run("cell.set", json!({"cell":"B1","input":"=SOMA(1;2)"})).is_err());
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::PtBr);
 }

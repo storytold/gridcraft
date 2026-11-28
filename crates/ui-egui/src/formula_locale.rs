@@ -182,6 +182,32 @@ mod tests {
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
 
+    /// Brazilian Portuguese hints: Portuguese names, `;` and the merged pt-BR argument names.
+    #[test]
+    fn portuguese_function_help() {
+        use FormulaLocale::PtBr;
+        let pt = Language::PtBr;
+        assert_eq!(sig("procv", PtBr, pt), "PROCV(valor_procurado; matriz_tabela; núm_índice_coluna; [procurar_intervalo])");
+        assert_eq!(sig("SOMASES", PtBr, pt), "SOMASES(intervalo_soma; intervalo_critérios1; critérios1; ...)");
+        // Typed without accents, shown with them.
+        assert!(sig("media", PtBr, pt).starts_with("MÉDIA(número1; "), "{}", sig("media", PtBr, pt));
+        assert_eq!(description("SE", PtBr, pt).as_deref(), Some("Retorna um valor quando uma condição é TRUE e outro quando é FALSE."));
+    }
+
+    /// Every function in the catalog has a Brazilian Portuguese name, and every Portuguese name
+    /// belongs to a catalog function (or is VERDADEIRO/FALSO), so the two cannot drift apart.
+    #[test]
+    fn portuguese_names_cover_the_function_catalog() {
+        use FormulaLocale::PtBr;
+        let catalog: Vec<String> =
+            gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+        let missing: Vec<&String> = catalog.iter().filter(|name| !PtBr.has_name(name)).collect();
+        assert!(missing.is_empty(), "no pt-BR name for {missing:?}");
+        for name in &catalog {
+            assert_eq!(PtBr.canonical_name(PtBr.function_name(name)), name.as_str(), "{name} does not round-trip");
+        }
+    }
+
     #[test]
     fn a_leading_sign_starts_a_formula_in_spanish_too() {
         // #2023: `+5+4` is a formula in every formula language; in Spanish `-1,5` stays the

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (Paste Special's Add and Text to Columns' Comma get their own keys); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: fill-handle and Home › Fill menu labels in every catalog); previously minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-27 · **Change:** minor (Brazilian Portuguese formula names and separators); previously minor (Paste Special's Add and Text to Columns' Comma get their own keys); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: fill-handle and Home › Fill menu labels in every catalog); previously minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -11,7 +11,7 @@ Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic g
 
 Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
 
-## Where we are (measured from source on `main`, after the 2026-10-10 merges)
+## Where we are (baseline measured from source on `main` after the 2026-10-10 merges; updated through 2026-11-24)
 
 - **Current state (2026-11-08).** The counts, labels and per-language rows in this section and in
   the Languages table are a snapshot from the dates given there; every language since added a
@@ -34,8 +34,8 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   menus) follows the interface language through per-language tables keyed by the catalog's
   English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
   hint is assembled with the formula syntax's function name and separator. Spanish translates
-  the 10 common functions it had help for (SUM, AVERAGE, IF…); other languages show the English
-  help.
+  the 10 common functions it had help for (SUM, AVERAGE, IF…); Brazilian Portuguese translates
+  every function (#3047); other languages show the English help.
 - **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
   added 10-11) adds an interface-language preference that defaults to the system language (closes
   #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
@@ -49,10 +49,14 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open). The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that Arabic
+- **Formulas: en-US plus Spanish and Brazilian Portuguese entry.** Spanish (10 common names)
+  and Brazilian Portuguese (`pt-BR`, every catalog function: `SOMA`, `MÉDIA`, `PROCV`,
+  `SOMASES`, `SE`, `E`/`OU`, `PGTO`…; accents optional on entry) translate function names and use
+  `;` arguments, `,` decimals and `\` array columns in the cell editor and formula bar; files and
+  APIs keep en-US syntax. Other languages use en-US function names, `,` argument separator and
+  `.` decimal separator, and every language uses en-US number and date formats (`crates/numfmt`
+  says "en-US only"). Users ask for localized function names and `;` separators (#45). German
+  with localized numbers and formulas is in PR #163 (open). The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that Arabic
   Excel writes at the start of a format section are hidden; under `B2` the year, month number,
   day, month names and weekday names (Arabic; `mmm` and `ddd` show the full name) count in the
   tabular Hijri calendar (leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of each 30-year
@@ -110,7 +114,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; PDF export: shaped and joined, follows cell direction, mirrors RTL sheets; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
+| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs, formula names | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
 | Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
@@ -145,6 +149,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-24 | minor | Brazilian Portuguese formula entry (`FormulaLocale::PtBr`, #2754): every catalog function has its pt-BR name (#1280's 514-entry table, plus `INFODADOSTABELADINÂMICA` for GETPIVOTDATA and ECMA.CEILING kept in English: `SOMA`, `MÉDIA`, `CONT.NÚM`, `PROCV`, `ÍNDICE`, `SEERRO`, `PGTO`…) plus `VERDADEIRO`/`FALSO`, with `;` arguments, decimal commas and `\` array columns in the cell editor and formula bar. Names are accepted with or without accents (`MEDIA`, `INDICE`, as in #1382) and shown accented. Files, clipboard and APIs keep English |
 | 2026-11-18 | minor | The fill-handle menus (right-drag menu and Auto Fill Options: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Fill Days, Fill Weekdays, Fill Months, Fill Years, and the button's own name) have a row in all 18 non-English catalogs, and Series…, Down and Up from the Home › Fill menu in the nine catalogs that lacked them; the Ukrainian rows that held English are translated. A test fails when one goes missing (#4458). The translations are AI-assisted and not yet reviewed by native speakers |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |

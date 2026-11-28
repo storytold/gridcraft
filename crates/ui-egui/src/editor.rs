@@ -385,14 +385,14 @@ impl EditState {
             return;
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
-        let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let word: String = before.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        let u = word.to_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
+        // Localized names match with or without accents where the locale allows (`MED` -> `MÉDIA`).
+        self.autocomplete = names.iter().filter(|n| self.locale.name_starts_with(n, &word)).take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
             self.autocomplete.clear();
         }
@@ -404,7 +404,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| is_name_char(*c)).map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -433,8 +433,7 @@ impl EditState {
             return false;
         }
         let head = before.strip_suffix('(').unwrap_or(before);
-        let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+        let name: String = head.chars().rev().take_while(|c| is_name_char(*c)).collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
@@ -479,18 +478,11 @@ impl EditState {
                 '{' | '[' => depth -= 1,
                 '(' => {
                     if depth == 0 {
-                        let name: String = chars[..i]
-                            .iter()
-                            .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
-                            .collect::<String>()
-                            .chars()
-                            .rev()
-                            .collect();
+                        let name: String = chars[..i].iter().rev().take_while(|c| is_name_char(**c)).collect::<String>().chars().rev().collect();
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        return Some((name.to_uppercase(), arg));
                     }
                     depth -= 1;
                 }
@@ -517,6 +509,11 @@ impl EditState {
         self.caret_to_end = false;
         self.sync_caret = true;
     }
+}
+
+/// A character of a function name: letters of any script (`MÉDIA`), digits, `.` and `_`.
+fn is_name_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '.' || c == '_'
 }
 
 /// References in formula text with their byte spans and colour index (same reference text ⇒
@@ -694,6 +691,28 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    /// Brazilian Portuguese names with accents complete and give hints as a whole name.
+    #[test]
+    fn autocomplete_and_hints_with_accented_names() {
+        use gridcraft_engine::formula::FormulaLocale;
+        let names: Vec<String> = ["MÉDIA", "MÉDIASE", "MÁXIMO", "SOMA"].iter().map(|s| s.to_string()).collect();
+        for typed in ["=mé", "=MÉ", "=me"] {
+            let mut e = EditState::new(1, 0, CellRef::new(0, 0), typed.into(), true, false);
+            e.locale = FormulaLocale::PtBr;
+            e.update_autocomplete(&names);
+            assert_eq!(e.autocomplete, ["MÉDIA", "MÉDIASE"], "{typed}");
+            assert!(e.accept_autocomplete());
+            assert_eq!(e.text, "=MÉDIA(", "{typed}: the whole typed prefix is replaced");
+        }
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=SE(A1>0;MÉDIA(B1;".into(), true, false);
+        e.locale = FormulaLocale::PtBr;
+        assert_eq!(e.current_function(), Some(("MÉDIA".into(), 1)));
+        // English keeps exact prefixes.
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=me".into(), true, false);
+        e.update_autocomplete(&names);
+        assert!(e.autocomplete.is_empty());
     }
 
     #[test]
