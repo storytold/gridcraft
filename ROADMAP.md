@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-27 | Right-clicking a PivotTable report cell offers Refresh in the cell menu, recomputing the report from its source (`pivot.refresh`); the pane button and ARR keytip remain (#4525) |
 | 2026-11-16 | A selected chart outlines its data as Excel does (series names red, category labels purple, values one blue block), and dragging a corner of the values outline changes the cells the chart plots: series keep their formatting, a wider block adds series, aligned names and labels follow, one undo step, Esc cancels; `chart.setValuesRange` does the same for scripts, the CLI and MCP (#4389, #4390) |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |

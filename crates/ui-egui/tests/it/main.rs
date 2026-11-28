@@ -90,6 +90,7 @@ mod page_setup_page_order;
 mod paste_names;
 mod paste_special_dialog;
 mod pivot_pane;
+mod pivot_refresh_menu;
 mod pivot_show_details;
 mod pivot_show_details_menu;
 mod popup_dismissal;
