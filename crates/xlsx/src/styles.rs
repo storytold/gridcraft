@@ -56,75 +56,50 @@ fn opt_color(e: Option<&El>, palette: &[u32]) -> Color {
     e.map(|e| read_color(e, palette)).unwrap_or(Color::Auto)
 }
 
-/// `<b/>`-style boolean property elements: present means true unless `val` says otherwise.
-fn bool_prop(e: &El, name: &str) -> bool {
-    e.child(name).is_some_and(|c| c.flag("val", true))
-}
-
-/// A font's `outline` as the shared SpreadsheetML font (`craft-xlsx`) reads it: `None` when the
-/// element is absent, `Some(false)` when it says `val="0"` (stated off, which a differential
-/// format keeps), `Some(true)` when on.
-fn shared_outline(e: &El) -> Option<bool> {
-    craft_xlsx::Font::read(&crate::chart::to_craft_el(e)).outline
-}
-
-/// The shared SpreadsheetML font's `outline` element for `outline`, written as it writes it:
-/// `<outline/>`, `<outline val="0"/>`, or nothing.
-fn push_shared_outline(s: &mut String, outline: Option<bool>) {
-    let font = craft_xlsx::Font { outline, ..Default::default() }.to_el("font", false);
-    for child in font.elements() {
-        child.write_xml(s);
-    }
-}
-
 const DEFAULT_FONT_FAMILY: u8 = 2;
 const MAX_FONT_FAMILY: u8 = 14;
 
 pub fn read_font(e: &El, palette: &[u32]) -> Font {
-    let mut f = Font::default();
-    if let Some(n) = e.child("name").or_else(|| e.child("rFont")).and_then(|n| n.attr("val")) {
-        // Every cell format that uses the font copies its name: keep it short.
-        f.name = match n.char_indices().nth(MAX_FONT_NAME_CHARS) {
-            Some((at, _)) => n.get(..at).unwrap_or_default().to_string(),
-            None => n.to_string(),
-        };
-    }
-    if let Some(sz) = e.child("sz").and_then(|s| s.attr_f64("val")) {
-        f.size = sz.clamp(1.0, 409.0) as f32;
-    }
-    f.bold = bool_prop(e, "b");
-    f.italic = bool_prop(e, "i");
-    f.strike = bool_prop(e, "strike");
-    f.outline = shared_outline(e) == Some(true);
-    if let Some(u) = e.child("u") {
-        f.underline = match u.attr("val").unwrap_or("single") {
-            "double" => Underline::Double,
-            "singleAccounting" => Underline::SingleAccounting,
-            "doubleAccounting" => Underline::DoubleAccounting,
-            "none" => Underline::None,
-            _ => Underline::Single,
-        };
-    }
-    if let Some(v) = e.child_val("vertAlign") {
-        f.vert = match v {
-            "superscript" => VertAlign::Superscript,
-            "subscript" => VertAlign::Subscript,
+    model_font(&craft_xlsx::Font::read(&crate::chart::to_craft_el(e)), palette)
+}
+
+/// The format reader owns SpreadsheetML spelling and presence; the app owns its font limits,
+/// palette and theme defaults, and conversion to the model's enums.
+fn model_font(f: &craft_xlsx::Font, palette: &[u32]) -> Font {
+    let def = Font::default();
+    let color = match f.color.map(|c| (c.source, c.tint)) {
+        Some((craft_xlsx::ColorSource::Theme(t), tint)) if t <= 11 => {
+            Color::Theme(t as u8, (tint * 1000.0).round().clamp(-1000.0, 1000.0) as i16)
+        }
+        Some((craft_xlsx::ColorSource::Rgb(v), _)) => Color::Rgb(v & 0xFF_FFFF),
+        Some((craft_xlsx::ColorSource::Indexed(i), _)) => palette.get(i as usize).copied().map(Color::Rgb).unwrap_or(Color::Auto),
+        _ => Color::Auto,
+    };
+    Font {
+        name: f.name.as_ref().map(|n| n.chars().take(MAX_FONT_NAME_CHARS).collect()).unwrap_or(def.name),
+        size: f.size.map(|s| s.clamp(1.0, 409.0) as f32).unwrap_or(def.size),
+        bold: f.bold == Some(true),
+        italic: f.italic == Some(true),
+        strike: f.strike == Some(true),
+        outline: f.outline == Some(true),
+        underline: match f.underline {
+            Some(craft_xlsx::Underline::Single) => Underline::Single,
+            Some(craft_xlsx::Underline::Double) => Underline::Double,
+            Some(craft_xlsx::Underline::SingleAccounting) => Underline::SingleAccounting,
+            Some(craft_xlsx::Underline::DoubleAccounting) => Underline::DoubleAccounting,
+            _ => Underline::None,
+        },
+        vert: match f.vert_align {
+            Some(craft_xlsx::Script::Superscript) => VertAlign::Superscript,
+            Some(craft_xlsx::Script::Subscript) => VertAlign::Subscript,
             _ => VertAlign::Baseline,
-        };
+        },
+        charset: f.charset.and_then(|v| u8::try_from(v).ok()),
+        family: f.family.and_then(|v| u8::try_from(v).ok()).filter(|v| *v <= MAX_FONT_FAMILY && *v != DEFAULT_FONT_FAMILY),
+        minor: f.scheme == Some(craft_xlsx::FontScheme::Minor),
+        // Text 1 (dk1) is what automatic font colour means in practice.
+        color: if color == Color::Theme(1, 0) { Color::Auto } else { color },
     }
-    f.charset = e.child("charset").and_then(|c| c.attr_u32("val")).and_then(|v| u8::try_from(v).ok());
-    f.family = e
-        .child("family")
-        .and_then(|c| c.attr_u32("val"))
-        .and_then(|v| u8::try_from(v).ok())
-        .filter(|v| *v <= MAX_FONT_FAMILY && *v != DEFAULT_FONT_FAMILY);
-    f.minor = e.child_val("scheme") == Some("minor");
-    f.color = opt_color(e.child("color"), palette);
-    // Text 1 (dk1) is what "automatic" font colour means in practice.
-    if f.color == Color::Theme(1, 0) {
-        f.color = Color::Auto;
-    }
-    f
 }
 
 fn pattern_from(s: &str) -> PatternType {
@@ -421,21 +396,23 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
 fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_fmts: &mut HashMap<&'a str, NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
-        let f = read_font(e, palette);
+        let shared = craft_xlsx::Font::read(&crate::chart::to_craft_el(e));
+        let f = model_font(&shared, palette);
         // Differential fonts rarely name a face; unless stated, keep the default face and size.
-        let has_size = e.child("sz").and_then(|n| n.attr_f64("val")).is_some();
-        let has_name = e.child("name").and_then(|n| n.attr("val")).is_some();
+        let has_size = shared.size.is_some();
+        let has_name = shared.name.is_some();
         let name = if has_name { f.name.clone() } else { s.font.name.clone() };
         let size = if has_size { f.size } else { s.font.size };
         let def = Font::default();
         let st = &mut s.dxf_stated;
-        st.bold = e.child("b").is_some() && !f.bold;
-        st.italic = e.child("i").is_some() && !f.italic;
-        st.strike = e.child("strike").is_some() && !f.strike;
-        st.outline = shared_outline(e) == Some(false);
-        st.underline = e.child("u").is_some() && f.underline == Underline::None;
+        st.bold = shared.bold == Some(false);
+        st.italic = shared.italic == Some(false);
+        st.strike = shared.strike == Some(false);
+        st.outline = shared.outline == Some(false);
+        st.underline = shared.underline == Some(craft_xlsx::Underline::None);
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
+        // Keep the model's raw scheme statement, including a spelling it does not interpret.
         st.scheme = e.child_val("scheme").map(str::to_string);
         // A differential font's scheme is in `dxf_stated`.
         s.font = Font { name, size, minor: s.font.minor, ..f };
@@ -491,57 +468,59 @@ pub fn color_attrs(c: &Color) -> String {
 /// differential format's font, which writes only what it states.
 fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
     let stated = dxf.cloned().unwrap_or_default();
-    let mut s = String::from("<font>");
-    for (on, said, tag) in [(f.bold, stated.bold, "b"), (f.italic, stated.italic, "i"), (f.strike, stated.strike, "strike")] {
-        if on {
-            let _ = write!(s, "<{tag}/>");
-        } else if said {
-            let _ = write!(s, "<{tag} val=\"0\"/>");
-        }
-    }
-    // Excel's order puts outline after strike (condense and extend aren't modelled).
-    let outline = if f.outline { Some(true) } else { stated.outline.then_some(false) };
-    push_shared_outline(&mut s, outline);
-    match f.underline {
-        Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
-        Underline::None => {}
-        Underline::Single => s.push_str("<u/>"),
-        Underline::Double => s.push_str("<u val=\"double\"/>"),
-        Underline::SingleAccounting => s.push_str("<u val=\"singleAccounting\"/>"),
-        Underline::DoubleAccounting => s.push_str("<u val=\"doubleAccounting\"/>"),
-    }
-    match f.vert {
-        VertAlign::Baseline => {}
-        VertAlign::Superscript => s.push_str("<vertAlign val=\"superscript\"/>"),
-        VertAlign::Subscript => s.push_str("<vertAlign val=\"subscript\"/>"),
-    }
+    let flag = |on: bool, off: bool| if on { Some(true) } else { off.then_some(false) };
     let def = Font::default();
-    if dxf.is_none() || stated.size || f.size != def.size {
-        let _ = write!(s, "<sz val=\"{}\"/>", num(f.size as f64));
-    }
-    if f.color != Color::Auto {
-        let _ = write!(s, "<color {}/>", color_attrs(&f.color));
-    } else if dxf.is_none() {
-        s.push_str("<color theme=\"1\"/>");
-    }
-    if dxf.is_none() {
-        let family = f.family.filter(|v| *v <= MAX_FONT_FAMILY).unwrap_or(DEFAULT_FONT_FAMILY);
-        let _ = write!(s, "<name val=\"{}\"/><family val=\"{family}\"/>", esc_attr(&f.name));
-        if let Some(charset) = f.charset {
-            let _ = write!(s, "<charset val=\"{charset}\"/>");
-        }
-        if minor {
-            s.push_str("<scheme val=\"minor\"/>");
-        }
+    let color = match f.color {
+        Color::Auto if dxf.is_some() => None,
+        Color::Auto => Some(craft_xlsx::Color { source: craft_xlsx::ColorSource::Theme(1), tint: 0.0 }),
+        Color::Rgb(v) => Some(craft_xlsx::Color { source: craft_xlsx::ColorSource::Rgb(0xFF00_0000 | v), tint: 0.0 }),
+        Color::Theme(i, tint) => Some(craft_xlsx::Color { source: craft_xlsx::ColorSource::Theme(u32::from(i)), tint: f64::from(tint) / 1000.0 }),
+    };
+    let scheme = if dxf.is_none() {
+        minor.then_some(craft_xlsx::FontScheme::Minor)
     } else {
-        if stated.name || f.name != def.name {
-            let _ = write!(s, "<name val=\"{}\"/>", esc_attr(&f.name));
+        match stated.scheme.as_deref() {
+            Some("major") => Some(craft_xlsx::FontScheme::Major),
+            Some("minor") => Some(craft_xlsx::FontScheme::Minor),
+            Some("none") => Some(craft_xlsx::FontScheme::None),
+            _ => None,
         }
-        if let Some(sc) = &stated.scheme {
-            let _ = write!(s, "<scheme val=\"{}\"/>", esc_attr(sc));
-        }
+    };
+    let shared = craft_xlsx::Font {
+        bold: flag(f.bold, stated.bold),
+        italic: flag(f.italic, stated.italic),
+        strike: flag(f.strike, stated.strike),
+        outline: flag(f.outline, stated.outline),
+        underline: (f.underline != Underline::None || stated.underline).then_some(match f.underline {
+            Underline::None => craft_xlsx::Underline::None,
+            Underline::Single => craft_xlsx::Underline::Single,
+            Underline::Double => craft_xlsx::Underline::Double,
+            Underline::SingleAccounting => craft_xlsx::Underline::SingleAccounting,
+            Underline::DoubleAccounting => craft_xlsx::Underline::DoubleAccounting,
+        }),
+        vert_align: match f.vert {
+            VertAlign::Baseline => None,
+            VertAlign::Superscript => Some(craft_xlsx::Script::Superscript),
+            VertAlign::Subscript => Some(craft_xlsx::Script::Subscript),
+        },
+        size: (dxf.is_none() || stated.size || f.size != def.size).then_some(f64::from(f.size)),
+        color,
+        name: (dxf.is_none() || stated.name || f.name != def.name).then(|| f.name.clone()),
+        family: dxf.is_none().then(|| u32::from(f.family.filter(|v| *v <= MAX_FONT_FAMILY).unwrap_or(DEFAULT_FONT_FAMILY))),
+        charset: if dxf.is_none() { f.charset.map(u32::from) } else { None },
+        scheme,
+        ..Default::default()
+    };
+    let mut font = shared.to_el("font", false);
+    // The model preserves an unrecognized differential scheme as opaque text.
+    if dxf.is_some()
+        && scheme.is_none()
+        && let Some(raw) = &stated.scheme
+    {
+        font.push(craft_xml::El::new("scheme").with_attr("val", raw));
     }
-    s.push_str("</font>");
+    let mut s = String::new();
+    font.write_xml(&mut s);
     s
 }
 
