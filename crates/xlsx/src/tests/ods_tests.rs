@@ -277,3 +277,65 @@ fn ods_blank_repeats_past_the_sheet_edge_are_clipped() {
     );
     assert!(matches!(read_ods(&late), Err(IoError::TooLarge(_))));
 }
+
+#[test]
+fn ods_historical_dates_displayed_as_year_keep_full_date_value() {
+    let bytes = row(r#"
+        <table:table-cell office:value-type="date" office:date-value="1750-02-03T14:30:00"><text:p>1750</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1750-07-09T17:23:00"><text:p>1750</text:p></table:table-cell>
+        <table:table-cell office:value-type="string"><text:p>1750</text:p></table:table-cell>
+        <table:table-cell office:value-type="float" office:value="1750"><text:p>1750</text:p></table:table-cell>
+    "#);
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let s = &wb.sheets[0];
+    assert_eq!(s.value(CellRef::new(0, 0)), text("1750-02-03T14:30:00"));
+    assert_eq!(s.value(CellRef::new(0, 1)), text("1750-07-09T17:23:00"));
+    assert_ne!(s.value(CellRef::new(0, 0)), s.value(CellRef::new(0, 1)));
+    assert_eq!(s.value(CellRef::new(0, 2)), text("1750"));
+    assert_eq!(s.value(CellRef::new(0, 3)), Value::Number(1750.0));
+    assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheets[0].value(CellRef::new(0, 0)), text("1750-02-03T14:30:00"));
+}
+
+#[test]
+fn ods_pre_1900_dates_keep_raw_while_other_fallbacks_stay() {
+    let bytes = row(r#"
+        <table:table-cell office:value-type="date" office:date-value="1899-12-31T23:59:59"><text:p>1899</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1900-02-29"><text:p>02/29/1900</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=1" office:value-type="date" office:date-value="1750-02-03T14:30:00"><text:p>1750</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=2" office:value-type="date"><text:p>1750</text:p></table:table-cell>
+        <table:table-cell office:value-type="time" office:time-value="PT14H30M"/>
+        <table:table-cell office:value-type="date" office:date-value="1900-01-01"/>
+        <table:table-cell office:value-type="date" office:date-value="1900-03-01"/>
+        <table:table-cell office:value-type="date" office:date-value="10000-01-01"><text:p>10000</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="abcd-01-01"><text:p>abcd</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1750-02-03T14:30:00Z"><text:p>1750 zoned</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1750-02-30"><text:p>1750 invalid</text:p></table:table-cell>
+    "#);
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let s = &wb.sheets[0];
+    assert_eq!(s.value(CellRef::new(0, 0)), text("1899-12-31T23:59:59"));
+    assert_eq!(s.value(CellRef::new(0, 1)), text("02/29/1900"));
+    assert_eq!(s.value(CellRef::new(0, 2)), text("1750-02-03T14:30:00"));
+    assert_eq!(s.value(CellRef::new(0, 3)), text("1750"));
+    assert_eq!(s.value(CellRef::new(0, 4)), Value::Number(14.5 / 24.0));
+    assert_eq!(s.value(CellRef::new(0, 5)), Value::Number(1.0));
+    assert_eq!(s.value(CellRef::new(0, 6)), Value::Number(61.0));
+    assert_eq!(s.value(CellRef::new(0, 7)), text("10000"));
+    assert_eq!(s.value(CellRef::new(0, 8)), text("abcd"));
+    assert_eq!(s.value(CellRef::new(0, 9)), text("1750 zoned"));
+    assert_eq!(s.value(CellRef::new(0, 10)), text("1750 invalid"));
+    assert!(s.cell(CellRef::new(0, 2)).unwrap().formula.is_none());
+    assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
+}
+
+#[test]
+fn ods_trailing_zone_date_is_not_treated_as_pre_1900() {
+    let bytes = row(
+        r#"<table:table-cell office:value-type="date" office:date-value="2024-02-29T00:15:00Z"><text:p>02/29/2024 00:15:00</text:p></table:table-cell>"#,
+    );
+    let (wb, _) = read_ods(&bytes).unwrap();
+    // #4489 owns zoned date-times; #4510 must not change this fallback.
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("02/29/2024 00:15:00"));
+}

@@ -4,6 +4,7 @@
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
+use gridcraft_core::date::days_in_month;
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -69,21 +70,14 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 
         for (coord, src_cell) in src_sheet.cells {
             // A typed value that cannot be read (an unparsable number or date, an error cache,
-            // a formula without a result) keeps what the cell showed, else its raw value.
+            // a formula without a result) keeps a pre-1900 date's complete raw value, else what
+            // the cell showed, else its raw value.
             let Some(value) = src_cell.value().map(map_value) else {
                 if !warned_unavailable {
                     warned_unavailable = true;
                     report.warn("Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
                 }
-                let text = if !src_cell.text.is_empty() {
-                    src_cell.text.as_str()
-                } else if let Some(raw) = src_cell.raw.as_deref() {
-                    raw
-                } else if src_cell.formula.is_some() {
-                    "[Unavailable ODS formula result]"
-                } else {
-                    "[Unsupported ODS value]"
-                };
+                let text = fallback_text(&src_cell);
                 sheet.set_cell(CellRef::new(coord.row, coord.col), Cell::styled(Value::Text(Arc::from(text)), StyleId::DEFAULT));
                 continue;
             };
@@ -122,6 +116,63 @@ fn map_error(e: craft_ods::Error) -> IoError {
         craft_ods::Error::Invalid(msg) => IoError::Format(msg),
         other => IoError::Format(other.to_string()),
     }
+}
+
+/// The complete `office:date-value` of a Date cell before 1900, whose serial
+/// `date_serial` cannot represent, else `None`. The whole unzoned value must parse:
+/// a zoned or invalid date keeps the old display-text fallback.
+fn pre_1900_date_raw(cell: &craft_ods::Cell) -> Option<&str> {
+    if cell.value_type != Some(craft_ods::ValueType::Date) {
+        return None;
+    }
+    let raw = cell.raw.as_deref().filter(|s| !s.is_empty())?;
+    let (date, time) = raw.split_once('T').map_or((raw, None), |(d, t)| (d, Some(t)));
+    let bytes = date.as_bytes();
+    if bytes.len() != 10 || bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
+        return None;
+    }
+    let year: i32 = date.get(..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    if year >= 1900 || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    if let Some(time) = time {
+        let (hms, fraction) = time.split_once('.').map_or((time, None), |(h, f)| (h, Some(f)));
+        if hms.len() != 8 || hms.as_bytes().get(2) != Some(&b':') || hms.as_bytes().get(5) != Some(&b':') {
+            return None;
+        }
+        let hour: u32 = hms.get(..2)?.parse().ok()?;
+        let minute: u32 = hms.get(3..5)?.parse().ok()?;
+        let second: u32 = hms.get(6..8)?.parse().ok()?;
+        if hour >= 24 || minute >= 60 || second >= 60 {
+            return None;
+        }
+        if let Some(fraction) = fraction
+            && (fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return None;
+        }
+    }
+    Some(raw)
+}
+
+/// What an unsupported cell keeps: a pre-1900 date's complete value, else what it
+/// showed, else its raw value, else a marker.
+fn fallback_text(cell: &craft_ods::Cell) -> &str {
+    if let Some(raw) = pre_1900_date_raw(cell) {
+        return raw;
+    }
+    if !cell.text.is_empty() {
+        return cell.text.as_str();
+    }
+    if let Some(raw) = cell.raw.as_deref() {
+        return raw;
+    }
+    if cell.formula.is_some() {
+        return "[Unavailable ODS formula result]";
+    }
+    "[Unsupported ODS value]"
 }
 
 fn map_value(v: craft_ods::Value) -> Value {
