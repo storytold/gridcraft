@@ -390,6 +390,9 @@ pub struct GridState {
     pub control: Option<crate::form_controls::Gesture>,
     /// The form control that takes the arrow keys (the one last worked).
     pub focused_control: Option<u32>,
+    /// The pass in which the grid last took the keyboard: a modeless dialog drawn later in that
+    /// pass (Find and Replace) leaves Enter and Undo to it.
+    pub(crate) keyboard_pass: Option<u64>,
     /// Insert › Controls: the kind a click or drag on the grid places, and where the drag began
     /// (logical position).
     pub placing: Option<gridcraft_engine::model::ControlKind>,
