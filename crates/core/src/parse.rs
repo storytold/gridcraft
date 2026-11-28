@@ -23,7 +23,13 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(rest) = s.strip_prefix('\'') {
         return Parsed { value: Value::text(rest), format: None };
     }
-    let t = s.trim();
+    // Only ASCII whitespace is trimmed before numeric inference: a no-break or Unicode space
+    // around a number keeps the field text, like the reference does (#4531). The date and time
+    // paths trim Unicode spaces themselves, so a field they would pad away is text from here.
+    let t = s.trim_matches(|c: char| c.is_ascii_whitespace());
+    if s.trim() != t {
+        return Parsed { value: Value::text(s), format: None };
+    }
     if t.eq_ignore_ascii_case("TRUE") {
         return Parsed { value: Value::Bool(true), format: None };
     }
@@ -658,5 +664,23 @@ mod tests {
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
             assert_eq!(number_stored_as_text(text), None, "{text}");
         }
+    }
+
+    /// A no-break or Unicode space around numeric-looking typed or imported input does not turn
+    /// it into a number: only ASCII whitespace is trimmed before numeric inference, so the
+    /// padding survives as cell text like it does in the reference (#4531).
+    #[test]
+    fn unicode_padded_numeric_input_stays_text() {
+        assert_eq!(p(" 42 ").value, Value::Number(42.0), "ASCII padding still trims");
+        assert_eq!(p("\u{a0}42\u{a0}").value, Value::text("\u{a0}42\u{a0}"));
+        assert_eq!(p("42\u{a0}").value, Value::text("42\u{a0}"));
+        assert_eq!(p("\u{202f}42").value, Value::text("\u{202f}42"));
+        assert_eq!(p("\u{a0}TRUE\u{a0}").value, Value::text("\u{a0}TRUE\u{a0}"), "boolean words keep their padding too");
+        // The date and time paths trim Unicode spaces themselves, so the padding must be
+        // rejected before they run.
+        assert_eq!(p("\u{a0}3/4/2026\u{a0}").value, Value::text("\u{a0}3/4/2026\u{a0}"), "a padded date keeps its padding");
+        assert_eq!(p("\u{a0}10:30\u{a0}").value, Value::text("\u{a0}10:30\u{a0}"), "a padded time keeps its padding");
+        assert!(matches!(p(" 3/4/2026 ").value, Value::Number(_)), "ASCII-padded dates still parse");
+        assert!(matches!(p(" 10:30 ").value, Value::Number(_)), "ASCII-padded times still parse");
     }
 }
