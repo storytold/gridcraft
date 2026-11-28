@@ -283,9 +283,11 @@ fn decode(raw: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(rest.get(..amp).unwrap_or_default());
         rest = rest.get(amp..).unwrap_or_default();
-        // `.min(len)` (not an `unwrap_or(rest)`) — a `get(..12)` that fails on a multibyte
-        // boundary used to fall back to the complete suffix, re-scanning per '&'.
-        let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
+        // `.min(len)` (not an `unwrap_or(rest)`) — the window never grows into the complete
+        // suffix, which would re-scan per '&'. The window may end inside a multi-byte
+        // character, so `;` is searched in raw bytes; `&` and `;` are ASCII, and a name with
+        // non-ASCII bytes fails the `get` below like any unknown name.
+        let semi = rest.as_bytes()[..ENTITY_WINDOW.min(rest.len())].iter().position(|&b| b == b';');
         let entity = semi.and_then(|e| rest.get(1..e));
         let ch = entity.and_then(|e| match e {
             "amp" => Some('&'),
@@ -415,6 +417,9 @@ mod tests {
         assert_eq!(decode("Alpha&#8201;Beta"), "Alpha\u{2009}Beta");
         assert_eq!(decode("Alpha&#8199;Beta"), "Alpha\u{2007}Beta");
         assert_eq!(decode("Alpha\u{202f}\u{2009}Beta"), "Alpha\u{202f}\u{2009}Beta");
+        // The 12-byte entity window ends inside the direct space here; that must not leave the
+        // entity before it literal.
+        assert_eq!(decode("Alpha&#8239;Beta\u{202f}End"), "Alpha\u{202f}Beta\u{202f}End");
         assert_eq!(decode("a \t\n b"), "a b", "ASCII whitespace still folds");
         assert_eq!(decode("a&#160;b"), "a\u{a0}b", "the no-break space was already kept");
     }
