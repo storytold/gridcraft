@@ -1,4 +1,4 @@
-//! Legacy Excel 97-2003 `.xls` (BIFF8) import. `craft-xls` reads the file (the compound file,
+//! Legacy Excel 5.0/95 and 97-2003 `.xls` (BIFF5/BIFF8) import. `craft-xls` reads the file (the compound file,
 //! the Workbook stream, cells, formulas as text, formats, layout and names); this module maps
 //! its workbook onto GridCraft's model: formulas parsed, Excel's implicit `@` for legacy
 //! formulas, widths and heights in pixels, formats interned as styles, sheet-name rules, the
@@ -35,7 +35,7 @@ pub(crate) fn is_xls(bytes: &[u8]) -> bool {
     x::is_xls(bytes)
 }
 
-/// Reads an Excel 97-2003 workbook, with the default [`FunctionInfo`]. Inspect the report's
+/// Reads a legacy Excel workbook, with the default [`FunctionInfo`]. Inspect the report's
 /// warnings for what was skipped.
 pub fn read_xls(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     read_xls_budgeted(bytes, x::Limits::default(), FunctionInfo::default())

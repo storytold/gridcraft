@@ -391,17 +391,17 @@ fn text_result_of_a_formula_kept_as_its_value() {
 }
 
 #[test]
-fn refuses_encrypted_old_and_foreign_files() {
+fn refuses_damaged_encryption_in_both_stream_names_and_foreign_files() {
     // FILEPASS in the globals: a damaged encryption record must be rejected as such.
     let mut stream = bof(0x0005);
     stream.extend(rec(0x002F, &[1, 0, 1, 0]));
     stream.extend(eof());
     let err = read_xls(&compound("Workbook", &stream)).unwrap_err().to_string();
     assert!(err.contains("encryption record is damaged"), "{err}");
-    // A BIFF5 (Excel 5.0/95) workbook keeps its data in a `Book` stream.
+    // A Book stream is also detected; its BOF, not its name, decides the version.
     let book = compound("Book", &stream);
     assert_eq!(sniff(&book), Format::Xls);
-    assert!(read_xls(&book).unwrap_err().to_string().contains("BIFF5"));
+    assert!(read_xls(&book).unwrap_err().to_string().contains("encryption record is damaged"));
     // Another compound file (a word processor document): not a workbook.
     let doc = compound("WordDocument", &[0u8; 100]);
     assert_eq!(sniff(&doc), Format::LegacyBinary);
@@ -888,4 +888,33 @@ fn xls_duplicate_sheet_names_are_refused() {
     let err = crate::xls::read_xls_budgeted(&file("One", "one"), Default::default(), Default::default()).unwrap_err().to_string();
     assert!(err.contains("already taken"), "{err}");
     assert!(crate::xls::read_xls_budgeted(&file("One", "Two"), Default::default(), Default::default()).is_ok());
+}
+
+/// Original synthetic BIFF5 workbook, assembled from the published format specification.
+#[test]
+fn biff5_import_roundtrips_accented_text_values_and_formula_to_xlsx() {
+    let bof5 = |kind| rec(0x0809, &u16s(&[0x0500, kind, 0, 0]));
+    let globals =
+        |pos: u32| cat(&[&bof5(5), &rec(0x0042, &1252u16.to_le_bytes()), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 4], b"A\xf1os"])), &eof()]);
+    let sheet = cat(&[
+        &bof5(0x10),
+        &rec(0x0204, &cat(&[&cell(0, 0, 0), &[5, 0], b"Pi\xf1on"])),
+        &rec(0x0203, &cat(&[&cell(0, 1, 0), &12.5f64.to_le_bytes()])),
+        &formula(1, 0, 25.0f64.to_le_bytes(), &[0x44, 0, 0xC0, 1, 0x1E, 2, 0, 5]),
+        &eof(),
+    ]);
+    let stream = cat(&[&globals(globals(0).len() as u32), &sheet]);
+    let bytes = compound("Book", &stream);
+    assert_eq!(sniff(&bytes), Format::Xls);
+    let (wb, report) = read_xls(&bytes).unwrap();
+    assert!(!report.warnings.is_empty()); // unsupported BIFF5 objects are explicitly reported
+    assert_eq!(wb.sheets[0].name, "Años");
+    assert_eq!(v(&wb, 0, "A1"), Value::from("Piñon"));
+    assert_eq!(v(&wb, 0, "B1"), Value::Number(12.5));
+    assert_eq!(ftext(&wb, "A2").as_deref(), Some("B1*2"));
+    let output = write_xlsx(&wb).unwrap();
+    let (again, _) = read_xlsx(&output).unwrap();
+    assert_eq!(v(&again, 0, "A1"), Value::from("Piñon"));
+    assert_eq!(v(&again, 0, "A2"), Value::Number(25.0));
+    assert_eq!(ftext(&again, "A2").as_deref(), Some("B1*2"));
 }
