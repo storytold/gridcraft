@@ -434,6 +434,59 @@ fn remove_duplicates_without_a_valid_column_is_refused() {
 }
 
 #[test]
+fn remove_duplicates_rejects_each_malformed_column_without_changes() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["same", 1], ["same", 2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "E5", "input": "temporary"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("selection.set", json!({"range": "G4:H5"})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(!d.redo.is_empty());
+    let wb = d.wb.clone();
+    let selection = d.selection.clone();
+    let history = (d.undo.len(), d.redo.len());
+    let dirty = d.is_dirty();
+    for invalid in [json!("???"), json!(null), json!(true), json!(-1), json!(0.5), json!([]), json!({}), json!(u64::MAX)] {
+        // Silently dropping the invalid entry compares only B and deletes the distinct second row.
+        let err = s.execute("data.removeDuplicates", json!({"range": "B1:C2", "header": false, "columns": ["B", invalid]})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+        assert!(err.to_string().contains("columns"), "{err}");
+        let d = s.doc().unwrap();
+        assert!(Arc::ptr_eq(&d.wb, &wb), "the workbook must not change");
+        assert_eq!(d.selection, selection);
+        assert_eq!((d.undo.len(), d.redo.len()), history);
+        assert_eq!(d.is_dirty(), dirty);
+    }
+}
+
+#[test]
+fn remove_duplicates_keeps_valid_named_and_relative_columns() {
+    for (columns, removed) in [
+        (Some(json!(["B", "C"])), 0),
+        (Some(json!(["$B", "$C"])), 0),
+        (Some(json!([0, 1])), 0),
+        (Some(json!(["B"])), 1),
+        (Some(json!([0])), 1),
+        (None, 0),
+    ] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "B1", "values": [["same", 1], ["same", 2]]})).unwrap();
+        let mut params = json!({"range": "B1:C2", "header": false});
+        if let Some(columns) = columns {
+            params["columns"] = columns;
+        }
+        let result = s.execute("data.removeDuplicates", params).unwrap();
+        assert_eq!(result, json!({"removed": removed, "remaining": 2 - removed}));
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.value(CellRef::new(0, 2)).display(), "1");
+        assert_eq!(sh.value(CellRef::new(1, 1)).display(), if removed == 0 { "same" } else { "" });
+        assert_eq!(sh.value(CellRef::new(1, 2)).display(), if removed == 0 { "2" } else { "" });
+    }
+}
+
+#[test]
 fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     // In a file an inline list is a string literal (`"a,b"`); unquoted it reads as a formula.
     // References, names and formulas stay unquoted, and every rule survives a save and reopen.
