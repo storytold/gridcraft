@@ -173,6 +173,12 @@ fn spread() {
     close_tol(ev("KURT", vec![c(&k)]), -0.151799637, 1e-8);
     close_tol(ev("SKEW", vec![c(&k)]), 0.359543071, 1e-8);
     close_tol(ev("SKEW.P", vec![c(&k)]), 0.303193339, 1e-8);
+    // SKEW.P needs three numbers, as native Excel's does; text in an array is not one (#4009).
+    is_err(ev("SKEW.P", vec![c(&[1.0, 2.0])]), CellError::Div0);
+    is_err(ev("SKEW.P", vec![av(arr(vec![vec![tv("2"), nv(1.0), nv(3.0)]]))]), CellError::Div0);
+    is_err(ev("SKEW.P", vec![c(&[1.0])]), CellError::Div0);
+    close(ev("SKEW.P", vec![c(&[1.0, 2.0, 3.0])]), 0.0);
+    is_err(ev("SKEW", vec![c(&[1.0, 2.0])]), CellError::Div0);
     is_err(ev("KURT", vec![c(&[1.0, 2.0, 3.0])]), CellError::Div0);
     close_tol(ev("STANDARDIZE", vec![n(42.0), n(40.0), n(1.5)]), 1.333333333, 1e-9);
     is_err(ev("STANDARDIZE", vec![n(42.0), n(40.0), n(0.0)]), CellError::Num);

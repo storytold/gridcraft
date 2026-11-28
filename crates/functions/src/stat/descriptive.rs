@@ -467,6 +467,10 @@ pub(super) fn skew(v: &[f64]) -> R<f64> {
 }
 
 pub(super) fn skew_p(v: &[f64]) -> R<f64> {
+    // Excel's SKEW.P needs three numbers, as SKEW does: two give #DIV/0!, not 0 (#4009).
+    if v.len() < 3 {
+        return Err(CellError::Div0);
+    }
     let m = mean(v)?;
     let s = var_p(v)?.sqrt();
     if s == 0.0 {
