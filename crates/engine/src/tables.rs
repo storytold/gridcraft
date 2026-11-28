@@ -336,6 +336,7 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
     // (both kept up to date, so a wide header row stays linear).
     type Names = (std::collections::HashMap<String, usize>, std::collections::HashMap<String, usize>);
     let mut names: std::collections::HashMap<(usize, usize), Names> = std::collections::HashMap::new();
+    let mut cf_by_sheet: std::collections::HashMap<usize, crate::cf::CfCache> = std::collections::HashMap::new();
     for (si, c) in changed {
         let Some(sh) = cx.wb.sheet(si) else { continue };
         let Some(ti) = sh.tables.iter().position(|t| t.header_row && c.row == t.range.start.row && t.range.contains(c)) else { continue };
@@ -347,7 +348,7 @@ pub(crate) fn sync_headers(cx: &mut crate::cmd::Ctx) {
         let value = sh.value(c);
         let text = match value.as_text() {
             Some(t) => t.to_string(),
-            None => crate::display::cell_text(&cx.wb, sh, c),
+            None => crate::display::cell_text_with_cf(&cx.wb, si, sh, c, cf_by_sheet.entry(si).or_default()),
         };
         // Headers hold constant text: a formula (or a spilled value) there becomes its text.
         let is_text = value.is_text() && sh.cell(c).is_some_and(|x| x.formula.is_none());

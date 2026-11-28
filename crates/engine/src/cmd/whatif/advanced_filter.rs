@@ -107,13 +107,16 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let wb = &d.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let headers: Vec<String> =
-        (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim().to_lowercase()).collect();
+    let mut cf = crate::cf::CfCache::new();
+    let headers: Vec<String> = (list.start.col..=list.end.col)
+        .map(|c| crate::display::cell_text_with_cf(wb, si, sh, CellRef::new(list.start.row, c), &mut cf).trim().to_lowercase())
+        .collect();
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.
     let mut rows: Vec<Vec<Cond>> = Vec::new();
     if let Some((csi, crit)) = criteria {
         let csh = wb.sheet(csi).ok_or(EngineError::NoDocument)?;
+        let mut ccf = crate::cf::CfCache::new();
         for cr in crit.start.row + 1..=crit.end.row {
             let mut conds = Vec::new();
             for cc in crit.start.col..=crit.end.col {
@@ -124,7 +127,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 if v.is_empty() && formula.is_none() {
                     continue;
                 }
-                let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_lowercase();
+                let head = crate::display::cell_text_with_cf(wb, csi, csh, CellRef::new(crit.start.row, cc), &mut ccf).trim().to_lowercase();
                 match headers.iter().position(|h| !head.is_empty() && *h == head) {
                     Some(off) => conds.push(Cond::Compare(off as u32, v)),
                     None => match formula.and_then(|f| f.expr()) {
@@ -140,7 +143,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     if u64::from(list.height()) * rows.len() as u64 > MAX_FILTER_TESTS {
         return Err(bad(CMD, "the list and criteria ranges together are too large"));
     }
-    let matches_row = |row: u32| -> bool {
+    let matches_row = |row: u32, cf: &mut crate::cf::CfCache| -> bool {
         if rows.is_empty() {
             return true;
         }
@@ -149,7 +152,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 Cond::Compare(off, crit) => {
                     let at = CellRef::new(row, list.start.col + off);
                     let v = sh.value(at);
-                    let text = crate::display::cell_text(wb, sh, at);
+                    let text = crate::display::cell_text_with_cf(wb, si, sh, at, cf);
                     criterion_matches(&v, &text, crit)
                 }
                 Cond::Computed(e, at) => {
@@ -164,10 +167,11 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let mut seen: HashSet<Vec<String>> = HashSet::new();
     let mut keep: Vec<(u32, bool)> = Vec::new();
     for row in first_data..=list.end.row {
-        let mut ok = matches_row(row);
+        let mut ok = matches_row(row, &mut cf);
         if ok && unique {
-            let key: Vec<String> =
-                (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(row, c)).to_lowercase()).collect();
+            let key: Vec<String> = (list.start.col..=list.end.col)
+                .map(|c| crate::display::cell_text_with_cf(wb, si, sh, CellRef::new(row, c), &mut cf).to_lowercase())
+                .collect();
             ok = seen.insert(key);
         }
         keep.push((row, ok));

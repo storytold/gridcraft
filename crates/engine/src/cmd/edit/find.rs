@@ -128,13 +128,14 @@ pub(super) fn find(s: &mut Session, p: &Json) -> Result<Json> {
     let mut hits: Vec<(usize, CellRef, String)> = Vec::new();
     for si in sheets {
         let Some(sh) = d.wb.sheet(si) else { continue };
+        let mut cf = crate::cf::CfCache::new();
         let mut cells: Vec<(CellRef, String)> = sh
             .cells
             .iter()
             .filter(|(c, _)| !in_selection || d.selection.contains(*c))
             .filter_map(|(c, cell)| {
                 let text = if values || cell.formula.is_none() || crate::display::formula_hidden(&d.wb, sh, c) {
-                    crate::display::cell_text(&d.wb, sh, c)
+                    crate::display::cell_text_with_cf(&d.wb, si, sh, c, &mut cf)
                 } else {
                     cell.input_text()
                 };

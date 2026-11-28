@@ -819,12 +819,13 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     let mut examples = Vec::new();
     let mut todo = Vec::new();
     // Flash Fill works on the text cells show (a date as formatted, not its serial number).
+    let mut cf = crate::cf::CfCache::new();
     for r in top..=bottom {
-        let src = crate::display::cell_text(&cx.wb, sh, CellRef::new(r, src_col));
+        let src = crate::display::cell_text_with_cf(&cx.wb, sheet, sh, CellRef::new(r, src_col), &mut cf);
         if sh.value(CellRef::new(r, at.col)).is_empty() {
             todo.push((r, src));
         } else {
-            examples.push((src, crate::display::cell_text(&cx.wb, sh, CellRef::new(r, at.col))));
+            examples.push((src, crate::display::cell_text_with_cf(&cx.wb, sheet, sh, CellRef::new(r, at.col), &mut cf)));
         }
     }
     if examples.is_empty() {

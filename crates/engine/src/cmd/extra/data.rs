@@ -36,6 +36,7 @@ pub(super) fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
         }
         // Header text per new column (`None`: empty). Without a header row, a column that stays
         // keeps its name.
+        let mut cf = crate::cf::CfCache::new();
         let texts: Vec<Option<String>> = (r.start.col..=r.end.col)
             .map(|c| {
                 if !t.header_row {
@@ -45,7 +46,7 @@ pub(super) fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 let v = sheet.value(at);
                 let text = match v.as_text() {
                     Some(x) => x.to_string(),
-                    None => crate::display::value_text(wb, sheet, at),
+                    None => crate::display::value_text_with_cf(wb, si, sheet, at, &mut cf),
                 };
                 (!text.trim().is_empty()).then_some(text)
             })

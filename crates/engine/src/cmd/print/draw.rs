@@ -47,8 +47,8 @@ fn cell_look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut crate::c
         if st.font.underline != Underline::None {
             style.font.underline = st.font.underline;
         }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
+        // In a differential style General means "not set" (#1163), unless explicitly stated.
+        if crate::cf::style_sets_num_fmt(st) {
             style.num_fmt = st.num_fmt.clone();
         }
         for (dst, src) in [
@@ -354,26 +354,27 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut cra
         }
     }
     // Cheap pre-filter: blank, unstyled cells outside tables and conditional formats draw nothing.
-    let skip = |c: &CellRef| {
-        sh.cond_formats.is_empty()
-            && sh.value_ref(*c).is_none_or(|v| v.is_empty())
-            && sh.style_id(*c) == StyleId::DEFAULT
-            && (sh.tables.is_empty() || sh.table_at(*c).is_none())
-    };
-    let looks: Vec<(CellRef, Look)> = cells
-        .iter()
-        .filter(|c| !skip(c))
-        .chain(merges.iter().map(|m| &m.start))
-        .map(|c| (*c, cell_look(b.wb, b.si, sh, *c, cf)))
-        .filter(|(c, l)| {
-            l.fill.is_some()
-                || l.cf.is_some()
-                || by_start.contains_key(c)
-                || !sh.value(*c).is_empty()
-                || l.style.borders != Borders::default()
-                || l.style.num_fmt.as_str() == "checkbox"
-        })
-        .collect();
+    let mut looks: Vec<(CellRef, Look)> = Vec::new();
+    for &c in cells.iter().chain(merges.iter().map(|m| &m.start)) {
+        let skip = !by_start.contains_key(&c)
+            && !cf.may_apply(b.wb, b.si, c)
+            && sh.value_ref(c).is_none_or(|v| v.is_empty())
+            && sh.style_id(c) == StyleId::DEFAULT
+            && (sh.tables.is_empty() || sh.table_at(c).is_none());
+        if skip {
+            continue;
+        }
+        let l = cell_look(b.wb, b.si, sh, c, cf);
+        if l.fill.is_some()
+            || l.cf.is_some()
+            || by_start.contains_key(&c)
+            || !sh.value(c).is_empty()
+            || l.style.borders != Borders::default()
+            || l.style.num_fmt.as_str() == "checkbox"
+        {
+            looks.push((c, l));
+        }
+    }
     let rect_of = |c: CellRef| -> (f32, f32, f32, f32, bool) {
         match by_start.get(&c) {
             Some(m) => {

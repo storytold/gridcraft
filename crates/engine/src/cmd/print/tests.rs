@@ -1454,3 +1454,34 @@ fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
     assert_eq!(pages, 1);
     assert!(contains(&pdf, "/MediaBox [0 0 498.9 708.66]"));
 }
+
+#[test]
+fn conditional_format_persists_on_final_page_of_large_multipage_pdf() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    // 50,000 rows x 2 columns = 100,000 drawn cells (> 60k) with 5 cellIs > 0 rules on A:B
+    // (500,000 total rule evaluations across the PDF).
+    for r in 0..50_000u32 {
+        sh.set_value(CellRef::new(r, 0), Value::Number(1.0));
+        sh.set_value(CellRef::new(r, 1), Value::Number(2.0));
+    }
+    let no_fill_bold = Style { font: gridcraft_model::Font { bold: true, ..Default::default() }, ..Default::default() };
+    let red_fill = Style { fill: gridcraft_model::Fill::solid(Color::Rgb(0xFF0000)), ..Default::default() };
+    for i in 0..5u32 {
+        let style = if i == 4 { red_fill.clone() } else { no_fill_bold.clone() };
+        sh.cond_formats.push(gridcraft_model::CondFormat {
+            ranges: vec![RangeRef::cols(0, 1)],
+            rule: gridcraft_model::CfRule::CellIs { op: gridcraft_model::CfOperator::Greater, a: "0".into(), b: None, style: Box::new(style) },
+            priority: i + 1,
+            stop_if_true: false,
+        });
+    }
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert!(lay.pages.len() > 100, "expected large multi-page layout, got {} pages", lay.pages.len());
+    let rendered = render_pdf(&wb, &[lay], "", "").unwrap();
+    let text = String::from_utf8_lossy(&rendered.bytes);
+    let streams: Vec<&str> = text.split("endstream").filter(|part| part.contains("stream\n")).collect();
+    assert_eq!(streams.len(), rendered.pages);
+    assert!(streams.first().unwrap().contains("1 0 0 rg"), "page 1 must keep red CF fill");
+    assert!(streams.last().unwrap().contains("1 0 0 rg"), "final page {} must keep red CF fill", rendered.pages);
+}

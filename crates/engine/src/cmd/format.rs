@@ -795,6 +795,7 @@ fn widen_for_numbers(s: &mut Session, p: &Json) -> Result<Json> {
         // The stored cells looked at are capped, not the area: a sparse target as tall as the sheet
         // still widens for the numbers it holds. Spilled values count as the grid shows them.
         let mut budget = MAX_WIDEN_CELLS;
+        let mut cf = crate::cf::CfCache::new();
         for r in &targets {
             let spilled = sh.spill.range(r.start..=r.end).map(|(c, _)| *c).filter(|c| r.contains(*c));
             for c in sh.cells.iter_range(*r).map(|(c, _)| c).chain(spilled) {
@@ -813,7 +814,7 @@ fn widen_for_numbers(s: &mut Session, p: &Json) -> Result<Json> {
                 if st.num_fmt.as_str() == "General" || st.align.shrink || st.align.h == HAlign::Fill {
                     continue;
                 }
-                let text = crate::display::cell_text(&cx.wb, sh, c);
+                let text = crate::display::cell_text_with_cf(&cx.wb, sheet, sh, c, &mut cf);
                 let exact = measured.len() < EXACT_TEXT_WIDTHS;
                 let w = *measured.entry((id, text)).or_insert_with_key(|(_, t)| match &measure {
                     Some(m) => m(t, &st.font, exact),

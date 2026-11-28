@@ -1,5 +1,7 @@
+use std::collections::HashSet;
+
 use super::{
-    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_CELLS, RangeRef, Sheet, Style, Validation, ValidationKind, from_file,
+    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_RANGES, RangeRef, Sheet, Style, Validation, ValidationKind, from_file,
     parse_sqref, read_color,
 };
 
@@ -45,15 +47,34 @@ fn cfvos(e: &El) -> Vec<CfValueKind> {
         .collect()
 }
 
-/// One `conditionalFormatting` block. Every rule keeps its own copy of the block's ranges, so
-/// `kept_cells` counts the range cells the sheet's retained rules hold so far, across blocks; a
-/// rule that would take it past [`MAX_COND_CELLS`] is dropped. Unsupported rules cost nothing.
-pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &mut u64) {
-    let ranges = parse_sqref(e.attr("sqref"));
+/// Parses a conditional-format `sqref` list, deduplicating repeated ranges while preserving
+/// first-seen order. Stops once more than [`MAX_COND_RANGES`] distinct entries are seen so an
+/// adversarial `sqref` cannot allocate unboundedly before [`push_cf`] drops it.
+fn parse_cf_sqref(s: Option<&str>) -> Vec<RangeRef> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for tok in s.unwrap_or("").split_whitespace() {
+        if let Some(r) = RangeRef::parse(tok)
+            && seen.insert(r)
+        {
+            out.push(r);
+            if out.len() > MAX_COND_RANGES {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// One `conditionalFormatting` block. Every rule keeps its own copy of the block's deduplicated
+/// ranges, so `kept_ranges` counts distinct `RangeRef` entries the sheet's retained rules hold
+/// so far, across blocks; a rule that would take it past [`MAX_COND_RANGES`] is dropped.
+/// Unsupported rules cost nothing.
+pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_ranges: &mut usize) {
+    let ranges = parse_cf_sqref(e.attr("sqref"));
     if ranges.is_empty() {
         return;
     }
-    let block_cells = ranges.iter().map(RangeRef::count).fold(0u64, u64::saturating_add);
     for r in e.kids("cfRule") {
         let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
         let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
@@ -63,7 +84,7 @@ pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &
         let ty = r.attr("type").unwrap_or("");
         match cf_rule(cx, r, ty, formulas, style) {
             Some(rule) => {
-                if !push_cf(cx, sheet, &ranges, block_cells, r, rule, kept_cells) {
+                if !push_cf(cx, sheet, &ranges, r, rule, kept_ranges) {
                     break;
                 }
                 if let Some(id) = ext_id {
@@ -76,13 +97,13 @@ pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &
     }
 }
 
-fn push_cf(cx: &mut Ctx<'_>, sheet: &mut Sheet, ranges: &[RangeRef], block_cells: u64, r: &El, rule: CfRule, kept_cells: &mut u64) -> bool {
-    let total = kept_cells.saturating_add(block_cells);
-    if total > MAX_COND_CELLS {
-        cx.warn(format!("conditional formats past {MAX_COND_CELLS} kept range cells were dropped"));
+fn push_cf(cx: &mut Ctx<'_>, sheet: &mut Sheet, ranges: &[RangeRef], r: &El, rule: CfRule, kept_ranges: &mut usize) -> bool {
+    let total = kept_ranges.saturating_add(ranges.len());
+    if total > MAX_COND_RANGES {
+        cx.warn(format!("conditional formats past {MAX_COND_RANGES} kept range entries were dropped"));
         return false;
     }
-    *kept_cells = total;
+    *kept_ranges = total;
     sheet.cond_formats.push(CondFormat {
         ranges: ranges.to_vec(),
         rule,
@@ -158,10 +179,9 @@ fn cf_rule(cx: &Ctx<'_>, r: &El, ty: &str, formulas: Vec<String>, style: Box<Sty
 /// `x14:id` adds no rule, only that bar's solid fill (its other settings are skipped with a
 /// warning). Skipped with a warning (and so lost on save): other data bars, icon sets, colour
 /// scales and the text rules containsText, notContainsText, beginsWith and endsWith.
-pub(super) fn read_x14_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &mut u64) {
+pub(super) fn read_x14_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_ranges: &mut usize) {
     for cf in e.kids("conditionalFormatting") {
-        let ranges = parse_sqref(cf.child("sqref").map(|s| s.text.as_str()));
-        let block_cells = ranges.iter().map(RangeRef::count).fold(0u64, u64::saturating_add);
+        let ranges = parse_cf_sqref(cf.child("sqref").map(|s| s.text.as_str()));
         for r in cf.kids("cfRule") {
             let ty = r.attr("type").unwrap_or("");
             let linked = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id.trim())).map(|(_, n)| *n);
@@ -210,7 +230,7 @@ pub(super) fn read_x14_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cell
             let style = Box::new(r.child("dxf").map(|x| crate::styles::read_x14_dxf(x, &cx.palette, &cx.num_fmts)).unwrap_or_default());
             let formulas: Vec<String> = r.kids("f").map(|f| from_file(f.text.trim())).collect();
             if let Some(rule) = cf_rule(cx, r, ty, formulas, style)
-                && !push_cf(cx, sheet, &ranges, block_cells, r, rule, kept_cells)
+                && !push_cf(cx, sheet, &ranges, r, rule, kept_ranges)
             {
                 break;
             }

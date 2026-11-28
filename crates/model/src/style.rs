@@ -434,6 +434,9 @@ pub struct DxfStated {
     /// `<scheme val>`: the theme font the face follows (`major`, `minor` or `none`).
     pub scheme: Option<String>,
     pub protection: bool,
+    /// `<numFmt>` explicitly stated as `"General"` in a differential format.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub num_fmt: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

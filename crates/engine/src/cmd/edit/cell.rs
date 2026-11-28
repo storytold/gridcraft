@@ -355,10 +355,13 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let reported: Vec<Json> =
         d.wb.sheet(sheet)
             .map(|sh| {
+                let mut cf = crate::cf::CfCache::new();
                 converted
-                .iter()
-                .map(|(at, input)| json!({"cell": at.a1(), "input": clipped(input), "stored": clipped(&crate::display::cell_text(&d.wb, sh, *at))}))
-                .collect()
+                    .iter()
+                    .map(|(at, input)| {
+                        json!({"cell": at.a1(), "input": clipped(input), "stored": clipped(&crate::display::cell_text_with_cf(&d.wb, sheet, sh, *at, &mut cf))})
+                    })
+                    .collect()
             })
             .unwrap_or_default();
     Ok(json!({"cells": count, "convertedCount": converted_count, "converted": reported}))

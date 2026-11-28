@@ -317,6 +317,7 @@ fn check_input(wb: &Workbook, input: &gridcraft_model::NamedInput, place: Place)
     }
     let Some(sh) = wb.sheet(place.sheet) else { return out };
     let mut blanks = Vec::new();
+    let mut cf = crate::cf::CfCache::new();
     for (ci, col) in (r.start.col..=r.end.col).enumerate() {
         let ty = input.col_types.get(ci).copied().unwrap_or_default();
         let mut wrong = Vec::new();
@@ -343,7 +344,7 @@ fn check_input(wb: &Workbook, input: &gridcraft_model::NamedInput, place: Place)
         }
         if !wrong.is_empty() {
             let head = if input.header {
-                Some(crate::display::cell_text(wb, sh, CellRef::new(r.start.row, col))).filter(|h| !h.trim().is_empty())
+                Some(crate::display::cell_text_with_cf(wb, place.sheet, sh, CellRef::new(r.start.row, col), &mut cf)).filter(|h| !h.trim().is_empty())
             } else {
                 None
             };
