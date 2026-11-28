@@ -1,7 +1,7 @@
 use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
 use super::special::is_special;
-use super::{Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, MAX_TAIL_CALLS, Tail, Value, err};
+use super::{Array, BinOp, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, MAX_TAIL_CALLS, Tail, Value, err};
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -96,10 +96,14 @@ impl<'h> Evaluator<'h> {
         self.calls += 1;
         let saved = std::mem::replace(&mut self.env, l.env.clone());
         self.env.extend(bound);
+        // A LAMBDA body is a formula of its own, so Excel snaps it by the root rule in every context
+        // (named, inline, LET-bound, MAP, REDUCE, SCAN, MAKEARRAY, BYROW, BYCOL; LAMBDA probe, observed
+        // on Windows Excel 16.0.20430). A LET, IF, parenthesis or unary sign at the root of the body does not.
         // A call in tail position replaces this one instead of nesting under it, so a tail recursion
         // uses no more native stack at 5,000 deep than at 5. Each link still spends fuel.
+        let snap_root = |body: &Expr| matches!(body, Expr::Binary(BinOp::Add | BinOp::Sub, ..));
         let mut tails = 0;
-        let mut step = self.tail_step(&l.body);
+        let mut step = if snap_root(&l.body) { Tail::Done(Ev::V(self.value_root(&l.body))) } else { self.tail_step(&l.body) };
         let r = loop {
             match step {
                 Tail::Done(v) => break v,
@@ -115,7 +119,7 @@ impl<'h> Evaluator<'h> {
                     self.env.clear();
                     self.env.extend(next.env.iter().cloned());
                     self.env.extend(bound);
-                    step = self.tail_step(&next.body);
+                    step = if snap_root(&next.body) { Tail::Done(Ev::V(self.value_root(&next.body))) } else { self.tail_step(&next.body) };
                 }
             }
         };

@@ -413,13 +413,13 @@ impl<'h> Evaluator<'h> {
     /// Adds one area to `acc`; `Err` is the result the function ends with.
     fn aggregate_area(&mut self, kind: Agg, a: &Area, acc: &mut Acc) -> Result<(), Ev> {
         if !a.range.is_single() {
-            // Adding the block's remembered sum to anything but +0.0 would add in another order.
-            // COUNT never reads the sum, so it may reuse every block.
-            if (kind == Agg::Count || acc.sum.to_bits() == 0)
-                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
+            // COUNT never reads the sum, so it may reuse every block's remembered count.
+            // SUM and AVERAGE must walk so SUM can snap only its last addition (the remembered
+            // block sum does not keep that last add).
+            if kind == Agg::Count
+                && let Some((_sum, count)) = self.host.range_sum(a.sheet, a.range)
             {
-                acc.sum = sum;
-                acc.count = acc.count.saturating_add(count);
+                acc.add_range_sum(0.0, count);
                 return Ok(());
             }
             // Folded without building an array, but still walked: the part inside the used
@@ -444,20 +444,21 @@ impl<'h> Evaluator<'h> {
         self.aggregate_value(kind, value, true, acc)
     }
 
-    /// Adds one argument's value by calling `SUM` and `COUNT` on it, so coercion and error rules
-    /// stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`).
+    /// Adds one argument's value with `SUM`'s numbers and a call to `COUNT`, so coercion and error
+    /// rules stay in one place (`AVERAGE` of an argument is its `SUM` over its `COUNT`). The numbers
+    /// are added one by one so `SUM` can snap only its last addition.
     fn aggregate_value(&mut self, kind: Agg, value: Value, from_ref: bool, acc: &mut Acc) -> Result<(), Ev> {
         if !from_ref && !self.spend_on(&value) {
             return Err(err(CellError::Calc));
         }
-        let (Some(sum), Some(count)) = (gridcraft_functions::lookup("SUM"), gridcraft_functions::lookup("COUNT")) else {
+        let Some(count) = gridcraft_functions::lookup("COUNT") else {
             return Err(err(CellError::Name));
         };
         let args = [Arg { value, from_ref, blank_value: false }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
-                Value::Number(n) => acc.sum += n,
-                other => return Err(Ev::V(other)),
+            match gridcraft_functions::numbers(&args) {
+                Ok(ns) => ns.into_iter().for_each(|n| acc.add(n)),
+                Err(e) => return Err(err(e)),
             }
         }
         if kind != Agg::Sum {
