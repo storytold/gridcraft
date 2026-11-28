@@ -206,7 +206,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
-                "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
+                "formatCells" => format_cells(app, ui, &mut d, &mut confirm, &mut open),
                 "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
@@ -404,7 +404,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(app, ui, &mut d, &mut confirm, &mut open),
             }
         });
-    window_shown(ctx, &mut d, collapsed.is_some(), shown.map(|r| r.response.rect));
+    window_shown(ctx, &mut d, collapsed.is_some(), shown.as_ref().map(|r| r.response.rect));
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {
@@ -483,6 +483,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         // `ui.dialog.cancel` gets the error instead and keeps the dialog, so it can act on it.
         app.message = Some((d.title.clone(), crate::clean_error(&e)));
     }
+    if open && d.name == "formatCells" && let Some(shown) = &shown {
+        // Keep keyboard traversal inside the draggable window while it is open.
+        ctx.memory_mut(|m| m.set_modal_layer(shown.response.layer_id));
+    }
     if app.ui_window() != home {
         // A command run from the dialog switched windows: whatever it opened shows in the new
         // window, and this dialog (or the one it returns to) stays in its own.
@@ -544,6 +548,11 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
 
 /// Like [`ok_cancel`], but OK (and Enter) do nothing while `enabled` is false.
 pub(super) fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enabled: bool) {
+    ok_cancel_row(ui, confirm, open, enabled, true);
+}
+
+/// Draws the action buttons, with an optional default Enter action for unfocused buttons.
+pub(super) fn ok_cancel_row(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, enabled: bool, enter_confirms: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -554,7 +563,7 @@ pub(super) fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mu
             let ok =
                 ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
             // Consume Enter so a newly opened error message cannot dismiss itself (#2189).
-            let enter = enabled && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            let enter = enabled && enter_confirms && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
             if enabled && (ok.clicked() || enter) {
                 *confirm = true;
             }

@@ -365,13 +365,18 @@ impl MoreColors {
 /// through the swatches and Enter applies; the key events are stripped so the grid behind the popup
 /// does not also react (not while More Colors… is open, whose boxes take the keys).
 pub fn color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
-    palette(ui, theme_colors, none_label, true)
+    palette(ui, theme_colors, none_label, true, true)
+}
+
+/// Inline dialog palette: let egui move focus between swatches and surrounding controls.
+pub(crate) fn dialog_color_palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
+    palette(ui, theme_colors, none_label, true, false)
 }
 
 /// [`color_palette`] without More Colors…, for a menu that closes on any click inside it (a sub-menu
 /// of a context menu), where the picker would vanish as soon as it is used. Recent Colors stays.
 pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str) -> Option<String> {
-    palette(ui, theme_colors, none_label, false)
+    palette(ui, theme_colors, none_label, false, true)
 }
 
 /// Shared body of [`color_palette`] and [`color_palette_fixed`]: a 7×10 palette (six tinted theme rows
@@ -383,17 +388,17 @@ pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &s
 /// otherwise the result is the picked hex or `None`. Highlight, picker state and recent colours live in
 /// egui temp storage, and More Colors… OK falls back to the picker colour for an invalid typed hex and
 /// records the result as the newest recent colour (capped at `RECENT_COLORS`).
-fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool) -> Option<String> {
+fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool, popup_keys: bool) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
     const COLS: usize = 10;
     let pal_id = ui.scope_id().with("__color_palette");
-    let mut cur: Option<(usize, usize)> = ui.data_mut(|d| d.get_temp(pal_id)).unwrap_or(None);
+    let mut cur: Option<(usize, usize)> = if popup_keys { ui.data(|d| d.get_temp(pal_id)).unwrap_or(None) } else { None };
     let more_id = pal_id.with("more");
     let mut more: Option<MoreColors> = ui.data_mut(|d| d.get_temp(more_id)).unwrap_or(None);
     let (mut dl, mut dr, mut du, mut dd, mut ent) = (false, false, false, false, false);
-    if more.is_none() {
+    if popup_keys && more.is_none() {
         ui.input(|i| {
             dl = i.key_pressed(egui::Key::ArrowLeft);
             dr = i.key_pressed(egui::Key::ArrowRight);
@@ -482,8 +487,14 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 if resp.hovered() || cur == Some((row, col)) {
                     ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
                 }
-                if resp.clicked() {
-                    picked = Some(theme_hex(base, *tint));
+                if !popup_keys || resp.clicked() {
+                    let hex = theme_hex(base, *tint);
+                    if !popup_keys {
+                        palette_swatch_focus(ui, &t, &resp, &hex);
+                    }
+                    if resp.clicked() {
+                        picked = Some(hex);
+                    }
                 }
             }
             ui.end_row();
@@ -501,6 +512,9 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             ui.painter().rect_filled(r, 1.0, c);
             if resp.hovered() || cur == Some((ROWS - 1, col)) {
                 ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, t.cat(Cat::Orange)), StrokeKind::Outside);
+            }
+            if !popup_keys {
+                palette_swatch_focus(ui, &t, &resp, hex);
             }
             if resp.clicked() {
                 picked = Some(hex.to_string());
@@ -520,6 +534,9 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 ui.painter().rect_stroke(r, 1.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
                 if resp.hovered() {
                     ui.painter().rect_stroke(r.expand(1.0), 1.0, Stroke::new(1.5, Color32::from_rgb(0xE8, 0x7D, 0x2B)), StrokeKind::Outside);
+                }
+                if !popup_keys {
+                    palette_swatch_focus(ui, &t, &resp, hex);
                 }
                 if resp.on_hover_text(hex).clicked() {
                     picked = Some(hex.clone());
@@ -576,6 +593,13 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     ui.data_mut(|d| d.insert_temp(more_id, more));
     ui.data_mut(|d| d.insert_temp(pal_id, cur));
     picked
+}
+
+fn palette_swatch_focus(ui: &Ui, t: &Tokens, response: &egui::Response, hex: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), hex));
+    if response.has_focus() {
+        ui.painter().rect_stroke(response.rect, 1.0, Stroke::new(1.5, t.popup_focus_ring()), StrokeKind::Outside);
+    }
 }
 
 /// Draws the modal warning/error message; OK, Enter or Esc clears it and restores editor focus when an edit exists.
