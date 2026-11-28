@@ -1,0 +1,10 @@
+# Build context is the repository root; send only what cargo needs.
+.git
+target
+target-*
+plan
+corpus
+craft-fonts
+dist
+log
+rl
