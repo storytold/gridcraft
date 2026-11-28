@@ -385,3 +385,5 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-10 | minor | Added Mainstream practitioner (~50%) and Essentials user (~63%) with written weights and discounts, and user-evidence counts; re-checked the full number after the 10-10 merges (charts 38→30, localization 5→10; still 51.6, ~50%) |
 | 2026-10-10 | minor | Stage checked against the new alpha gate (six core workflows, all pass): stays alpha |
 | 2026-10-10 | major | Created. Full re-measure against Excel for Mac 16.113.4: functions 501 / 523 measured against Microsoft's list, catalog 258 / 290, breadth ~75%, ready ~50%, alpha; replaces the estimate tables previously in ROADMAP.md and keeps its "Working today" inventory |
+
+- 2026-11-02 — PR #2430: pivot.sort order=none retains manual order; order=source explicitly resets to source order (a GridCraft extension). A changed grouping clears obsolete ranks. Repeated/invalid imported cache references cannot multiply retained manual order.

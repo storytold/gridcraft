@@ -582,6 +582,114 @@ fn captions_renamed_items_and_manual_order() {
 }
 
 #[test]
+fn manual_order_source_reset_survives_undo_and_repeated_saves() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    edit_pt(&mut s, |p| {
+        p.rows[0].sort = PivotSort::None;
+        p.rows[0].item_order = vec!["North".into(), "East".into(), "West".into()];
+        p.columns[0].sort = PivotSort::None;
+        p.columns[0].item_order = vec!["Plums".into(), "Pears".into(), "Apples".into()];
+    });
+    s.execute("cell.set", json!({"cell": "H1", "input": "=B5"})).unwrap();
+    assert_eq!(val(&s, "H1"), Value::Number(15.0));
+    s.execute("cell.set", json!({"cell": "H2", "input": r#"=GETPIVOTDATA("Sales",$A$3,"Region","East","Product","Apples")"#})).unwrap();
+    assert_eq!(val(&s, "H2"), Value::Number(160.0));
+    // "none" retains a file's manual order; "source" explicitly resets it.
+    s.execute("pivot.sort", json!({"field": "Region", "order": "none"})).unwrap();
+    assert_eq!(text(&s, "A5"), "North");
+    s.execute("pivot.sort", json!({"field": "Region", "order": "SoUrCe"})).unwrap();
+    assert_eq!([text(&s, "A5"), text(&s, "A6"), text(&s, "A7")], ["East", "West", "North"]);
+    assert!(pt(&s).rows[0].item_order.is_empty());
+    assert_eq!(val(&s, "H1"), Value::Number(60.0));
+    s.execute("pivot.sort", json!({"field": "Product", "order": "source"})).unwrap();
+    assert_eq!([text(&s, "B4"), text(&s, "C4"), text(&s, "D4")], ["Apples", "Pears", "Plums"]);
+    assert!(pt(&s).columns[0].item_order.is_empty());
+    assert_eq!(val(&s, "H1"), Value::Number(160.0));
+    assert_eq!(val(&s, "H2"), Value::Number(160.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(val(&s, "H1"), Value::Number(60.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(val(&s, "H1"), Value::Number(15.0));
+    assert_eq!(pt(&s).rows[0].item_order, ["North", "East", "West"]);
+    assert_eq!(val(&s, "H2"), Value::Number(160.0));
+    s.execute("edit.redo", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    for _ in 0..3 {
+        s.execute("data.refreshAll", json!({})).unwrap();
+        assert_eq!(text(&s, "A5"), "East");
+        assert_eq!(text(&s, "B4"), "Apples");
+        assert_eq!(val(&s, "H1"), Value::Number(160.0));
+        assert_eq!(val(&s, "H2"), Value::Number(160.0));
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s = Session::new();
+        s.execute("file.open", json!({"name": "fictional-source-order.xlsx", "base64": saved["base64"]})).unwrap();
+    }
+}
+
+#[test]
+fn manual_order_source_reset_keeps_show_details_records() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    edit_pt(&mut s, |p| {
+        p.rows[0].sort = PivotSort::None;
+        p.rows[0].item_order = vec!["North".into(), "East".into(), "West".into()];
+        p.columns[0].sort = PivotSort::None;
+        p.columns[0].item_order = vec!["Plums".into(), "Pears".into(), "Apples".into()];
+    });
+    let details = |s: &mut Session, expected: &[(&str, &str, &str)]| {
+        assert_eq!(s.execute("pivot.showDetails", json!({"cell": "B5"})).unwrap()["records"], expected.len());
+        let rows = sheet_rows(s);
+        let actual: Vec<_> = rows.iter().skip(1).map(|row| (row[0].as_str(), row[1].as_str(), row[4].as_str())).collect();
+        assert_eq!(actual, expected);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+    };
+    // B5 now names North/Plums instead of the default East/Apples report cell.
+    assert_eq!(val(&s, "B5"), Value::Number(15.0));
+    details(&mut s, &[("North", "Plums", "15")]);
+    s.execute("pivot.options", json!({"enableShowDetails": false})).unwrap();
+    assert_eq!(s.execute("pivot.showDetails", json!({"cell": "B5"})).unwrap_err().to_string(), "Show Details is turned off for this PivotTable.");
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+    assert_eq!(pt(&s).rows[0].item_order, ["North", "East", "West"]);
+    assert_eq!(pt(&s).columns[0].item_order, ["Plums", "Pears", "Apples"]);
+    s.execute("pivot.options", json!({"enableShowDetails": true})).unwrap();
+    s.execute("pivot.sort", json!({"field": "Region", "order": "source"})).unwrap();
+    assert_eq!(val(&s, "B5"), Value::Number(60.0));
+    details(&mut s, &[("East", "Plums", "60")]);
+    s.execute("pivot.sort", json!({"field": "Product", "order": "source"})).unwrap();
+    assert_eq!(val(&s, "B5"), Value::Number(160.0));
+    details(&mut s, &[("East", "Apples", "100"), ("East", "Apples", "60")]);
+}
+
+#[test]
+fn manual_order_regroup_discards_ranks_from_the_previous_grouping() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Date", "Amount"], [1, 11], [1900, 19]]})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:B3", "rows": ["Date"], "values": ["Amount"]})).unwrap();
+    s.execute("pivot.group", json!({"field": "Date", "by": "years"})).unwrap();
+    edit_pt(&mut s, |p| {
+        p.rows[0].sort = PivotSort::None;
+        p.rows[0].item_order = vec!["1905".into(), "1900".into()];
+    });
+    assert_eq!(first_col(&s.doc().unwrap().wb, &["1900", "1905"]), ["1905", "1900"]);
+    // Reapplying the same grouping preserves its intentionally reordered items.
+    s.execute("pivot.group", json!({"field": "Date", "by": "years"})).unwrap();
+    assert_eq!(pt(&s).rows[0].item_order, ["1905", "1900"]);
+    s.execute("pivot.group", json!({"field": "Date", "by": "none"})).unwrap();
+    // The old year label "1900" must not rank the unrelated raw serial 1900 first.
+    assert_eq!(first_col(&s.doc().unwrap().wb, &["1", "1900"]), ["1", "1900"]);
+    assert!(pt(&s).rows[0].item_order.is_empty());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(first_col(&s.doc().unwrap().wb, &["1900", "1905"]), ["1905", "1900"]);
+    assert_eq!(pt(&s).rows[0].item_order, ["1905", "1900"]);
+    s.execute("edit.redo", json!({})).unwrap();
+    let back = reopen_wb(&s.doc().unwrap().wb);
+    assert_eq!(first_col(&back, &["1", "1900"]), ["1", "1900"]);
+}
+
+#[test]
 fn field_subtotals_repeat_labels_and_values_row() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();

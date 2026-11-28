@@ -22,7 +22,8 @@ pub enum PivotSort {
     #[default]
     Asc,
     Desc,
-    /// Source order (first appearance).
+    /// Manual order: the field's `item_order`, then source order (first appearance); date
+    /// groups in date order.
     None,
 }
 

@@ -532,6 +532,13 @@ fn with_pivot(table: &str, cache: Option<&str>) -> Vec<u8> {
 const GOOD_CACHE: &str = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="2"><cacheField name="K"><sharedItems><s v="x"/><n v="2"/><m/><b v="1"/><d v="2024-01-01T00:00:00"/></sharedItems></cacheField><cacheField name="V"><sharedItems/><fieldGroup base="0"><rangePr startNum="0" endNum="10" groupInterval="5"/><groupItems><s v="0-4"/></groupItems></fieldGroup></cacheField></cacheFields></pivotCacheDefinition>"#;
 
 #[test]
+fn manual_order_ignores_repeated_and_invalid_cache_references() {
+    let table = r#"<pivotTableDefinition name="Manual" cacheId="1"><location ref="D3:E8"/><pivotFields count="2"><pivotField axis="axisRow" sortType="manual"><items><item x="99"/><item x="1"/><item x="1"/><item x="4294967295"/><item x="0"/><item t="default"/></items></pivotField><pivotField/></pivotFields><rowFields><field x="0"/></rowFields></pivotTableDefinition>"#;
+    let (wb, _) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().pivots[0].rows[0].item_order, ["2", "x"]);
+}
+
+#[test]
 fn hostile_pivot_parts_warn_not_panic() {
     let tables = [
         "garbage <<<",

@@ -251,3 +251,5 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-10 | minor | Updated for the 10-10 merges (#17, #31, #38, #62, #82, #104, #116) and the new chart resize bug (#190) |
 | 2026-10-10 | minor | Noted that no gap blocks the alpha gate |
 | 2026-10-10 | major | Created: 24 ranked gaps with evidence, from the full re-measure and the 60 open issues |
+
+- 2026-11-02 — PR #2430 retains its three targeted follow-ups to #722: source-order reset, stale manual-rank cleanup on regroup, and imported-reference deduplication. Source order is a GridCraft extension, distinct from Excel ascending order.

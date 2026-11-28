@@ -123,7 +123,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort Field",
             [],
             None,
-            "{pivot?, field, order: asc|desc|none, by?: \"Sum of Sales\" (sort by a value field), replace?}",
+            "{pivot?, field, order: asc|desc|none|source (none keeps manual item order; source resets it), by?: \"Sum of Sales\" (sort by a value field), replace?}",
             has_doc,
             sort
         ),
