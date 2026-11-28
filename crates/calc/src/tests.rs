@@ -2026,6 +2026,21 @@ fn blank_lookup_values_match_excel_windows_observation() {
 }
 
 #[test]
+fn written_blank_lookup_argument_is_numeric_zero() {
+    // #4044: `XMATCH(, array)` writes a blank argument, which Excel reads as numeric zero. Only a
+    // reference to a blank cell (B1 here) is a blank lookup value.
+    let mut t = T::new();
+    t.set("A1", "=XMATCH(,{0,1,3})");
+    t.set("A2", "=XMATCH(B1,{0,1,3})");
+    t.set("A3", "=XLOOKUP(,{0,1,3},{10,20,30})");
+    t.set("A4", "=XLOOKUP(B1,{0,1,3},{10,20,30},\"none\")");
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("A2"), Value::Error(CellError::NA));
+    assert_eq!(t.get("A3"), Value::Number(10.0));
+    assert_eq!(t.get("A4"), Value::from("none"));
+}
+
+#[test]
 fn cell_width_is_the_column_width_dialog_value_rounded() {
     // #735: Excel 365 values. Widths in px as `home.columnWidth {"chars"}` sets them
     // (chars * 7 + 5): 10.71 -> 80, 12 -> 89, 10.57 -> 79, 2.86 -> 25; B keeps the default 8.43 (64).

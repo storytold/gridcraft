@@ -23,6 +23,19 @@ fn needle(args: &[Arg], i: usize) -> R<Value> {
     }
 }
 
+/// The lookup value of XLOOKUP and XMATCH. Unlike the older lookups, a reference to a blank cell is
+/// blank rather than numeric zero: it matches a blank entry and nothing else (#4044). A written
+/// blank argument (`XMATCH(, array)`) still becomes zero, as MATCH does.
+fn xneedle(args: &[Arg], i: usize) -> R<Value> {
+    let a = arg(args, i)?;
+    match a.value.scalar() {
+        Value::Error(e) => Err(e),
+        Value::Empty if a.from_ref || a.blank_value => Ok(Value::Empty),
+        Value::Empty => Ok(Value::Number(0.0)),
+        v => Ok(v),
+    }
+}
+
 /// Order of two values for the approximate and binary searches: [`compare`], except that numbers
 /// compare exactly. Excel's `=` treats numbers equal to 15 significant digits as equal, but its
 /// lookups don't. Observed in Excel 365 with A1 holding
@@ -292,13 +305,20 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
 }
 
 fn bsearch_exact(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
+    if matches!(x, Value::Empty) {
+        // A blank needle only matches a blank entry. The coercing comparison below would read it
+        // as numeric zero, so handle it here: blanks sort last in both directions, so the first
+        // blank entry is the only possible exact match.
+        let p = hay.partition_point(|v| !matches!(v, Value::Empty));
+        return matches!(hay.get(p)?, Value::Empty).then_some(p);
+    }
     let p = bsearch_first(x, hay, desc)?;
     let v = hay.get(p)?;
     if binary_order(v, x, desc) == Ordering::Equal { Some(p) } else { None }
 }
 
 fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = needle(args, 0)?;
+    let x = xneedle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
         return Err(*e);
@@ -344,7 +364,7 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 fn xmatch(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = needle(args, 0)?;
+    let x = xneedle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
         return Err(*e);
@@ -567,6 +587,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
 mod tests {
     use gridcraft_core::{CellError, Value};
 
+    use crate::Arg;
     use crate::util::testutil::*;
 
     fn table() -> Value {
@@ -757,6 +778,38 @@ mod tests {
         close(ev("XMATCH", vec![t("a?c"), av(arr(vec![vec![tv("xyz"), tv("abc")]])), n(2.0)]), 2.0);
         let r = ev("XMATCH", vec![av(row(&[30.0, 10.0])), rf(v)]);
         assert_eq!(rows_of(&r), vec![vec![nv(3.0), nv(1.0)]]);
+    }
+
+    /// A reference to a blank cell is a blank lookup value, not numeric zero, for XMATCH and
+    /// XLOOKUP: it finds a blank entry and misses numbers. MATCH keeps Excel's zero coercion (#4044).
+    #[test]
+    fn xmatch_and_xlookup_treat_a_blank_reference_as_blank() {
+        let numbers = || av(row(&[0.0, 1.0, 3.0]));
+        let blank = || Arg::reference(Value::Empty);
+        is_err(ev("XMATCH", vec![blank(), numbers()]), CellError::NA);
+        close(ev("XMATCH", vec![blank(), rf(arr(vec![vec![Value::Empty], vec![nv(2.0)]]))]), 1.0);
+        let keys = || rf(col(&[0.0, 1.0, 3.0]));
+        let values = || av(col(&[10.0, 20.0, 30.0]));
+        close(ev("XLOOKUP", vec![blank(), keys(), values(), n(999.0), n(0.0)]), 999.0);
+        // Binary exact search (search mode 2 ascending, -2 descending) does not coerce the blank
+        // needle to zero either: {0} has no blank entry, {0;blank} has one last.
+        let zero = || rf(col(&[0.0]));
+        let zero_then_blank = || rf(arr(vec![vec![nv(0.0)], vec![Value::Empty]]));
+        let just_blank = || rf(arr(vec![vec![Value::Empty]]));
+        for mode in [2.0, -2.0] {
+            is_err(ev("XMATCH", vec![blank(), zero(), n(0.0), n(mode)]), CellError::NA);
+            close(ev("XMATCH", vec![blank(), zero_then_blank(), n(0.0), n(mode)]), 2.0);
+            close(ev("XMATCH", vec![blank(), just_blank(), n(0.0), n(mode)]), 1.0);
+            close(ev("XLOOKUP", vec![blank(), zero(), av(col(&[10.0])), n(999.0), n(0.0), n(mode)]), 999.0);
+            close(ev("XLOOKUP", vec![blank(), just_blank(), av(col(&[10.0])), n(999.0), n(0.0), n(mode)]), 10.0);
+        }
+        // Controls: numeric zero is still a key, and a written blank stays zero.
+        close(ev("XMATCH", vec![n(0.0), numbers()]), 1.0);
+        close(ev("XLOOKUP", vec![n(0.0), keys(), values(), n(999.0), n(0.0)]), 10.0);
+        is_err(ev("XMATCH", vec![n(0.0), just_blank(), n(0.0), n(2.0)]), CellError::NA);
+        close(ev("XMATCH", vec![empty(), zero(), n(0.0), n(2.0)]), 1.0);
+        close(ev("MATCH", vec![blank(), numbers(), n(0.0)]), 1.0);
+        close(ev("XMATCH", vec![empty(), numbers()]), 1.0);
     }
 
     /// Lookups compare numbers exactly, unlike `=` (15 significant digits). Observed in Excel 365.
