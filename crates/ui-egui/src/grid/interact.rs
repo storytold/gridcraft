@@ -574,7 +574,7 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
         if acts && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
-            let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
+            app.run_or_alert("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
         if let Some(h) = current_cell_link(app, c)
