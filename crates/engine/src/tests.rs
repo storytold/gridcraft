@@ -3100,6 +3100,24 @@ fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
     }
 }
 
+/// A hidden or very hidden sheet next to the only visible one can be deleted; the last visible
+/// sheet still can't, and the workbook keeps showing it (#4514).
+#[test]
+fn deleting_a_hidden_sheet_beside_the_last_visible_one() {
+    for hidden in [gridcraft_model::Visibility::Hidden, gridcraft_model::Visibility::VeryHidden] {
+        let mut s = s();
+        s.execute("home.insertSheet", json!({"name": "Hidden"})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(1).unwrap().visibility = hidden;
+        assert!(s.execute("home.deleteSheet", json!({"sheet": "Sheet1"})).is_err(), "the last visible sheet stays");
+        s.execute("home.deleteSheet", json!({"sheet": "Hidden"})).unwrap();
+        let wb = &s.doc().unwrap().wb;
+        assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1"], "{hidden:?}");
+        assert_eq!(wb.active().unwrap().name, "Sheet1");
+        assert!(s.execute("home.deleteSheet", json!({"sheet": "Sheet1"})).is_err(), "the only sheet stays");
+    }
+}
+
 #[test]
 fn workbook_view_roundtrips_after_sheet_deletion_and_reordering() {
     let view = gridcraft_model::WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: true, show_vertical_scroll: false, tab_ratio: 350 };
