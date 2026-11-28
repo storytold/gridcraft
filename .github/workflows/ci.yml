@@ -26,3 +26,14 @@ jobs:
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
         libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+
+  interaction-performance:
+    # Frame-count drag latency. Same setup as `gate`; ignored tests are not part of `cargo xtask ci`.
+    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    with:
+      craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+      packages: >-
+        pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
+        libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+      command: cargo test --release -p gridcraft-ui-egui --test it -- --ignored drag_selection_visual_latency --nocapture
+      timeout-minutes: 30
