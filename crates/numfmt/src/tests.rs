@@ -322,6 +322,30 @@ fn date_serial_boundaries() {
 }
 
 #[test]
+fn negative_times_render_in_1904_only() {
+    let g = |code: &str, v: f64, sys| format_value(&Value::Number(v), &NumberFormat::parse(code), sys).text;
+    // Time-only sections: the 1904 system shows the magnitude with a minus sign (#3356).
+    assert_eq!(g("[h]:mm", -1.5, DateSystem::D1904), "-36:00");
+    assert_eq!(g("h:mm", -0.25, DateSystem::D1904), "-6:00");
+    assert_eq!(g("[mm]:ss", -1.0 / 1440.0, DateSystem::D1904), "-01:00");
+    // The 1900 system shows hashes for any negative date or time.
+    assert_eq!(g("[h]:mm", -1.5, DateSystem::D1900), "########");
+    assert_eq!(g("h:mm", -0.25, DateSystem::D1900), "########");
+    // Calendar sections stay out of range below the epoch in both systems.
+    assert_eq!(g("m/d/yyyy", -1.0, DateSystem::D1904), "########");
+    assert_eq!(g("m/d/yyyy h:mm", -1.5, DateSystem::D1904), "########");
+    // Positive controls.
+    assert_eq!(g("[h]:mm", 1.5, DateSystem::D1904), "36:00");
+    assert_eq!(g("h:mm", 0.25, DateSystem::D1904), "6:00");
+    assert_eq!(g("[h]:mm", 1.5, DateSystem::D1900), "36:00");
+    // A negative section of its own still wins over the sign prefix.
+    assert_eq!(g("[h]:mm;\"neg\"", -1.5, DateSystem::D1904), "neg");
+    // TEXT shares the path: the 1904 negative time is showable, the 1900 one is #VALUE!.
+    assert_eq!(text_function(&Value::Number(-1.5), "[h]:mm", DateSystem::D1904), Ok("-36:00".into()));
+    assert_eq!(text_function(&Value::Number(-1.5), "[h]:mm", DateSystem::D1900), Err(CellError::Value));
+}
+
+#[test]
 fn text_and_other_values() {
     assert_eq!(t("@", "hello"), "hello");
     assert_eq!(t("\"<\"@\">\"", "x"), "<x>");
