@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (FILTERXML works and WEBSERVICE has its host hook; PERCENTOF and TRIMRANGE are no longer listed as missing; earlier: GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -19,18 +19,19 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
 - **Working** excludes stubs that return an error by design: the 7 CUBE functions (`#N/A`, no
-  cube connections) and WEBSERVICE and FILTERXML (`#VALUE!`). Excel for Mac also lacks
-  WEBSERVICE and FILTERXML; Excel for Windows has them.
+  cube connections) and WEBSERVICE (`#VALUE!` until the host installs a `WebFetcher`; none ships
+  yet, so no workbook makes a network request). Excel for Mac also lacks WEBSERVICE and
+  FILTERXML; Excel for Windows has them.
 - The measurement is **presence**. Depth (edge cases matching Excel) is estimated below.
 
 ## Coverage
 
-**Measured: 514 / 523 by name (98.3%); 505 / 523 working (96.6%).**
+**Measured: 514 / 523 by name (98.3%); 506 / 523 working (96.7%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
 | Statistical | 111 | 111 | 111 | 100% | — |
-| Math and trigonometry | 80 | 79 | 79 | 99% | PERCENTOF |
+| Math and trigonometry | 80 | 80 | 80 | 100% | — |
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
@@ -41,13 +42,13 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Logical | 19 | 19 | 19 | 100% | — |
 | Database | 12 | 12 | 12 | 100% | — |
 | Cube | 7 | 7 | 0 | 0% | (all 7 are `#N/A` stubs) |
-| Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
+| Web | 3 | 3 | 2 | 67% | (WEBSERVICE is a stub until a host installs a fetcher; FILTERXML and ENCODEURL work) |
 | Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **514** | **505** | **96.6%** | 9 missing, 9 stubs |
+| **Total** | **523** | **514** | **506** | **96.7%** | 9 missing, 8 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 349 / 360, 2010
-56 / 56, 2013 49 / 51, 2016 5 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 7 / 11.
+56 / 56, 2013 50 / 51, 2016 5 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 7 / 11.
 Dynamic-array and LAMBDA-era functions (FILTER, SORT, UNIQUE, XLOOKUP, VSTACK, TAKE, GROUPBY,
 PIVOTBY, REGEXTEST…) are all present.
 
@@ -64,7 +65,7 @@ This improves series preparation; it does not change the model-fitting or season
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
 | Generate GetPivotData | yes | 1–2 h | GETPIVOTDATA works; clicking a PivotTable value while typing a formula doesn't insert it yet |
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
-| CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
+| CUBE* (7), WEBSERVICE | partly | 4–8 h | WEBSERVICE has its semantics and `Ctx::web_get` / `Session::set_web_fetcher` hook; a real HTTP fetcher in the app needs a dependency and a privacy decision (as for IMAGE). CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
 | CALL, REGISTER.ID, RTD | no | — | Native DLL/COM calls; not portable or safe |
 
@@ -143,6 +144,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
 | 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; a tiny step with a large residual continues iterating |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
+| 2026-11-01 | minor | FILTERXML added (strict XML reader plus an XPath 1.0 evaluator, no new dependency; several matches fill a column, no match and malformed input are `#VALUE!`). WEBSERVICE enforces Excel's limits (http/https, 2048-character URL, 32,767-character response) and asks the host through `Ctx::web_get`; with no `WebFetcher` installed it is still `#VALUE!`. PERCENTOF and TRIMRANGE removed from the missing list (both landed 2026-10-11; only the category table was stale). Working 505 / 523 |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
 | 2026-10-31 | minor | BIN2*, HEX2* and OCT2* reject surrounding spaces and tabs in source strings with `#NUM!`, matching Excel; plain unpadded values remain valid |
