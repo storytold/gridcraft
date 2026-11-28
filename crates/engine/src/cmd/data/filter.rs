@@ -249,6 +249,8 @@ fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
         "<>" => {
             if crit.contains(['*', '?']) {
                 !wild()
+            } else if crit.contains("~~") {
+                gridcraft_core::compare_text(text, &crit.replace("~~", "~")) != Ordering::Equal
             } else {
                 cmp != Some(Ordering::Equal)
             }

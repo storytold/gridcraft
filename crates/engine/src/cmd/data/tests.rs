@@ -16,6 +16,26 @@ fn filter_blanks_include_empty_text_and_formula_results() {
 }
 
 #[test]
+fn reapply_honours_an_escaped_tilde_in_custom_inequality() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let values = [["Title"], ["a~b"], ["a~~b"], ["a*b"], ["a?b"], ["axb"], ["a~b~c"], ["a~bc"]];
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A8"})).unwrap();
+    for (criterion, excluded) in [("a~~b", 1), ("a~~b~c", 6)] {
+        let workbook = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let autofilter = workbook.sheet_mut(0).unwrap().autofilter.as_mut().unwrap();
+        let comparison = ("<>".to_string(), criterion.to_string());
+        autofilter.criteria = vec![(0, FilterCriterion::Custom { a: comparison.clone(), b: Some(comparison), and: true })];
+
+        s.execute("data.reapply", json!({})).unwrap();
+        let sheet = s.doc().unwrap().wb.active().unwrap();
+        let hidden: Vec<_> = (1..8).filter(|&row| sheet.is_row_hidden(row)).collect();
+        assert_eq!(hidden, [excluded], "{criterion}");
+    }
+}
+
+#[test]
 fn subtotal_honours_header_false() {
     // #131: with header:false the first data row was treated as a header and left out of its
     // group's subtotal and the grand total.
