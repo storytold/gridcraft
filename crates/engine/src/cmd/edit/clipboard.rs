@@ -318,6 +318,7 @@ fn paste_text(s: &mut Session, p: &Json, text: &str) -> Result<Json> {
     // only as far as the text's own shape, so spans in the markup can't expand without bound.
     let html = str_param(p, "html").map(|html| crate::clip_html::table_cells(html, h, w)).unwrap_or_default();
     edit(s, |cx| {
+        cx.entry = true;
         for (ri, row) in rows.iter().enumerate() {
             for (ci, v) in row.iter().enumerate() {
                 let Some(c) = at.offset(ri as i64, ci as i64) else { continue };

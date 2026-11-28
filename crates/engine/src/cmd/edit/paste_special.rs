@@ -119,6 +119,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose or Skip Blanks, into one cell.".into()));
     }
     edit(s, |cx| {
+        // Notes and column widths write no cell, formats and validation none unless linked (a linked
+        // paste writes a formula into every cell): only the rest is an entry that grows a table.
+        cx.entry = !(matches!(what, What::Comments | What::ColumnWidths) || (!link && matches!(what, What::Formats | What::Validation)));
         // Styles from another workbook must be re-interned.
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         let mut style_map = std::collections::HashMap::new();

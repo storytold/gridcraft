@@ -146,6 +146,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let active_sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
+        cx.entry = true;
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
@@ -283,6 +284,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let mut converted: Vec<(CellRef, String)> = Vec::new();
     let mut converted_count = 0;
     edit(s, |cx| {
+        cx.entry = true;
         for (ri, row) in rows.iter().enumerate() {
             let cols: Vec<&Json> = match row.as_array() {
                 Some(a) => a.iter().collect(),
@@ -370,6 +372,7 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let input = str_param(p, "input").unwrap_or("").to_string();
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
+        cx.entry = true;
         // Each cell gets what typing the input there gives: the automatic number format where
         // it's General, its own format otherwise, text where it's Text. That depends only on
         // the cell's style, so the input is parsed once per style.
