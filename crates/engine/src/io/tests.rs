@@ -501,6 +501,40 @@ fn cfb(streams: &[&str]) -> Vec<u8> {
 const CUT_LIST: &str = "1;511;184;P3_L1_led;2162PE;16;1MM_2162PE;1MM_2162PE;;;1244121406FB;\r\n\
                             1;562.5;510;Komoda, lijevo;2162PE;19;1MM_2162PE;;;;12441214071A;124412140710\r\n";
 
+/// A spreadsheet's own web page writes a run of ordinary spaces as no-break spaces inside a
+/// `mso-spacerun:yes` span, so the browser shows them all; reading the page back gives the
+/// spaces, while a no-break space written outside such a span stays one (#4529). A span holding
+/// other text, even inside a nested span or with a line break, reads as ordinary text.
+#[test]
+fn web_page_space_runs_read_back_as_ordinary_spaces() {
+    let page = "<html><body><table>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp; </span>Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp;&nbsp; </span>Beta</td></tr>\
+        <tr><td><span style='mso-spacerun:yes'>&nbsp;</span>Alpha</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp;</span></td></tr>\
+        <tr><td><span style='mso-spacerun:yes'>&nbsp; </span></td></tr>\
+        <tr><td>Alpha Beta</td></tr>\
+        <tr><td>Alpha&nbsp;Beta</td></tr>\
+        <tr><td>A<span style='mso-spacerun:yes'>&nbsp;<span>X</span>&nbsp;</span>B</td></tr>\
+        <tr><td>A<span style='mso-spacerun:yes'>X<br>Y</span>Z</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp; </span> Beta</td></tr>\
+        <tr><td>Alpha <span style='mso-spacerun:yes'> &nbsp;</span>Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp;</span> Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp; </span><span style='mso-spacerun:yes'> &nbsp;</span>Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp; </span> <span style='mso-spacerun:yes'> &nbsp;</span>Beta</td></tr>\
+        <tr><td>Alpha<span style='mso-spacerun:yes'>&nbsp;</span><span style='mso-spacerun:yes'>&nbsp;</span>Beta</td></tr>\
+        </table></body></html>";
+    let (wb, _) = open_bytes("sheet001.htm", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let texts: Vec<String> = (0..15).map(|r| sh.value(CellRef::new(r, 0)).as_text().unwrap_or_default().to_string()).collect();
+    assert_eq!(texts[..9], ["Alpha  Beta", "Alpha   Beta", " Alpha", "Alpha ", "  ", "Alpha Beta", "Alpha\u{a0}Beta", "A\u{a0}X\u{a0}B", "AX YZ"]);
+    // Whitespace outside a span next to an ordinary space inside it collapses with it, as a
+    // browser shows it.
+    assert_eq!(texts[9..12], ["Alpha  Beta"; 3]);
+    // So does an ordinary space ending one span with one starting the next; no-break spaces don't.
+    assert_eq!(texts[12..], ["Alpha   Beta", "Alpha   Beta", "Alpha  Beta"]);
+}
+
 #[test]
 fn csv_save_keeps_the_separator_it_was_opened_with() {
     let (wb, _) = open_bytes("cut list.csv", CUT_LIST.as_bytes()).unwrap();
