@@ -69,7 +69,7 @@ impl KeptOut {
 
 /// Rewrites the values of `dxfId` and `numFmtId` attributes through the maps (ids not in a map
 /// are kept). `None` when the XML is damaged.
-fn map_style_ids(data: &[u8], dxfs: &HashMap<u32, u32>, fmts: &HashMap<u32, u32>) -> Option<Vec<u8>> {
+pub(super) fn map_style_ids(data: &[u8], dxfs: &HashMap<u32, u32>, fmts: &HashMap<u32, u32>) -> Option<Vec<u8>> {
     let text = xml::to_utf8(data);
     let mut reader = Reader::from_reader(text.as_ref());
     let mut writer = Writer::new(Vec::with_capacity(data.len()));

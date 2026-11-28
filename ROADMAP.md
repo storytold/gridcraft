@@ -136,6 +136,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-26 | XLSX shared workbooks no longer lose what makes them shared on save: the change history, the list of users and each user's custom views (filters, print settings) are written back as they were, and opening one warns that edits made in GridCraft are not recorded in its history (#4684) |
 | 2026-11-16 | A selected chart outlines its data as Excel does (series names red, category labels purple, values one blue block), and dragging a corner of the values outline changes the cells the chart plots: series keep their formatting, a wider block adds series, aligned names and labels follow, one undo step, Esc cancels; `chart.setValuesRange` does the same for scripts, the CLI and MCP (#4389, #4390) |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
@@ -296,6 +297,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-26 | minor | Progress log: XLSX shared workbooks keep their change history and custom views (#4684) |
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
 | 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; the roadmap qualifies XIRR's known `#NUM!` differences |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |

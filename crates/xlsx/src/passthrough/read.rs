@@ -56,6 +56,8 @@ pub struct KeptReader {
     /// Cache definition parts of the PivotTables kept with their sheets (source in another
     /// workbook, a data connection or the Data Model), kept with the workbook.
     pivot_caches: Vec<(String, KeptSource)>,
+    /// The workbook has users' own views (`<customWorkbookViews>`), so its sheets may have some.
+    custom_views: bool,
 }
 
 impl KeptReader {
@@ -64,7 +66,7 @@ impl KeptReader {
         self.on
     }
 
-    pub fn new(cx: &mut Ctx<'_>) -> KeptReader {
+    pub fn new(cx: &mut Ctx<'_>, wb_xml: &xml::El) -> KeptReader {
         let mut k = KeptReader {
             on: true,
             strict: false,
@@ -73,6 +75,7 @@ impl KeptReader {
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
             pivot_caches: vec![],
+            custom_views: wb_xml.child("customWorkbookViews").is_some(),
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -150,7 +153,7 @@ impl KeptReader {
                 }
                 queue.push_back((r.target.clone(), depth + 1));
             }
-            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF {
+            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF || content_type == CT_REVISION_LOG {
                 style_refs(cx, &data).ok_or_else(|| format!("{name} is damaged"))?
             } else {
                 (vec![], vec![])
@@ -167,6 +170,15 @@ impl KeptReader {
         self.keep_through(cx, p, roots, seen, &[])
     }
 
+    /// Charges `bytes` of kept XML (not a part of its own) to the kept total.
+    fn charge(&mut self, bytes: usize) -> Result<(), String> {
+        if bytes > self.budget {
+            return Err("it is too large".into());
+        }
+        self.budget -= bytes;
+        Ok(())
+    }
+
     /// [`Self::keep`] for roots whose graph may reach the rewritten kinds in `through`.
     fn keep_through(
         &mut self,
@@ -178,8 +190,13 @@ impl KeptReader {
     ) -> Result<(), String> {
         let mut new_parts: Vec<PreservedPart> = vec![];
         let mut scratch = seen.clone();
+        // All or nothing, quotas too: a group that fails gives back what its earlier roots took.
+        let (budget, parts_left) = (self.budget, self.parts_left);
         for r in roots {
-            let parts = self.closure(cx, r, &scratch, through)?;
+            let parts = self.closure(cx, r, &scratch, through).inspect_err(|_| {
+                self.budget = budget;
+                self.parts_left = parts_left;
+            })?;
             scratch.extend(parts.iter().map(|q| normalize(&q.name)));
             new_parts.extend(parts);
         }
@@ -224,6 +241,27 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
+            }
+        }
+        // A shared workbook: its change history and the users who have it open, kept as they were.
+        // Edits made here are not recorded in the history.
+        let shared: Vec<PreservedRel> = wb_rels.iter().filter(|r| !r.external && is_kind(r, SHARED_ROOTS)).cloned().collect();
+        if shared.iter().any(|r| is_kind(r, &["revisionHeaders"])) {
+            match self.keep(cx, &mut p, &shared, &mut seen) {
+                Ok(()) => cx.warn(
+                    "this is a shared workbook: sharing isn't supported here. Its change history is kept as it was, but edits made here are not recorded in it",
+                ),
+                Err(why) => cx.warn(format!("this is a shared workbook: its change history was dropped ({why}) and saving stops sharing it")),
+            }
+        }
+        if self.custom_views {
+            let views = cx.pkg.read(wb_part).ok().flatten().and_then(|b| top_fragment(&b, b"customWorkbookViews"));
+            match views.ok_or_else(|| "they could not be read".to_string()).and_then(|x| self.charge(x.len()).map(|()| x)) {
+                Ok(x) => {
+                    p.elements.push(PreservedXml { slot: "customWorkbookViews".into(), xml: x });
+                    cx.warn("custom views can't be shown or changed here; they are kept for saving");
+                }
+                Err(why) => cx.warn(format!("custom views were dropped: {why}")),
             }
         }
         // The Data Model: its tables are loaded through the workbook's connections, so it is kept
@@ -415,7 +453,7 @@ impl KeptReader {
         // Notes have one VML drawing per sheet; another one holds the header and footer pictures.
         let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
-        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled {
+        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled || self.custom_views {
             self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, controls);
         }
         for ep in pivots {
@@ -457,6 +495,9 @@ impl KeptReader {
             cx.warn(format!("sheet \"{name}\": controls and embedded objects could not be read and were dropped"));
             return;
         };
+        if scan.views_too_large {
+            cx.warn(format!("sheet \"{name}\": {CUSTOM_SHEET_VIEWS} were dropped: they are too large"));
+        }
         // Printer settings (a binary part per sheet) hang off <pageSetup r:id>.
         if let Some(id) = scan.page_setup.as_deref()
             && let Some(r) = rels.iter().find(|r| r.id == id && is_kind(r, &["printerSettings"]))
@@ -489,7 +530,7 @@ impl KeptReader {
             .collect();
         // Controls and OLE objects are drawn from shapes in the legacy VML drawing. Controls only
         // the drawing lists need it too, whether or not a `<controls>` element is left.
-        if frags.iter().any(|(slot, _)| slot != "picture") || controls.vml_only_unmodelled {
+        if frags.iter().any(|(slot, _)| slot != "picture" && slot != CUSTOM_SHEET_VIEWS) || controls.vml_only_unmodelled {
             match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen, read_controls) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
@@ -497,7 +538,7 @@ impl KeptReader {
                 }
                 Err(why) => {
                     cx.warn(format!("sheet \"{name}\": controls and embedded objects were dropped: {why}"));
-                    frags.retain(|(slot, _)| slot == "picture");
+                    frags.retain(|(slot, _)| slot == "picture" || slot == CUSTOM_SHEET_VIEWS);
                 }
             }
         }
@@ -509,12 +550,23 @@ impl KeptReader {
             })
             .is_some();
             let roots: Option<Vec<PreservedRel>> = ids.iter().map(|id| rels.iter().find(|r| r.id == *id).cloned()).collect();
+            // Custom views are kept XML of any size (other slots are bounded by what they refer to).
+            let cost = if slot == CUSTOM_SHEET_VIEWS { x.len() } else { 0 };
             let kept = match (ok, roots) {
-                (true, Some(roots)) => self.keep(cx, p, &roots, seen),
+                (true, Some(roots)) => {
+                    self.charge(cost).and_then(|()| self.keep(cx, p, &roots, seen).inspect_err(|_| self.budget = self.budget.saturating_add(cost)))
+                }
                 (false, _) => Err("its XML is damaged".into()),
                 (_, None) => Err("it refers to a missing relationship".into()),
             };
             match kept {
+                Ok(()) if slot == CUSTOM_SHEET_VIEWS => match style_refs(cx, x.as_bytes()) {
+                    Some((dxfs, _)) => {
+                        p.view_dxfs = dxfs;
+                        p.elements.push(PreservedXml { slot, xml: x });
+                    }
+                    None => cx.warn(format!("sheet \"{name}\": {slot} were dropped: its XML is damaged")),
+                },
                 Ok(()) => p.elements.push(PreservedXml { slot, xml: x }),
                 Err(why) => cx.warn(format!("sheet \"{name}\": {slot} were dropped: {why}")),
             }
@@ -594,7 +646,7 @@ fn attr_values(data: &[u8], local: &[&[u8]], mut f: impl FnMut(&[u8], &str)) -> 
 }
 
 /// The differential formats (`dxfId`) and custom number formats (`numFmtId`) of the source
-/// styles part a kept PivotTable or pivot cache refers to. `None` when its XML is damaged.
+/// styles part a kept PivotTable, pivot cache, revision log or custom view refers to. `None` when its XML is damaged.
 type StyleRefs = (Vec<(u32, gridcraft_model::Style)>, Vec<(u32, String)>);
 fn style_refs(cx: &Ctx<'_>, data: &[u8]) -> Option<StyleRefs> {
     let mut dxfs: Vec<(u32, gridcraft_model::Style)> = vec![];
@@ -627,6 +679,8 @@ struct SheetScan {
     legacy_drawing_hf: Option<String>,
     /// The relationship id on `<pageSetup>` (printer settings).
     page_setup: Option<String>,
+    /// `<customSheetViews>` was there but over [`MAX_FRAGMENT`].
+    views_too_large: bool,
 }
 
 /// Finds the sheet's `<picture>`, `<oleObjects>`, `<controls>` (also inside
@@ -636,7 +690,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
     let text = std::str::from_utf8(&data).ok()?;
     let mut reader = Reader::from_str(text);
     let mut decls: Vec<(String, String)> = vec![];
-    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, legacy_drawing_hf: None, page_setup: None };
+    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, legacy_drawing_hf: None, page_setup: None, views_too_large: false };
     let mut in_root = false;
     loop {
         let start = usize::try_from(reader.buffer_position()).ok()?;
@@ -644,14 +698,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
             Event::Eof => break,
             Event::Start(e) if !in_root => {
                 in_root = true;
-                for a in e.attributes().with_checks(false).flatten() {
-                    if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
-                        && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
-                        && !v.contains('"')
-                    {
-                        decls.push((p.to_string(), v.to_string()));
-                    }
-                }
+                decls = root_decls(&e);
             }
             Event::Start(e) => {
                 let local = e.local_name().as_ref().to_vec();
@@ -663,10 +710,12 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
                 }
                 reader.read_to_end(e.name()).ok()?;
                 let end = usize::try_from(reader.buffer_position()).ok()?;
-                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
+                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent" | b"customSheetViews");
                 if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
                     let frag = text.get(start..end)?;
                     push_fragment(&mut out, frag, &local, &decls);
+                } else if local == b"customSheetViews" {
+                    out.views_too_large = true;
                 }
             }
             Event::Empty(e) if in_root => {
@@ -712,9 +761,56 @@ fn push_fragment(out: &mut SheetScan, frag: &str, local: &[u8], decls: &[(String
     } else {
         String::from_utf8_lossy(local).into_owned()
     };
-    if SHEET_SLOTS.contains(&slot.as_str()) && !out.fragments.iter().any(|(s, _)| *s == slot) {
+    if (SHEET_SLOTS.contains(&slot.as_str()) || slot == CUSTOM_SHEET_VIEWS) && !out.fragments.iter().any(|(s, _)| *s == slot) {
         out.fragments.push((slot, frag));
     }
+}
+
+/// The first child of the root named `local` (any prefix), with the root's namespace
+/// declarations it needs. `None` when there is none, it is too large or the XML is damaged.
+fn top_fragment(bytes: &[u8], local: &[u8]) -> Option<String> {
+    let data = xml::to_utf8(bytes);
+    let text = std::str::from_utf8(&data).ok()?;
+    let mut reader = Reader::from_str(text);
+    let mut decls: Vec<(String, String)> = vec![];
+    let mut in_root = false;
+    loop {
+        let start = usize::try_from(reader.buffer_position()).ok()?;
+        match reader.read_event().ok()? {
+            Event::Eof | Event::End(_) => return None,
+            Event::Start(e) if !in_root => {
+                in_root = true;
+                decls = root_decls(&e);
+            }
+            Event::Start(e) => {
+                let found = e.local_name().as_ref() == local;
+                reader.read_to_end(e.name()).ok()?;
+                let end = usize::try_from(reader.buffer_position()).ok()?;
+                if found {
+                    let frag = text.get(start..end).filter(|_| end.saturating_sub(start) <= MAX_FRAGMENT)?;
+                    return Some(with_decls(frag, &decls));
+                }
+            }
+            Event::Empty(e) if in_root && e.local_name().as_ref() == local => {
+                return Some(with_decls(text.get(start..usize::try_from(reader.buffer_position()).ok()?)?, &decls));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The `xmlns:` declarations of a root element.
+fn root_decls(e: &BytesStart<'_>) -> Vec<(String, String)> {
+    let mut decls = vec![];
+    for a in e.attributes().with_checks(false).flatten() {
+        if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
+            && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
+            && !v.contains('"')
+        {
+            decls.push((p.to_string(), v.to_string()));
+        }
+    }
+    decls
 }
 
 /// Adds the root's namespace declarations a fragment doesn't declare itself.

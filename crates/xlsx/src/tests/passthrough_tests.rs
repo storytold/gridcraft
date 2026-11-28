@@ -20,7 +20,7 @@ const EMF: &[u8] = b"\x01\x00\x00\x00 preview";
 const CUSTOM_XML: &str = r#"<?xml version="1.0"?><root xmlns="urn:example:data"><v>42</v></root>"#;
 const CUSTOM_PROPS: &str = r#"<?xml version="1.0"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"/>"#;
 
-fn rels(items: &[(&str, &str, &str)]) -> String {
+pub(super) fn rels(items: &[(&str, &str, &str)]) -> String {
     let mut s = String::from(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
     for (id, ty, target) in items {
         let ty = if ty.starts_with("http") { ty.to_string() } else { format!("{NS_R}/{ty}") };
@@ -114,15 +114,15 @@ fn rich_package_with(content_types: &str, twin: bool) -> Vec<u8> {
 }
 
 /// An unpacked package: parts by name, content types, resolved relationships.
-struct Unpacked {
-    parts: HashMap<String, Vec<u8>>,
+pub(super) struct Unpacked {
+    pub(super) parts: HashMap<String, Vec<u8>>,
 }
 
 /// (id, type, resolved target, external)
-type RelList = Vec<(String, String, String, bool)>;
+pub(super) type RelList = Vec<(String, String, String, bool)>;
 
 impl Unpacked {
-    fn new(bytes: &[u8]) -> Unpacked {
+    pub(super) fn new(bytes: &[u8]) -> Unpacked {
         let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let mut parts = HashMap::new();
         for i in 0..z.len() {
@@ -133,10 +133,10 @@ impl Unpacked {
         }
         Unpacked { parts }
     }
-    fn text(&self, name: &str) -> String {
+    pub(super) fn text(&self, name: &str) -> String {
         String::from_utf8(self.parts.get(name).unwrap_or_else(|| panic!("no part {name}")).clone()).unwrap()
     }
-    fn rels(&self, part: &str) -> RelList {
+    pub(super) fn rels(&self, part: &str) -> RelList {
         let (dir, file) = split_dir(part);
         let name = if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") };
         let Some(b) = self.parts.get(&name) else { return vec![] };
@@ -149,13 +149,13 @@ impl Unpacked {
             })
             .collect()
     }
-    fn target(&self, part: &str, id: &str) -> (String, String) {
+    pub(super) fn target(&self, part: &str, id: &str) -> (String, String) {
         let r = self.rels(part).into_iter().find(|r| r.0 == id).unwrap_or_else(|| panic!("{part}: no relationship {id}"));
         (r.1, r.2)
     }
     /// Every part has a content type, every internal relationship target exists, rel ids are
     /// unique per part.
-    fn assert_valid(&self) {
+    pub(super) fn assert_valid(&self) {
         let types = xml::parse(self.parts.get("[Content_Types].xml").unwrap()).unwrap();
         let defaults: Vec<String> = types.kids("Default").map(|d| d.attr("Extension").unwrap().to_ascii_lowercase()).collect();
         let overrides: Vec<String> = types.kids("Override").map(|d| normalize(d.attr("PartName").unwrap())).collect();
@@ -187,14 +187,14 @@ impl Unpacked {
 }
 
 /// The value of attribute `attr` of the first `<tag …>` in `x` (`r:id` of `<pageSetup`).
-fn attr_of(x: &str, tag: &str, attr: &str) -> String {
+pub(super) fn attr_of(x: &str, tag: &str, attr: &str) -> String {
     let i = x.find(&format!("<{tag} ")).unwrap_or_else(|| panic!("no <{tag}> in {x}"));
     let head = &x[i..i + x[i..].find('>').unwrap()];
     let j = head.find(&format!(" {attr}=\"")).unwrap_or_else(|| panic!("no {attr} in {head}")) + attr.len() + 3;
     head[j..j + head[j..].find('"').unwrap()].to_string()
 }
 
-fn sheet_part(u: &Unpacked, sheet: &str) -> String {
+pub(super) fn sheet_part(u: &Unpacked, sheet: &str) -> String {
     let wb = u.text("xl/workbook.xml");
     let i = wb.find(&format!("<sheet name=\"{sheet}\"")).unwrap();
     let id = attr_of(&wb[i..], "sheet", "r:id");
