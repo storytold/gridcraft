@@ -49,3 +49,25 @@ fn double_click_on_the_fill_handle_fills_down_with_a_frame_between_the_clicks() 
     assert_eq!(h.state().session.active().unwrap().selection.a1(), "B1:B6");
     assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "edit.autoFill").count(), 1);
 }
+
+#[test]
+fn double_click_on_the_fill_handle_reports_a_refused_fill() {
+    let mut h = harness();
+    h.state_mut().run("review.protectSheet", json!({})).unwrap();
+    h.run_steps(2);
+    let before = h.state().session.active().unwrap().wb.clone();
+    let selection = h.state().session.active().unwrap().selection.clone();
+    let pos = handle(&h);
+    button(&mut h, pos, true);
+    button(&mut h, pos, false);
+    h.step();
+    button(&mut h, pos, true);
+    button(&mut h, pos, false);
+    h.run_steps(2);
+    let message = h.state().message.as_ref().expect("the refused fill explains why nothing changed");
+    assert_eq!(message.0, "GridCraft");
+    assert!(message.1.contains("on a protected sheet"));
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+    assert_eq!(h.state().session.active().unwrap().selection, selection);
+    assert_eq!([number(&h, 3), number(&h, 4), number(&h, 5)], [Value::Empty, Value::Empty, Value::Empty]);
+}
