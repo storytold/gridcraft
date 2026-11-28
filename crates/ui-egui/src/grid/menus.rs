@@ -40,22 +40,22 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            let ascending = ui.button("↑  Sort Ascending");
+            let ascending = ui.button(app.ui.language.tr("↑  Sort Ascending"));
             if ascending.clicked() {
                 let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
-            let descending = ui.button("↓  Sort Descending");
+            let descending = ui.button(app.ui.language.tr("↓  Sort Descending"));
             if descending.clicked() {
                 let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            ui.label(egui::RichText::new(app.ui.language.tr("Filter")).strong());
             let mut checks = app.grid.filter_checks.clone().unwrap_or_else(|| gridcraft_engine::cmd::data::filter_choices(&wb, si, col));
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search = app.grid.filter_search.clone();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(app.ui.language.tr("Search")).desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }
@@ -63,7 +63,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
             let all = checks.iter().filter(|c| matches(&c.label)).all(|c| c.checked);
             let mut all_new = all;
-            let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
+            let label = app.ui.language.tr(if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" });
             if ui.checkbox(&mut all_new, label).changed() {
                 for c in checks.iter_mut().filter(|c| matches(&c.label)) {
                     c.checked = all_new;
@@ -88,14 +88,14 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 .collect();
             ui.separator();
             ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
+                let clear = ui.button(app.ui.language.tr("Clear Filter"));
                 if clear.clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
                 let any = visible_checks.iter().any(|c| c.checked);
-                let apply = ui.button("Apply");
+                let apply = ui.button(app.ui.language.tr("Apply"));
                 app.grid.filter_buttons = vec![ascending.id, descending.id, clear.id, apply.id];
                 if apply.clicked() || (enter && any) {
                     let mut merged = gridcraft_engine::cmd::data::filter_choices_selection(&wb, si, col, &visible_checks);

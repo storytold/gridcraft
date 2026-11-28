@@ -13,7 +13,11 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search)
+            .desired_width(width)
+            .hint_text(crate::i18n::current(ui.ctx()).tr("Type a command, e.g. freeze, chart, bold…")),
+    );
 
     if !d.focus_initialized {
         r.request_focus();
@@ -21,14 +25,27 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let lang = crate::i18n::current(ui.ctx());
     let q = d.search.to_ascii_lowercase();
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
+        // Match the typed text against the English label/id and the translated label, so a
+        // Chinese input like 新建 also finds `file.new` while English still works.
+        .filter(|c| {
+            q.is_empty()
+                || c.label.to_ascii_lowercase().contains(&q)
+                || c.id.to_ascii_lowercase().contains(&q)
+                || lang.tr(c.label).to_lowercase().contains(&q)
+        })
+        .map(|c| {
+            // The engine's spec label and menu path are English; translate both like the Undo
+            // menu does, so the palette doesn't mix languages.
+            let menu = c.menu.iter().map(|m| lang.tr(m)).collect::<Vec<_>>().join(" › ");
+            (c.id.to_string(), lang.tr(c.label).to_string(), menu, c.shortcut_for_platform(mac))
+        })
         .take(40)
         .collect();
 

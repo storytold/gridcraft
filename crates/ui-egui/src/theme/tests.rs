@@ -256,7 +256,7 @@ fn with_installed_latin_font() -> std::io::Result<FontDefinitions> {
     std::fs::create_dir_all(&dir)?;
     let path = dir.join("Ubuntu-Light.ttf");
     std::fs::write(&path, epaint_default_fonts::UBUNTU_LIGHT)?;
-    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], path, index: 0, weight: 300.0, italic: false };
+    let face = crate::fonts::Face { family: "Ubuntu".into(), names: vec!["Ubuntu".into()], zh: String::new(), path, index: 0, weight: 300.0, italic: false };
     let fonts = font_definitions_impl(Language::En, vec![("Ubuntu".into(), vec![face])], true);
     std::fs::remove_dir_all(&dir)?;
     Ok(fonts)
