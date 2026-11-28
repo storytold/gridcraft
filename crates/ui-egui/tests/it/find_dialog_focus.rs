@@ -58,3 +58,28 @@ fn find_all_with_a_range_selected_searches_only_the_range() {
         assert_eq!(count, Some(json!(expected)), "{range} selected");
     }
 }
+
+#[test]
+fn a_refused_replacement_shows_its_error_and_keeps_the_match_selected() {
+    use egui_kittest::kittest::Queryable as _;
+    use gridcraft_engine::core::CellRef;
+
+    let mut h = harness();
+    let app = h.state_mut();
+    app.session.execute("range.setValues", json!({"range": "A1:A2", "values": [["pear"], ["pear"]]})).unwrap();
+    app.session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    app.session.execute("review.protectSheet", json!({})).unwrap();
+    app.open_dialog("find", json!({"replace": true}));
+    let dialog = app.dialog.as_mut().unwrap();
+    dialog.values.insert("what".into(), json!("pear"));
+    dialog.values.insert("with".into(), json!("fig"));
+    h.run_steps(4);
+    // The tab and action have the same label; the action is the last one.
+    h.get_all_by_label("Replace").last().expect("Replace action").click();
+    h.run_steps(4);
+    assert!(h.state().message.as_ref().is_some_and(|(title, message)| title == "Find and Replace" && message.contains("protected sheet")));
+    let doc = h.state().session.active().unwrap();
+    assert_eq!(doc.selection.active, CellRef::new(0, 0), "a refused replacement must not find the next match");
+    assert_eq!(doc.wb.active().unwrap().input_text(CellRef::new(0, 0)), "pear");
+    assert_eq!(h.state().dialog.as_ref().unwrap().name, "find");
+}

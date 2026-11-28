@@ -85,8 +85,12 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 let mut p = base.clone();
                 p["with"] = json!(with);
                 p["all"] = json!(false);
-                let _ = app.run("edit.replace", p);
-                let _ = app.run("edit.find", base.clone());
+                match app.run("edit.replace", p) {
+                    Ok(_) => {
+                        let _ = app.run("edit.find", base.clone());
+                    }
+                    Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+                }
             }
         }
         if ui.button("Find All").clicked() {
