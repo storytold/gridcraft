@@ -112,7 +112,9 @@ impl SheetApp {
     /// `logic` so a hidden or logic-only frame still saves; the monotonic timestamp check keeps a
     /// forced hidden UI pass from saving the same change twice.
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
-        let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        let dirty_xlsx = self.session.active().is_some_and(|d| {
+            d.is_dirty() && d.path.as_deref().is_some_and(|p| p.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("xlsx")))
+        });
         let now = crate::monotonic_ms();
         let autosave_due =
             self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
