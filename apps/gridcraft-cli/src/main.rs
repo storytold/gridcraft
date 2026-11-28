@@ -210,14 +210,18 @@ fn blank() -> Session {
     s
 }
 
+fn sheet_arg(s: &Session, name: &str) -> Value {
+    match name.parse::<u64>() {
+        // A number that isn't also a sheet name is an index.
+        Ok(i) if s.doc().is_ok_and(|d| d.wb.sheet_index(name).is_none()) => json!(i),
+        _ => json!(name),
+    }
+}
+
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
     if let Some(name) = sheet {
-        let p = match name.parse::<u64>() {
-            // A number that isn't also a sheet name is an index.
-            Ok(i) if s.doc().is_ok_and(|d| d.wb.sheet_index(name).is_none()) => json!({"sheet": i}),
-            _ => json!({"sheet": name}),
-        };
-        exec(s, "sheet.activate", p)?;
+        let selector = sheet_arg(s, name);
+        exec(s, "sheet.activate", json!({"sheet": selector}))?;
     }
     Ok(())
 }
@@ -365,7 +369,7 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
         p["range"] = json!(r);
     }
     if let Some(sh) = sheet {
-        p["sheet"] = json!(sh);
+        p["sheet"] = sheet_arg(s, sh);
     }
     let raw = exec(s, "sheet.read", p.clone())?;
     p["formatted"] = json!(true);

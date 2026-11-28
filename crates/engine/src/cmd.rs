@@ -323,7 +323,7 @@ pub(crate) fn target_sheet(s: &Session, p: &Json) -> Result<usize> {
     let d = s.doc()?;
     if let Some(v) = p.get("sheet") {
         if let Some(i) = v.as_u64() {
-            return if (i as usize) < d.wb.sheets.len() { Ok(i as usize) } else { Err(bad("sheet", "no such sheet")) };
+            return usize::try_from(i).ok().filter(|&index| index < d.wb.sheets.len()).ok_or_else(|| bad("sheet", "no such sheet"));
         }
         if let Some(n) = v.as_str() {
             return d.wb.sheet_index(n).ok_or_else(|| bad("sheet", format!("no sheet named `{n}`")));
