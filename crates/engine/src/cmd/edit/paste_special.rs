@@ -241,7 +241,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         } else {
                             gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)
                         };
-                        Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
+                        Some(std::sync::Arc::new(f.rewritten(moved).with_dynamic(f.dynamic)))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
                         let Some(py) = cell.py.clone() else { return Ok(None) };
@@ -362,7 +362,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     _ => None,
                                 }
                             {
-                                let text = format!("=({}){sym}{}", f.text, gridcraft_core::number_to_text(y));
+                                let text = format!("=({}){sym}{}", f.text(), gridcraft_core::number_to_text(y));
                                 new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
                                 new.value = Value::Empty;
                             }
@@ -702,7 +702,7 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
             if array != f.array
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
-                cell.formula = Some(std::sync::Arc::new(Formula { array, ..(*f).clone() }));
+                cell.formula = Some(std::sync::Arc::new((*f).clone().with_array(array)));
             }
         }
     }

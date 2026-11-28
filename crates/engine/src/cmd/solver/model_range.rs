@@ -23,7 +23,7 @@ fn formulas_down(sheet: &Sheet, start: CellRef) -> Vec<(CellRef, String)> {
     let mut out = Vec::new();
     for k in 0..MAX_MODEL_ROWS as u32 {
         let Some(c) = start.row.checked_add(k).map(|row| CellRef::new(row, start.col)) else { break };
-        let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone()) else { break };
+        let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text().into_owned()) else { break };
         let last = is_options_row(&f);
         out.push((c, f));
         if last {
@@ -237,7 +237,7 @@ pub(super) fn load_model_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let r = RangeRef::parse(body.trim()).ok_or_else(|| bad(LOAD_CMD, format!("not a range: `{text}`")))?;
     let cap = MAX_MODEL_ROWS;
     let sheet = d.wb.sheet(active).ok_or(EngineError::NoDocument)?;
-    let formula = |c: CellRef| sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text.clone());
+    let formula = |c: CellRef| sheet.cell(c).and_then(|x| x.formula.as_ref()).map(|f| f.text().into_owned());
     let rows: Vec<String> = if r.is_single() {
         let down = formulas_down(sheet, r.start);
         complete_from_cell(r.start, &down)?;

@@ -30,7 +30,7 @@ fn formula(s: &Session, sheet: &str, cell: &str) -> Arc<Formula> {
 fn put_raw(s: &mut Session, cell: &str, text: &str) {
     let wb = Arc::make_mut(&mut s.doc_mut().unwrap().wb);
     let i = wb.sheet_index("Sheet1").unwrap();
-    let f = Formula { text: text.to_string(), expr: None, array: None, dynamic: false };
+    let f = Formula::unparsed(text);
     wb.sheet_mut(i).unwrap().cells.set(CellRef::parse(cell).unwrap(), Cell::formula(f));
 }
 
@@ -44,10 +44,10 @@ fn an_edit_that_leaves_a_formula_alone_keeps_its_stored_text() {
     run(&mut s, "home.insertColumns", json!({"cols": "F:F"}));
     run(&mut s, "sheet.rename", json!({"sheet": "Spare", "name": "Spare2"}));
     run(&mut s, "home.deleteSheet", json!({"sheet": "Spare2"}));
-    assert_eq!(formula(&s, "Sheet1", "C1").text, "sum(a1,  Other!b2)");
+    assert_eq!(formula(&s, "Sheet1", "C1").text(), "sum(a1,  Other!b2)");
 
     run(&mut s, "home.insertRows", json!({"rows": "1:1"}));
-    assert_eq!(formula(&s, "Sheet1", "C2").text, "SUM(A2,Other!B2)");
+    assert_eq!(formula(&s, "Sheet1", "C2").text(), "SUM(A2,Other!B2)");
 }
 
 #[test]
@@ -55,9 +55,9 @@ fn renaming_a_referenced_sheet_rewrites_the_formula() {
     let mut s = workbook();
     put_raw(&mut s, "C1", "sum(a1,  Other!b2)");
     run(&mut s, "sheet.rename", json!({"sheet": "Other", "name": "Data"}));
-    assert_eq!(formula(&s, "Sheet1", "C1").text, "SUM(A1,Data!B2)");
+    assert_eq!(formula(&s, "Sheet1", "C1").text(), "SUM(A1,Data!B2)");
     run(&mut s, "home.deleteSheet", json!({"sheet": "Data"}));
-    assert_eq!(formula(&s, "Sheet1", "C1").text, "SUM(A1,#REF!)");
+    assert_eq!(formula(&s, "Sheet1", "C1").text(), "SUM(A1,#REF!)");
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn inserting_rows_above_a_legacy_array_moves_its_range_when_the_formula_is_uncha
     assert_eq!(formula(&s, "Sheet1", "C5").array, Some(RangeRef::parse("C5:C6").unwrap()));
     run(&mut s, "home.insertRows", json!({"rows": "3:3"}));
     let f = formula(&s, "Sheet1", "C6");
-    assert_eq!(f.text, "B1:B2*2");
+    assert_eq!(f.text(), "B1:B2*2");
     assert_eq!(f.array, Some(RangeRef::parse("C6:C7").unwrap()));
 }
 

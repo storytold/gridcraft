@@ -24,13 +24,13 @@ fn shared_formulas_and_value_types() {
     let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.name, "Data");
-    assert_eq!(s.cell(at("B2")).unwrap().formula.as_ref().unwrap().text, "A2*2+$A$1");
-    assert_eq!(s.cell(at("B3")).unwrap().formula.as_ref().unwrap().text, "A3*2+$A$1");
+    assert_eq!(s.cell(at("B2")).unwrap().formula.as_ref().unwrap().text(), "A2*2+$A$1");
+    assert_eq!(s.cell(at("B3")).unwrap().formula.as_ref().unwrap().text(), "A3*2+$A$1");
     assert_eq!(s.value(at("B2")), Value::Number(5.0));
     assert_eq!(s.value(at("A3")), Value::text("rich text"));
     assert_eq!(s.value(at("A4")), Value::Bool(true));
     assert_eq!(s.value(at("B4")), Value::Error(CellError::Div0));
-    assert_eq!(s.cell(at("C4")).unwrap().formula.as_ref().unwrap().text, "CONCAT(\"a\",\"b\")");
+    assert_eq!(s.cell(at("C4")).unwrap().formula.as_ref().unwrap().text(), "CONCAT(\"a\",\"b\")");
     assert_eq!(s.value(at("C4")), Value::text("ab"));
     assert_eq!(s.value(at("D4")), Value::Number(45292.5));
     let a5 = s.cell(at("A5")).unwrap().formula.clone().unwrap();
@@ -38,7 +38,7 @@ fn shared_formulas_and_value_types() {
     assert!(s.cell(at("B5")).is_none() && s.cell(at("A6")).is_none(), "a legacy array's cached values are dropped too");
     let c5 = s.cell(at("C5")).unwrap().formula.clone().unwrap();
     assert_eq!(c5.array, None, "dynamic arrays are not legacy CSE arrays");
-    assert_eq!(c5.text, "SEQUENCE(3)");
+    assert_eq!(c5.text(), "SEQUENCE(3)");
     assert!(s.cell(at("C6")).is_none(), "spilled cached values are dropped so the formula can spill");
     // Rows/cells without r continue from the previous position.
     assert_eq!(s.value(at("A7")), Value::Number(9.0));
@@ -772,7 +772,7 @@ fn user_defined_function_prefix_round_trips() {
     let (wb, _) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
     for (a, f) in cases {
-        assert_eq!(s.cell(at(a)).unwrap().formula.as_ref().unwrap().text, f, "read {a}");
+        assert_eq!(s.cell(at(a)).unwrap().formula.as_ref().unwrap().text(), f, "read {a}");
     }
     let bytes = crate::write_xlsx(&wb).unwrap();
     let mut pkg = crate::package::Package::open(&bytes).unwrap();
@@ -799,7 +799,7 @@ fn legacy_formulas_read_with_implicit_intersection() {
     let names = r#"<definedNames><definedName name="Vals">Data!$A$1:$A$3</definedName></definedNames>"#;
     let (wb, _) = read_xlsx(&minimal(body, &[], "", names)).unwrap();
     let s = wb.sheet(0).unwrap();
-    let f = |a: &str| s.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text.clone(), f.array)).unwrap();
+    let f = |a: &str| s.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text().into_owned(), f.array)).unwrap();
     let cases = [
         ("B2", "TANH(@A1:A3)"),
         ("C2", "TANH(A1:A3)"),
@@ -833,8 +833,9 @@ fn legacy_formulas_use_the_callers_function_facts() {
     </sheetData>"#;
     let bytes = minimal(body, &[], "", "");
     let library = crate::FunctionInfo { is_builtin: |n| n != "MYUDF", is_scalar_arg: |n, _| n != "TANH" };
-    let text =
-        |wb: &gridcraft_model::Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let text = |wb: &gridcraft_model::Workbook, a: &str| {
+        wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()).unwrap()
+    };
     let (plain, _) = read_xlsx(&bytes).unwrap();
     assert_eq!(text(&plain, "B2"), "MYUDF(@A1:A3)", "without facts every function is built in");
     assert_eq!(text(&plain, "C2"), "TANH(@A1:A3)");
@@ -863,7 +864,7 @@ fn legacy_if_and_iferror_arguments_are_intersected_inside_array_functions() {
       <row r="4"><c r="D4"><f>SUMPRODUCT(IF(A1:A3&gt;1,1,0))</f></c><c r="E4"><f>SUMPRODUCT(IF(A1&gt;1,A1:A3,0))</f></c></row>
     </sheetData>"#;
     let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
-    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()).unwrap();
     assert_eq!(text("D2"), "SUMPRODUCT(IFERROR(@A1:A3/@A1:A3,0))");
     assert_eq!(text("E2"), "SUMPRODUCT(IFNA(@A1:A3,0),A1:A3)");
     assert_eq!(text("D4"), "SUMPRODUCT(IF(@A1:A3>1,1,0))");

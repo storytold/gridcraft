@@ -84,18 +84,103 @@ pub(crate) enum Export {
     Unchanged,
     /// As this expression (the formula without its implicit `@`), without dynamic-array metadata.
     Legacy(Expr),
+    /// As this shared base expression (shifted by the cell's `(dr, dc)`), without dynamic-array metadata.
+    LegacyShared(Arc<Expr>),
     /// With dynamic-array metadata: legacy evaluation would differ.
     Dynamic,
 }
 
+#[derive(Clone)]
+enum SharedExportEntry {
+    Unchanged,
+    Legacy(Arc<Expr>),
+    Dynamic,
+    PerCell,
+}
+
+/// Whether shifting `e` by `(dr, dc)` pushes any relative reference off the worksheet grid (`#REF!`).
+fn shift_hits_oob(e: &Expr, dr: i32, dc: i32) -> bool {
+    if dr == 0 && dc == 0 {
+        return false;
+    }
+    let (dr, dc) = (i64::from(dr), i64::from(dc));
+    let mut oob = false;
+    e.walk(&mut |x| {
+        if !oob
+            && let Expr::Ref(r) = x
+            && gridcraft_formula::adjust::shift_ref_kind(&r.kind, dr, dc).is_none()
+        {
+            oob = true;
+        }
+    });
+    oob
+}
+
+/// A shared base's range dimensions are stable only when both ends translate together.
+/// Legacy analysis uses these dimensions for scalar references and for calls such as
+/// INDEX and XLOOKUP. Computed reference operators do not inspect their result's geometry.
+fn shift_changes_shape(e: &Expr) -> bool {
+    let mut varies = false;
+    e.walk(&mut |e| {
+        if let Expr::Ref(r) = e {
+            varies |= match r.kind {
+                RefKind::Range(a, b) => a.row_abs != b.row_abs || a.col_abs != b.col_abs,
+                RefKind::Rows(_, a, _, b) | RefKind::Cols(_, a, _, b) => a != b,
+                RefKind::Cell(_) => false,
+            };
+        }
+    });
+    varies
+}
+
 pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo, names: &mut NameCache) -> Export {
-    let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
+    let export_cell = |names: &mut NameCache| formula.with_expr(|e| export_expr(wb, sheet, at, e, functions, names).0).unwrap_or(Export::Unchanged);
+    if formula.is_shared()
+        && let Some((base, dr, dc)) = formula.expr_shifted()
+        && !shift_hits_oob(base, dr, dc)
+    {
+        let key = (sheet, Arc::as_ptr(base) as usize);
+        if let Some(cached) = names.shared_export.get(&key) {
+            return match cached {
+                SharedExportEntry::Unchanged => Export::Unchanged,
+                SharedExportEntry::Legacy(b) => Export::LegacyShared(Arc::clone(b)),
+                SharedExportEntry::Dynamic => Export::Dynamic,
+                SharedExportEntry::PerCell => export_cell(names),
+            };
+        }
+        let (res, per_cell) = if shift_changes_shape(base) {
+            (export_cell(names), true)
+        } else {
+            let (res, position_dependent) = export_expr(wb, sheet, at, base, functions, names);
+            let res = if position_dependent && (dr != 0 || dc != 0) { export_cell(names) } else { res };
+            (res, position_dependent)
+        };
+        let out = match res {
+            Export::Legacy(e) if !per_cell => Export::LegacyShared(Arc::new(e)),
+            other => other,
+        };
+        if names.shared_export.len() < MAX_CACHED_NAMES {
+            let entry = match &out {
+                _ if per_cell => SharedExportEntry::PerCell,
+                Export::Unchanged => SharedExportEntry::Unchanged,
+                Export::Dynamic => SharedExportEntry::Dynamic,
+                Export::LegacyShared(b) => SharedExportEntry::Legacy(Arc::clone(b)),
+                Export::Legacy(_) => SharedExportEntry::PerCell,
+            };
+            names.shared_export.insert(key, entry);
+        }
+        return out;
+    }
+    export_cell(names)
+}
+
+fn export_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr, functions: FunctionInfo, names: &mut NameCache) -> (Export, bool) {
     let mut explicit = false;
     expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
     let mut legacy = Legacy::new(wb, at, functions, names);
     if !explicit {
-        legacy.formula(expr.as_ref().clone(), sheet);
-        return if !legacy.certain {
+        legacy.formula(expr.clone(), sheet);
+        let res = if !legacy.certain {
             Export::Dynamic
         } else if !legacy.complete || legacy.inserted == 0 {
             // A formula that does not spill and needs no `@`. One the analysis cannot finish
@@ -104,29 +189,32 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
         } else {
             Export::Dynamic
         };
+        return (res, legacy.position_dependent);
     }
     // The legacy text of the formula: each `@` legacy evaluation implies at its position is
     // dropped (the reader puts it back), and so is one of a range an edit made one cell; any other
     // `@` of a single value stays, written as `_xlfn.SINGLE` in the legacy formula as Excel does.
     legacy.explicit = true;
-    let out = legacy.formula(expr.as_ref().clone(), sheet);
+    let out = legacy.formula(expr.clone(), sheet);
+    let pos_dep = legacy.position_dependent;
     if !legacy.complete || !legacy.certain {
         // A formula this analysis cannot finish or whose semantics it does not know, but that is
         // the reader's reading of some text: saved as that text. The reader adds a whole-formula
         // `@` over such formulas, or `@` where it intersects.
-        let mut candidates = vec![remove_at(expr.as_ref().clone())];
-        if let Expr::Unary(UnOp::At, x) = expr.as_ref() {
+        let mut candidates = vec![remove_at(expr.clone())];
+        if let Expr::Unary(UnOp::At, x) = expr {
             candidates.insert(0, unwrap_at(x.as_ref().clone()));
         }
         for text in candidates {
             let read = self::legacy(wb, sheet, at, &Formula::from_expr(text.clone()), functions, names);
-            if read.map_or(text == *expr, |f| f.expr_arc().is_some_and(|e| *e == *expr)) {
-                return reads_back(text).map_or(Export::Dynamic, Export::Legacy);
+            if read.map_or(text == *expr, |f| f.with_expr(|e| e == expr).unwrap_or(false)) {
+                return (reads_back(text).map_or(Export::Dynamic, Export::Legacy), pos_dep);
             }
         }
-        return Export::Dynamic;
+        return (Export::Dynamic, pos_dep);
     }
-    if !legacy.foreign && legacy.inserted == 0 { reads_back(out).map_or(Export::Dynamic, Export::Legacy) } else { Export::Dynamic }
+    let res = if !legacy.foreign && legacy.inserted == 0 { reads_back(out).map_or(Export::Dynamic, Export::Legacy) } else { Export::Dynamic };
+    (res, pos_dep)
 }
 
 /// `e` without any `@` and the parentheses [`at`] adds with one.
@@ -137,16 +225,56 @@ fn remove_at(e: Expr) -> Expr {
     })
 }
 
+#[derive(Clone)]
+enum SharedLegacyEntry {
+    Unchanged,
+    Replace(Arc<Expr>),
+    PerCell,
+}
+
 /// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
 /// dynamic-array reading, with `@` where Excel intersects. Runs once names and tables are loaded.
 pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>, functions: FunctionInfo) {
     // Defined names do not change during the pass: each is analysed once for all the cells.
     let mut names = NameCache::default();
+    let mut shared_cache: HashMap<(usize, usize), SharedLegacyEntry> = HashMap::new();
     for (si, positions) in cells {
         let Some(sheet) = wb.sheet(si) else { continue };
         let mut changed = Vec::new();
         for at in positions {
             let Some(formula) = sheet.cell(at).and_then(|c| c.formula.as_deref()) else { continue };
+            if formula.is_shared()
+                && formula.array.is_none()
+                && let Some((base, dr, dc)) = formula.expr_shifted()
+                && !shift_hits_oob(base, dr, dc)
+            {
+                let key = (si, Arc::as_ptr(base) as usize);
+                let entry = shared_cache.entry(key).or_insert_with(|| {
+                    if shift_changes_shape(base) {
+                        return SharedLegacyEntry::PerCell;
+                    }
+                    let (rewritten, pos_dep) = legacy_expr(wb, si, at, base, functions, &mut names);
+                    if pos_dep {
+                        SharedLegacyEntry::PerCell
+                    } else {
+                        match rewritten {
+                            Some(e) => SharedLegacyEntry::Replace(Arc::new(e)),
+                            None => SharedLegacyEntry::Unchanged,
+                        }
+                    }
+                });
+                match entry {
+                    SharedLegacyEntry::Unchanged => continue,
+                    SharedLegacyEntry::Replace(new_base) => {
+                        // Preserve dynamic/array/shift while replacing the shared base AST.
+                        if let Some(f) = formula.with_shared_base(Arc::clone(new_base)) {
+                            changed.push((at, f.with_dynamic(false)));
+                        }
+                        continue;
+                    }
+                    SharedLegacyEntry::PerCell => {}
+                }
+            }
             if let Some(f) = legacy(wb, si, at, formula, functions, &mut names) {
                 changed.push((at, f));
             }
@@ -168,16 +296,20 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     if formula.array.is_some() {
         return None;
     }
-    let expr = formula.expr_arc()?;
+    formula.with_expr(|expr| legacy_expr(wb, sheet, at, expr, functions, names).0).flatten().map(Formula::from_expr)
+}
+
+fn legacy_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr, functions: FunctionInfo, names: &mut NameCache) -> (Option<Expr>, bool) {
     let mut legacy = Legacy::new(wb, at, functions, names);
-    let out = legacy.formula(expr.as_ref().clone(), sheet);
+    let out = legacy.formula(expr.clone(), sheet);
+    let pos_dep = legacy.position_dependent;
     if legacy.certain && legacy.complete {
         if legacy.inserted == 0 {
-            return None;
+            return (None, pos_dep);
         }
         // Text round trip: the stored expression is exactly what the text parses to.
         if let Some(out) = reads_back(out) {
-            return Some(Formula::new(&gridcraft_formula::print(&out)));
+            return (Some(out), pos_dep);
         }
         // The reading's `@` take it past the parser's nesting limit: handled as unfinished.
     }
@@ -186,11 +318,11 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     // the whole-formula `@` when the result may be several values: legacy Excel shows one value,
     // so the formula must not spill. When that text does not parse either, the formula stays as
     // it was read.
-    let whole = matches!(expr.as_ref(), Expr::Unary(UnOp::At, _));
+    let whole = matches!(expr, Expr::Unary(UnOp::At, _));
     let multi = legacy.top != Kind::Scalar || (legacy.certain && legacy.complete);
-    (multi && !whole).then(|| self::at(expr.as_ref().clone())).and_then(reads_back).map(|e| Formula::new(&gridcraft_formula::print(&e)))
+    let res = (multi && !whole).then(|| self::at(expr.clone())).and_then(reads_back);
+    (res, pos_dep)
 }
-
 /// `e` when its text (the printer writes only the parentheses the expression has) reads back as
 /// the same expression, so a dropped `@` never takes parentheses the text needs with it. An `@`
 /// of a bare union has no such text, so its formula is saved as a dynamic one.
@@ -260,8 +392,17 @@ type NameKey = (String, usize, bool);
 #[derive(Default)]
 pub(crate) struct NameCache {
     map: HashMap<NameKey, NameInfo>,
+    /// Shared-formula export decisions keyed by `(sheet, Arc::as_ptr(base))`.
+    shared_export: HashMap<(usize, usize), SharedExportEntry>,
     /// How many names were analysed (not found in the cache).
     pub(crate) analyses: usize,
+}
+
+#[cfg(test)]
+impl NameCache {
+    pub(crate) fn with_full_shared_export_cache() -> Self {
+        Self { shared_export: (0..MAX_CACHED_NAMES).map(|i| ((usize::MAX, i), SharedExportEntry::Unchanged)).collect(), ..Self::default() }
+    }
 }
 
 /// Names kept at most: the cache is bounded even when a workbook defines a great many.
@@ -920,5 +1061,20 @@ fn scalar_arg(name: &str, i: usize) -> bool {
         "FORECAST.ETS" | "FORECAST.ETS.CONFINT" => i != 1 && i != 2,
         "FORECAST.ETS.SEASONALITY" | "FORECAST.ETS.STAT" => i > 1,
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn per_cell_shared_export_respects_cache_cap() {
+        let wb = Workbook::new();
+        let f = Formula::from_shared(Arc::new(gridcraft_formula::parse("A$1:A1").unwrap()), 1, 0);
+        let mut names = NameCache::with_full_shared_export_cache();
+        let result = export(&wb, 0, CellRef::new(1, 1), &f, FunctionInfo::default(), &mut names);
+        assert!(matches!(result, Export::Dynamic));
+        assert_eq!(names.shared_export.len(), MAX_CACHED_NAMES);
     }
 }

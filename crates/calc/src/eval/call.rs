@@ -71,7 +71,7 @@ impl<'h> Evaluator<'h> {
                     Ev::V(Value::Bool(f.is_some()))
                 } else {
                     match f {
-                        Some(f) if !hidden => Ev::V(Value::text(format!("={}", f.text))),
+                        Some(f) if !hidden => Ev::V(Value::text(format!("={}", f.text()))),
                         _ => err(CellError::NA),
                     }
                 }
@@ -80,6 +80,8 @@ impl<'h> Evaluator<'h> {
             "OFFSET" => self.offset(args),
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
+            "FILTER" => self.filter_call(args),
+            "SUMPRODUCT" => self.sumproduct_call(args),
             "XLOOKUP" => self.xlookup(args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
@@ -120,7 +122,7 @@ impl<'h> Evaluator<'h> {
                     }
                 }
                 let Some(body) = args.last() else { return err(CellError::Value) };
-                Ev::L(Arc::new(Lambda { params, body: body.clone(), env: self.env.clone() }))
+                Ev::L(Arc::new(Lambda { params, body: body.clone(), env: self.env.clone(), shift: self.shift }))
             }
             "ISOMITTED" => {
                 let r = matches!(args.first(), Some(Expr::Name(n)) if self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)).is_some_and(|(_, v)| matches!(v, Ev::V(Value::Empty))));
@@ -300,6 +302,10 @@ impl<'h> Evaluator<'h> {
     }
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
+        self.builtin_with_pre(name, args, Vec::new())
+    }
+
+    pub(super) fn builtin_with_pre(&mut self, name: &str, args: &[Expr], mut pre: Vec<(usize, Ev)>) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
             // A defined name holding a LAMBDA, or a LET-bound lambda.
             return match self.name(name) {
@@ -327,7 +333,10 @@ impl<'h> Evaluator<'h> {
             _ => None,
         };
         for (i, a) in args.iter().enumerate() {
-            let mut ev = self.eval(a);
+            let mut ev = match pre.iter().position(|(k, _)| *k == i) {
+                Some(idx) => pre.swap_remove(idx).1,
+                None => self.eval(a),
+            };
             if lambda_at == Some(i)
                 && let Ev::L(l) = &ev
             {
@@ -340,6 +349,22 @@ impl<'h> Evaluator<'h> {
                 && let [area] = areas.as_slice()
             {
                 criteria = Some(*area);
+            }
+            // A shared-formula relative range shifted off the sheet grid evaluates to `#REF!`;
+            // propagate it directly for *IF(S) reference parameters instead of turning into `#VALUE!`.
+            let is_ref_param = match spec.name {
+                "SUMIF" | "AVERAGEIF" => i == 0 || i == 2,
+                "COUNTIF" | "COUNTBLANK" => i == 0,
+                "COUNTIFS" => i.is_multiple_of(2),
+                "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => i == 0 || i % 2 == 1,
+                _ => false,
+            };
+            if is_ref_param
+                && self.shift != (0, 0)
+                && matches!(ev, Ev::V(Value::Error(CellError::Ref)))
+                && matches!(a, Expr::Ref(r) if gridcraft_formula::adjust::shift_ref_kind(&r.kind, i64::from(self.shift.0), i64::from(self.shift.1)).is_none())
+            {
+                return err(CellError::Ref);
             }
             if resizes_sum_range(name, args.len()) {
                 if i == 0 {

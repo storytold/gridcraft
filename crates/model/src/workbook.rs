@@ -7,7 +7,6 @@ use gridcraft_core::DateSystem;
 use gridcraft_formula::Expr;
 use serde::{Deserialize, Serialize};
 
-use crate::cell::Formula;
 use crate::sheet::Sheet;
 use crate::style::{StyleTable, Theme};
 
@@ -487,7 +486,7 @@ impl Workbook {
             let host = RefHost { sheet: Some(si), name: &sh.name };
             let f = |e: Expr| f(host, e);
             let changes = |t: &str| rewrite_with(&mut t.to_string(), &f, gridcraft_formula::parse);
-            let cells: Vec<(gridcraft_core::CellRef, Formula)> = sh
+            let cells: Vec<(gridcraft_core::CellRef, crate::cell::Formula)> = sh
                 .cells
                 .iter()
                 .filter_map(|(c, cell)| {
@@ -495,7 +494,7 @@ impl Workbook {
                     // its stored text, even text that isn't canonical, and isn't printed.
                     let old = cell.formula.as_ref()?;
                     let new = old.with_expr(|e| Some(f(e.clone())).filter(|n| n != e))??;
-                    Some((c, Formula { array: old.array, dynamic: old.dynamic, ..Formula::from_expr(new) }))
+                    Some((c, old.rewritten(new).with_array(old.array)))
                 })
                 .collect();
             let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
@@ -725,7 +724,7 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| (c, f.rewritten(ne).with_array(f.array)))
                 })
                 .collect();
             if fixed.is_empty() {
@@ -878,10 +877,10 @@ mod tests {
     fn rewrite_references_leaves_untouched_sheets_shared() -> Result<(), Box<dyn std::error::Error>> {
         let mut wb = Workbook::new();
         let mut other = Sheet::new("Other");
-        other.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(Formula::new("Sheet1!A1+1")));
+        other.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(crate::Formula::new("Sheet1!A1+1")));
         wb.sheets.push(Arc::new(other));
         let mut third = Sheet::new("Third");
-        third.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(Formula::new("A1+1")));
+        third.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(crate::Formula::new("A1+1")));
         // A rule that doesn't name the sheet leaves its sheet shared; one that does is rewritten.
         third.validations.push(crate::Validation { f1: "=A1>0".into(), ..Default::default() });
         wb.sheets.push(Arc::new(third));
@@ -899,7 +898,7 @@ mod tests {
         assert!(!shared(3)?, "Fourth's rule names Sheet1");
         assert_eq!(wb.sheets.get(3).and_then(|s| s.validations.first()).map(|v| v.f1.as_str()), Some("=Data!A1>0"));
         let f = wb.sheets.get(1).and_then(|s| s.cell(gridcraft_core::CellRef::new(0, 0))).and_then(|c| c.formula.clone()).ok_or("formula")?;
-        assert_eq!(f.text, "Data!A1+1");
+        assert_eq!(f.text(), "Data!A1+1");
         Ok(())
     }
 

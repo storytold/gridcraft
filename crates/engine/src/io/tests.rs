@@ -850,7 +850,7 @@ fn opening_google_sheets_export_unwraps_only_formulas_gridcraft_calculates() {
     }
     let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
     let (opened, _) = open_bytes("google.xlsx", &bytes).unwrap();
-    let text = |at: &str| opened.sheets[0].cells.get(CellRef::parse(at).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    let text = |at: &str| opened.sheets[0].cells.get(CellRef::parse(at).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned());
     assert_eq!(text("A1").as_deref(), Some("SUM(ROW(B1:B3))"));
     assert_eq!(text("A2").as_deref(), Some("IFERROR(__XLUDF.DUMMYFUNCTION(\"GOOGLETRANSLATE(\"\"hi\"\",\"\"en\"\",\"\"fr\"\")\"),\"salut\")"));
     assert_eq!(opened.sheets[0].cells.get(CellRef::parse("A2").unwrap()).map(|c| c.value.clone()), Some(Value::text("salut")));
@@ -937,7 +937,7 @@ fn sylk_files_open_with_values_formulas_formats_and_widths() {
     let sh = wb.sheet(0).unwrap();
     assert_eq!(sh.name, "Parts list", "the sheet is named after the file");
     let at = |a: &str| CellRef::parse(a).unwrap();
-    let formula = |a: &str| sh.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    let formula = |a: &str| sh.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned());
     let text = |s: &str| gridcraft_core::Value::Text(s.into());
     assert_eq!(sh.value(at("A1")), text("Item"));
     assert_eq!(sh.value(at("A2")), text("Bolts; small"), ";; is a semicolon");

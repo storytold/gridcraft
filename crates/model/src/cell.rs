@@ -1,21 +1,35 @@
 //! Cells.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use gridcraft_core::{RangeRef, Value};
 use gridcraft_formula::Expr;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::python::PyCode;
 use crate::style::StyleId;
 
-/// A parsed formula. `text` is the canonical formula text without the leading `=`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Shared formula template: a master [`Expr`] shifted by `(dr, dc)` without cloning the AST
+/// or eagerly printing the formula text.
+#[derive(Clone, Debug)]
+struct SharedFormula {
+    base: Arc<Expr>,
+    dr: i32,
+    dc: i32,
+}
+
+#[derive(Clone, Debug)]
+enum FormulaRepr {
+    Owned { text: String, expr: Option<Arc<Expr>> },
+    Shared(SharedFormula),
+}
+
+/// A parsed formula. Its text is the canonical formula text without the leading `=`.
+#[derive(Clone, Debug, Deserialize)]
 #[serde(from = "SavedFormula")]
 pub struct Formula {
-    pub text: String,
-    #[serde(skip)]
-    pub expr: Option<Arc<Expr>>,
+    repr: FormulaRepr,
     /// Legacy array formula (Ctrl+Shift+Enter) covering this range; the formula lives in the
     /// top-left cell.
     pub array: Option<RangeRef>,
@@ -23,8 +37,34 @@ pub struct Formula {
     /// The writer keeps the mark, so a formula Excel evaluates as an array is never saved as a
     /// legacy formula (which Excel evaluates with implicit intersection). Formulas entered or
     /// rewritten in GridCraft start without it, and the writer decides from their shape.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dynamic: bool,
+}
+
+impl PartialEq for Formula {
+    fn eq(&self, other: &Self) -> bool {
+        if self.array != other.array || self.dynamic != other.dynamic {
+            return false;
+        }
+        match (&self.repr, &other.repr) {
+            (FormulaRepr::Owned { text: a, expr: ea }, FormulaRepr::Owned { text: b, expr: eb }) => a == b && ea == eb,
+            (FormulaRepr::Shared(a), FormulaRepr::Shared(b)) if Arc::ptr_eq(&a.base, &b.base) && a.dr == b.dr && a.dc == b.dc => true,
+            _ => self.has_cached_expr() == other.has_cached_expr() && self.text() == other.text(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct BorrowedSavedFormula<'a> {
+    text: Cow<'a, str>,
+    array: Option<RangeRef>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    dynamic: bool,
+}
+
+impl Serialize for Formula {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        BorrowedSavedFormula { text: self.text(), array: self.array, dynamic: self.dynamic }.serialize(serializer)
+    }
 }
 
 impl Formula {
@@ -33,29 +73,116 @@ impl Formula {
     pub fn new(text: &str) -> Formula {
         let body = text.strip_prefix('=').unwrap_or(text);
         match gridcraft_formula::parse(body) {
-            Ok(e) => Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false },
-            Err(_) => Formula { text: body.to_string(), expr: None, array: None, dynamic: false },
+            Ok(e) => Formula::from_expr(e),
+            Err(_) => Formula { repr: FormulaRepr::Owned { text: body.to_string(), expr: None }, array: None, dynamic: false },
         }
     }
     pub fn from_expr(e: Expr) -> Formula {
-        Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false }
+        Formula { repr: FormulaRepr::Owned { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)) }, array: None, dynamic: false }
+    }
+    /// A formula sharing a parsed master expression `base` shifted by `(dr, dc)` without cloning
+    /// the AST or allocating formula text.
+    pub fn from_shared(base: Arc<Expr>, dr: i32, dc: i32) -> Formula {
+        Formula { repr: FormulaRepr::Shared(SharedFormula { base, dr, dc }), array: None, dynamic: false }
+    }
+    /// A formula keeping raw `text` verbatim with no cached AST (used for unparsed/raw-text tests).
+    pub fn unparsed(text: impl Into<String>) -> Formula {
+        Formula { repr: FormulaRepr::Owned { text: text.into(), expr: None }, array: None, dynamic: false }
+    }
+    /// Replaces the shared master expression while keeping `(dr, dc)` and all flags.
+    pub fn with_shared_base(&self, base: Arc<Expr>) -> Option<Formula> {
+        match &self.repr {
+            FormulaRepr::Shared(s) => {
+                Some(Formula { repr: FormulaRepr::Shared(SharedFormula { base, dr: s.dr, dc: s.dc }), array: self.array, dynamic: self.dynamic })
+            }
+            FormulaRepr::Owned { .. } => None,
+        }
+    }
+    /// The formula's canonical text (without leading `=`). Zero-copy for owned formulas; formatted
+    /// on demand for shared formulas.
+    pub fn text(&self) -> Cow<'_, str> {
+        match &self.repr {
+            FormulaRepr::Owned { text, .. } => Cow::Borrowed(text.as_str()),
+            FormulaRepr::Shared(s) => Cow::Owned(gridcraft_formula::print_shifted(&s.base, i64::from(s.dr), i64::from(s.dc))),
+        }
+    }
+    /// Heap bytes occupied by the formula's own text buffer (`0` for shared formulas).
+    pub fn owned_text_len(&self) -> usize {
+        match &self.repr {
+            FormulaRepr::Owned { text, .. } => text.len(),
+            FormulaRepr::Shared(_) => 0,
+        }
+    }
+    /// Whether this formula holds a shared template `(base, dr, dc)`.
+    pub fn is_shared(&self) -> bool {
+        matches!(self.repr, FormulaRepr::Shared(_))
+    }
+    /// Returns `(&base, dr, dc)` without cloning or allocating, for both owned parsed formulas
+    /// (`dr = 0, dc = 0`) and shared formulas. `None` when unparsed.
+    pub fn expr_shifted(&self) -> Option<(&Arc<Expr>, i32, i32)> {
+        match &self.repr {
+            FormulaRepr::Owned { expr: Some(e), .. } => Some((e, 0, 0)),
+            FormulaRepr::Owned { expr: None, .. } => None,
+            FormulaRepr::Shared(s) => Some((&s.base, s.dr, s.dc)),
+        }
+    }
+    /// Whether a parsed AST (owned or shared) is cached on this formula.
+    pub fn has_cached_expr(&self) -> bool {
+        matches!(self.repr, FormulaRepr::Owned { expr: Some(_), .. } | FormulaRepr::Shared(_))
+    }
+    /// Drops the cached AST (materializing text first if shared). Used by tests that verify
+    /// re-parsing fallback behavior.
+    pub fn drop_cached_expr(&mut self) {
+        let text = self.text().into_owned();
+        self.repr = FormulaRepr::Owned { text, expr: None };
+    }
+    /// Returns a copy with `array` set.
+    pub fn with_array(mut self, array: Option<RangeRef>) -> Formula {
+        self.array = array;
+        self
+    }
+    /// Returns a copy with `dynamic` set.
+    pub fn with_dynamic(mut self, dynamic: bool) -> Formula {
+        self.dynamic = dynamic;
+        self
+    }
+    /// This formula with `e` as its expression (moved, copied or adjusted). It stays dynamic if it was; `array` is the caller's to set.
+    pub fn rewritten(&self, e: Expr) -> Formula {
+        Formula::from_expr(e).with_dynamic(self.dynamic)
     }
     /// The parsed expression, re-parsing when no tree is cached.
     pub fn expr(&self) -> Option<Expr> {
-        self.expr.as_deref().cloned().or_else(|| gridcraft_formula::parse(&self.text).ok())
+        match &self.repr {
+            FormulaRepr::Owned { text, expr } => expr.as_deref().cloned().or_else(|| gridcraft_formula::parse(text).ok()),
+            FormulaRepr::Shared(s) => Some(if s.dr == 0 && s.dc == 0 {
+                s.base.as_ref().clone()
+            } else {
+                gridcraft_formula::adjust::shift_relative(s.base.as_ref().clone(), i64::from(s.dr), i64::from(s.dc))
+            }),
+        }
     }
-    /// The parsed expression without copying it (re-parses when no tree is cached).
+    /// The parsed expression without copying it for owned formulas (materializes a shifted tree
+    /// for shared formulas; re-parses when no tree is cached).
     pub fn expr_arc(&self) -> Option<Arc<Expr>> {
-        self.expr.clone().or_else(|| gridcraft_formula::parse(&self.text).ok().map(Arc::new))
+        match &self.repr {
+            FormulaRepr::Owned { text, expr } => expr.clone().or_else(|| gridcraft_formula::parse(text).ok().map(Arc::new)),
+            FormulaRepr::Shared(s) if s.dr == 0 && s.dc == 0 => Some(Arc::clone(&s.base)),
+            FormulaRepr::Shared(s) => {
+                Some(Arc::new(gridcraft_formula::adjust::shift_relative(s.base.as_ref().clone(), i64::from(s.dr), i64::from(s.dc))))
+            }
+        }
     }
     /// Runs `f` on the parsed expression, borrowing the cached tree or, when none is cached,
-    /// a freshly parsed one that is dropped afterwards. Unlike [`expr`](Self::expr) it never copies
-    /// the tree, and unlike [`expr_arc`](Self::expr_arc) it needs no reference count or `Arc`
-    /// allocation. `None` when the text does not parse.
+    /// a freshly parsed/shifted one that is dropped afterwards.
     pub fn with_expr<R>(&self, f: impl FnOnce(&Expr) -> R) -> Option<R> {
-        match &self.expr {
-            Some(e) => Some(f(e)),
-            None => gridcraft_formula::parse(&self.text).ok().map(|e| f(&e)),
+        match &self.repr {
+            FormulaRepr::Owned { expr: Some(e), .. } => Some(f(e)),
+            FormulaRepr::Owned { text, expr: None } => gridcraft_formula::parse(text).ok().map(|e| f(&e)),
+            FormulaRepr::Shared(s) if s.dr == 0 && s.dc == 0 => Some(f(&s.base)),
+            FormulaRepr::Shared(s) => {
+                let shifted = gridcraft_formula::adjust::shift_relative(s.base.as_ref().clone(), i64::from(s.dr), i64::from(s.dc));
+                Some(f(&shifted))
+            }
         }
     }
 }
@@ -75,10 +202,9 @@ struct SavedFormula {
 impl From<SavedFormula> for Formula {
     fn from(f: SavedFormula) -> Formula {
         let expr = gridcraft_formula::parse(&f.text).ok().map(Arc::new);
-        Formula { text: f.text, expr, array: f.array, dynamic: f.dynamic }
+        Formula { repr: FormulaRepr::Owned { text: f.text, expr }, array: f.array, dynamic: f.dynamic }
     }
 }
-
 /// A static picture stored as cell content, independent of floating drawing anchors.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CellPicture {
@@ -131,7 +257,7 @@ impl Cell {
             return py.code.clone();
         }
         if let Some(f) = &self.formula {
-            return format!("={}", f.text);
+            return format!("={}", f.text());
         }
         match &self.value {
             Value::Text(t) => {
@@ -146,7 +272,7 @@ impl Cell {
     /// legacy array formula in braces (`{=A1:A2*2}`).
     pub fn bar_text(&self) -> String {
         match &self.formula {
-            Some(f) if f.array.is_some() => format!("{{={}}}", f.text),
+            Some(f) if f.array.is_some() => format!("{{={}}}", f.text()),
             _ => self.input_text(),
         }
     }
@@ -164,21 +290,21 @@ mod tests {
         array.dynamic = true;
         for f in [Formula::new("=SUM(A1:A3)+'My Sheet'!B2"), Formula::new("=LET(x,A1*2,x+1)"), array] {
             let back: Formula = serde_json::from_str(&serde_json::to_string(&f)?)?;
-            assert!(back.expr.is_some(), "{}: the tree is cached after reading", f.text);
+            assert!(back.has_cached_expr(), "{}: the tree is cached after reading", f.text());
             assert_eq!(back, f);
         }
         // Saved text is kept as written, even when the canonical print differs, and its tree is
         // the one the text parses to.
         let back: Formula = serde_json::from_str(r#"{"text": "sum( a1 , 2 )", "array": null}"#)?;
-        assert_eq!(back.text, "sum( a1 , 2 )");
+        assert_eq!(back.text(), "sum( a1 , 2 )");
         assert!(!back.dynamic);
-        assert_eq!(back.expr.as_deref(), gridcraft_formula::parse("sum( a1 , 2 )").ok().as_ref());
-        assert!(back.expr.is_some());
+        assert_eq!(back.expr(), gridcraft_formula::parse("sum( a1 , 2 )").ok());
+        assert!(back.has_cached_expr());
         // Text that doesn't parse caches nothing, as `Formula::new` does.
         let bad = Formula::new("=SUM(");
         let back: Formula = serde_json::from_str(&serde_json::to_string(&bad)?)?;
         assert_eq!(back, bad);
-        assert!(back.expr.is_none());
+        assert!(!back.has_cached_expr());
         Ok(())
     }
 
@@ -200,10 +326,33 @@ mod tests {
         for (c, cell) in before.cells.iter() {
             let (Some(f), Some(read)) = (&cell.formula, after.cell(c).and_then(|cell| cell.formula.as_ref())) else { continue };
             assert_eq!(read, f, "{c:?}: text, tree and flags as saved");
-            assert_eq!(read.expr.is_some(), gridcraft_formula::parse(&f.text).is_ok(), "{c:?}: every formula that parses has its tree");
+            assert_eq!(read.has_cached_expr(), gridcraft_formula::parse(&f.text()).is_ok(), "{c:?}: every formula that parses has its tree");
             formulas += 1;
         }
         assert_eq!(formulas, 4);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_formula_shares_ast_and_roundtrips_json_and_equality() -> Result<(), Box<dyn std::error::Error>> {
+        let base = Arc::new(gridcraft_formula::parse("IF(A1>0,B1*$C$1,0)")?);
+        let mut formulas = Vec::with_capacity(500);
+        for dr in 0..500 {
+            formulas.push(Formula::from_shared(Arc::clone(&base), dr, 0));
+        }
+        assert_eq!(Arc::strong_count(&base), 501, "all 500 formulas share one master AST");
+        for (dr, f) in formulas.iter().enumerate() {
+            let expected = Formula::new(&format!("=IF(A{r}>0,B{r}*$C$1,0)", r = dr + 1));
+            assert_eq!(f.text(), expected.text());
+            assert_eq!(*f, expected);
+            assert_eq!(f.owned_text_len(), 0);
+        }
+        let oob = Formula::from_shared(Arc::clone(&base), -1, 0);
+        assert_eq!(oob.text(), "IF(#REF!>0,#REF!*$C$1,0)");
+        let json = serde_json::to_string(&formulas[10])?;
+        let back: Formula = serde_json::from_str(&json)?;
+        assert_eq!(back, formulas[10]);
+        assert_eq!(back.text(), "IF(A11>0,B11*$C$1,0)");
         Ok(())
     }
 }

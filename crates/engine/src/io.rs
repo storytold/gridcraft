@@ -104,14 +104,22 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    // Fast path: if no style in the workbook has a larger-than-default font or text wrapping,
+    // every row is plain and `fit_imported_rows` is an exact no-op (custom and taller explicit
+    // heights are preserved verbatim).
+    let any_tall_or_wrap = (0..wb.styles.len()).any(|i| {
+        let st = wb.styles.get(gridcraft_model::StyleId(i as u32));
+        st.font.size > gridcraft_model::DEFAULT_FONT_SIZE || st.align.wrap
+    });
+    if !any_tall_or_wrap {
+        return;
+    }
     // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
     let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
-        let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
-        rows.sort_unstable();
-        rows.dedup();
-        // One sweep over the sheet's merges for all of its rows, in ascending order.
+        let rows = sh.cells.row_indices();
+        // One sweep over the sheet's merges for all rows on this sheet.
         let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
@@ -169,7 +177,15 @@ pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
         let formulas: Vec<(CellRef, gridcraft_model::PyCode)> = sh
             .cells
             .iter()
-            .filter_map(|(c, cell)| cell.formula.as_ref().and_then(|f| gridcraft_model::PyCode::from_formula(&f.text)).map(|p| (c, p)))
+            .filter_map(|(c, cell)| {
+                let f = cell.formula.as_ref()?;
+                if let Some((base, _, _)) = f.expr_shifted()
+                    && !matches!(base.as_ref(), gridcraft_formula::Expr::Call(n, _) if n.eq_ignore_ascii_case("PY"))
+                {
+                    return None;
+                }
+                gridcraft_model::PyCode::from_formula(&f.text()).map(|p| (c, p))
+            })
             .collect();
         let max = gridcraft_model::python::MAX_RESULT_CELLS as u64;
         let spills: Vec<(CellRef, RangeRef)> = sh

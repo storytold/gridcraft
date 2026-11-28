@@ -54,12 +54,23 @@ pub fn reference_a1(r: &Reference) -> String {
 /// A1 text with `sep` between the two ends of a range (`:` or a trim operator).
 fn range_a1(r: &Reference, sep: &str) -> String {
     let mut s = String::new();
-    push_range_a1(&mut s, r, sep);
+    push_range_a1(&mut s, r, sep, (0, 0));
     s
 }
 
-/// Appends [`range_a1`]`(r, sep)` to `s`.
-fn push_range_a1(s: &mut String, r: &Reference, sep: &str) {
+/// Appends [`range_a1`]`(r, sep)` to `s`, shifting relative coordinates by `(dr, dc)`.
+fn push_range_a1(s: &mut String, r: &Reference, sep: &str, shift: (i64, i64)) {
+    let kind = if shift == (0, 0) {
+        r.kind.clone()
+    } else {
+        match crate::adjust::shift_ref_kind(&r.kind, shift.0, shift.1) {
+            Some(k) => k,
+            None => {
+                s.push_str("#REF!");
+                return;
+            }
+        }
+    };
     match &r.sheet {
         SheetSel::Current => {}
         SheetSel::Named(n) => {
@@ -69,7 +80,7 @@ fn push_range_a1(s: &mut String, r: &Reference, sep: &str) {
         sheet @ SheetSel::Span(_, _) => s.push_str(&sheet_prefix(sheet)),
     }
     let dollar = |abs: bool| if abs { "$" } else { "" };
-    match &r.kind {
+    match &kind {
         RefKind::Cell(a) => push_anchor_a1(s, a),
         RefKind::Range(a, b) => {
             push_anchor_a1(s, a);
@@ -218,18 +229,32 @@ fn number(n: f64) -> String {
 /// Prints an expression in A1 notation.
 pub fn print(e: &Expr) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None);
+    write_expr(&mut s, e, None, (0, 0));
+    s
+}
+
+/// Prints an expression in A1 notation with relative references shifted by `(dr, dc)` into `out`,
+/// without cloning the AST. Produces identical output to `print(&shift_relative(e.clone(), dr, dc))`.
+pub fn write_shifted_into(out: &mut String, e: &Expr, dr: i64, dc: i64) {
+    write_expr(out, e, None, (dr, dc));
+}
+
+/// Prints an expression in A1 notation with relative references shifted by `(dr, dc)`,
+/// without cloning the AST. Produces identical output to `print(&shift_relative(e.clone(), dr, dc))`.
+pub fn print_shifted(e: &Expr, dr: i64, dc: i64) -> String {
+    let mut s = String::new();
+    write_expr(&mut s, e, None, (dr, dc));
     s
 }
 
 /// Prints an expression in R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, Some(at), (0, 0));
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>, shift: (i64, i64)) {
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
         Expr::Text(t) => {
@@ -249,14 +274,14 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                     if ci > 0 {
                         s.push(',');
                     }
-                    write_expr(s, el, r1c1);
+                    write_expr(s, el, r1c1, shift);
                 }
             }
             s.push('}');
         }
         Expr::Ref(r) => match r1c1 {
             Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => push_range_a1(s, r, ":"),
+            None => push_range_a1(s, r, ":", shift),
         },
         Expr::Name(n) => match sheet_split(n) {
             // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
@@ -271,44 +296,50 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
         Expr::Unary(op, x) => match op {
             UnOp::Neg => {
                 s.push('-');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, shift);
             }
             UnOp::Plus => {
                 s.push('+');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, shift);
             }
             UnOp::At => {
                 s.push('@');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, shift);
             }
             UnOp::Percent => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, r1c1, shift);
                 s.push('%');
             }
             UnOp::Spill => {
-                write_expr(s, x, r1c1);
+                let shifted_err = matches!(&**x, Expr::Error(_))
+                    || (shift != (0, 0) && matches!(&**x, Expr::Ref(r) if crate::adjust::shift_ref_kind(&r.kind, shift.0, shift.1).is_none()));
+                write_expr(s, x, r1c1, shift);
                 // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
-                if !matches!(**x, Expr::Error(_)) {
+                if !shifted_err {
                     s.push('#');
                 }
             }
             UnOp::Trim(mode) => match &**x {
                 Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => match r1c1 {
                     Some(at) => s.push_str(&range_r1c1(r, at, mode.symbol())),
-                    None => push_range_a1(s, r, mode.symbol()),
+                    None => push_range_a1(s, r, mode.symbol(), shift),
                 },
                 Expr::Binary(BinOp::Range, a, b) => {
-                    write_expr(s, a, r1c1);
+                    write_expr(s, a, r1c1, shift);
                     s.push_str(mode.symbol());
-                    write_expr(s, b, r1c1);
+                    write_expr(s, b, r1c1, shift);
                 }
                 // A reference that became #REF! stays `#REF!`.
-                Expr::Error(_) => write_expr(s, x, r1c1),
+                Expr::Error(_) => write_expr(s, x, r1c1, shift),
                 // No operator form (e.g. a range shrunk to one cell): the equivalent call.
                 other => {
-                    s.push_str("TRIMRANGE(");
-                    write_expr(s, other, r1c1);
-                    let _ = write!(s, ",{0},{0})", mode.code());
+                    if shift != (0, 0) && matches!(other, Expr::Ref(r) if crate::adjust::shift_ref_kind(&r.kind, shift.0, shift.1).is_none()) {
+                        s.push_str("#REF!");
+                    } else {
+                        s.push_str("TRIMRANGE(");
+                        write_expr(s, other, r1c1, shift);
+                        let _ = write!(s, ",{0},{0})", mode.code());
+                    }
                 }
             },
         },
@@ -321,10 +352,10 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 rest.push((op, b));
                 first = a;
             }
-            write_expr(s, first, r1c1);
+            write_expr(s, first, r1c1, shift);
             for (op, right) in rest.into_iter().rev() {
                 s.push_str(op.symbol());
-                write_expr(s, right, r1c1);
+                write_expr(s, right, r1c1, shift);
             }
         }
         Expr::Call(name, args) => {
@@ -334,25 +365,25 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, r1c1, shift);
             }
             s.push(')');
         }
         Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
+            write_expr(s, c, r1c1, shift);
             s.push('(');
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, r1c1, shift);
             }
             s.push(')');
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, r1c1, shift);
             s.push(')');
         }
     }

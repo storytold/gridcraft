@@ -327,9 +327,9 @@ fn typed_value_token(v: &Value) -> String {
 }
 
 /// Non-hidden formula text of `c` (independent of whether `sh.show_formulas` is currently enabled).
-fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<&'a str> {
+fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<std::borrow::Cow<'a, str>> {
     let f = sh.cell(c).and_then(|x| x.formula.as_ref())?;
-    (!crate::display::formula_hidden(wb, sh, c)).then_some(f.text.as_str())
+    (!crate::display::formula_hidden(wb, sh, c)).then(|| f.text())
 }
 
 /// Mode-independent `<kind>:<val>:<eff_disp>` base key of a non-blank cell.

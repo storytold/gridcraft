@@ -173,7 +173,11 @@ pub enum PyFormula {
 /// formula's own text, which keeps line breaks in literal code.
 pub fn cell_code(scripts: &mut ScriptsIn, formula: &gridcraft_model::Formula, raw: &str) -> PyFormula {
     // The cheap test first: most formulas are not `PY(` calls.
-    if !gridcraft_model::python::is_py_formula(&formula.text) {
+    if let Some((base, _, _)) = formula.expr_shifted() {
+        if !matches!(base.as_ref(), Expr::Call(name, _) if name.eq_ignore_ascii_case("PY")) {
+            return PyFormula::Not;
+        }
+    } else if !gridcraft_model::python::is_py_formula(&formula.text()) {
         return PyFormula::Not;
     }
     let expr = formula.expr_arc();

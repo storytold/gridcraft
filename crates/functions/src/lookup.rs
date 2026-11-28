@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, col_to_letters, compare};
 
-use crate::criteria::{has_wildcards, lookup_equal};
+use crate::criteria::{CompiledWildcard, has_wildcards, lookup_equal};
 use crate::util::{R, arg, array_val, as_array, has, int, num, opt_bool, opt_int, opt_num, text, text_val};
 use crate::{Arg, Ctx, FnSpec};
 
@@ -42,8 +42,18 @@ fn same_type(a: &Value, b: &Value) -> bool {
 
 /// Exact search (first match, or last when `reverse`). Text needles match wildcards when `wild`.
 fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usize> {
-    let wild = wild && matches!(x, Value::Text(t) if has_wildcards(t));
-    if reverse { hay.iter().rposition(|v| lookup_equal(x, v, wild)) } else { hay.iter().position(|v| lookup_equal(x, v, wild)) }
+    if wild
+        && let Value::Text(pat) = x
+        && has_wildcards(pat)
+    {
+        let compiled = CompiledWildcard::new(pat);
+        return if reverse {
+            hay.iter().rposition(|v| matches!(v, Value::Text(t) if compiled.matches(t)))
+        } else {
+            hay.iter().position(|v| matches!(v, Value::Text(t) if compiled.matches(t)))
+        };
+    }
+    if reverse { hay.iter().rposition(|v| lookup_equal(x, v, false)) } else { hay.iter().position(|v| lookup_equal(x, v, false)) }
 }
 
 /// Approximate match of VLOOKUP, HLOOKUP, LOOKUP and MATCH: the position of the largest entry
@@ -148,11 +158,51 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     }
     let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
-    let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
+    let len = if vertical { table.cols } else { table.rows };
     if idx >= len {
         return Err(CellError::Ref);
     }
-    let pos = if approx { bsearch_last(&x, &keys, false) } else { find_exact(&x, &keys, true, false) };
+    // An exact text or numeric key is found through the table's index without copying its first
+    // column or row: the first indexed position in it, as positions ascend in row-major order.
+    let first_in_key_axis = |pos: &[u32]| {
+        if vertical {
+            pos.iter().find(|&&p| (p as usize).is_multiple_of(table.cols)).map(|&p| p as usize / table.cols)
+        } else {
+            pos.iter().find(|&&p| (p as usize) < table.cols).map(|&p| p as usize)
+        }
+    };
+    let indexed = if !approx && table.cols != 0 {
+        match &x {
+            Value::Text(t) if !has_wildcards(t) => table.text_positions(t).map(first_in_key_axis),
+            Value::Number(n) => table.number_positions(*n).map(first_in_key_axis),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let pos = match indexed {
+        Some(pos) => pos,
+        None if !approx => {
+            if let Value::Text(pat) = &x
+                && has_wildcards(pat)
+            {
+                let compiled = CompiledWildcard::new(pat);
+                if vertical {
+                    (0..table.rows).find(|&r| matches!(table.get(r, 0), Some(Value::Text(t)) if compiled.matches(t)))
+                } else {
+                    (0..table.cols).find(|&c| matches!(table.get(0, c), Some(Value::Text(t)) if compiled.matches(t)))
+                }
+            } else if vertical {
+                (0..table.rows).find(|&r| table.get(r, 0).is_some_and(|v| lookup_equal(&x, v, false)))
+            } else {
+                (0..table.cols).find(|&c| table.get(0, c).is_some_and(|v| lookup_equal(&x, v, false)))
+            }
+        }
+        None => {
+            let keys = if vertical { column(&table, 0) } else { row(&table, 0) };
+            bsearch_last(&x, &keys, false)
+        }
+    };
     let pos = pos.ok_or(CellError::NA)?;
     let v = if vertical { table.get(pos, idx) } else { table.get(idx, pos) };
     // An empty target stays blank, as in Excel: ISBLANK sees it as blank and `&` /

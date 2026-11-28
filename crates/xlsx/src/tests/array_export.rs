@@ -89,7 +89,7 @@ fn nonspilling_formulas_preserve_array_evaluation_and_metadata() {
     for (address, text, value) in cases {
         let c = results.cell(at(address)).unwrap();
         let f = c.formula.as_ref().unwrap();
-        assert_eq!(f.text, text);
+        assert_eq!(f.text(), text);
         assert_eq!(f.array, None, "dynamic formula must not become legacy CSE");
         assert_eq!(c.value, Value::Number(value));
     }
@@ -203,6 +203,82 @@ fn shared_legacy_index_match_formulas_remain_scalar_after_xlsx_roundtrip() {
 }
 
 #[test]
+fn legacy_shared_read_uses_the_shifted_reference_shape() {
+    let source = super::minimal(
+        r#"<sheetData>
+            <row r="1">
+                <c r="B1"><f t="shared" ref="B1:B2" si="0">A$1:A1</f></c>
+                <c r="D1"><f t="shared" ref="D1:D2" si="1">INDEX($1:1,1)</f></c>
+                <c r="F1"><f t="shared" ref="F1:G1" si="2">INDEX($A:A,1)</f></c>
+                <c r="G1"><f t="shared" si="2"/></c>
+                <c r="I1"><f t="shared" ref="I1:J1" si="3">A1:$A1</f></c>
+                <c r="J1"><f t="shared" si="3"/></c>
+            </row>
+            <row r="2"><c r="B2"><f t="shared" si="0"/></c><c r="D2"><f t="shared" si="1"/></c></row>
+        </sheetData>"#,
+        &[("xl/styles.xml", r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#)],
+        r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#,
+        "",
+    );
+    let (wb, report) = read_xlsx(&source).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let sh = wb.sheet(0).unwrap();
+    for (address, text) in [
+        ("B1", "A$1:A1"),
+        ("B2", "@A$1:A2"),
+        ("D1", "INDEX($1:1,1)"),
+        ("D2", "@INDEX($1:2,1)"),
+        ("F1", "INDEX($A:A,1)"),
+        ("G1", "@INDEX($A:B,1)"),
+        ("I1", "A1:$A1"),
+        ("J1", "@B1:$A1"),
+    ] {
+        assert_eq!(sh.cell(at(address)).unwrap().formula.as_ref().unwrap().text(), text, "{address}");
+    }
+}
+
+#[test]
+fn shared_export_uses_each_members_array_policy() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let base = Arc::new(gridcraft_formula::parse("A$1:A1").unwrap());
+    let legacy = Arc::new(gridcraft_formula::parse("@A1:A2").unwrap());
+    for row in 0..70 {
+        sh.cells.set(CellRef::new(row, 1), Cell::formula(Formula::from_shared(Arc::clone(&base), row as i32, 0)));
+        sh.cells.set(CellRef::new(row, 11), Cell::formula(Formula::from_shared(Arc::clone(&legacy), row as i32, 0)));
+    }
+    for (first, next, text) in [("D1", "D2", "INDEX($1:1,1)"), ("F1", "G1", "INDEX($A:A,1)"), ("I1", "J1", "A1:$A1")] {
+        let (a, b) = (at(first), at(next));
+        let base = Arc::new(gridcraft_formula::parse(text).unwrap());
+        sh.cells.set(a, Cell::formula(Formula::from_shared(Arc::clone(&base), 0, 0)));
+        sh.cells.set(b, Cell::formula(Formula::from_shared(base, (b.row - a.row) as i32, (b.col - a.col) as i32)));
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for address in ["B1", "D1", "F1", "I1"] {
+        assert_scalar(&sheet, address);
+    }
+    for row in 2..=70 {
+        let address = format!("B{row}");
+        assert_dynamic(&sheet, &address, &address);
+        assert_eq!(cell(&sheet, &address).child("f").unwrap().text, format!("A$1:A{row}"));
+    }
+    for (address, text) in [("D2", "INDEX($1:2,1)"), ("G1", "INDEX($A:B,1)"), ("J1", "B1:$A1")] {
+        assert_dynamic(&sheet, address, address);
+        assert_eq!(cell(&sheet, address).child("f").unwrap().text, text);
+    }
+    let master = cell(&sheet, "L1").child("f").unwrap();
+    assert_eq!((master.attr("ref"), master.attr("t"), master.text.as_str()), (Some("L1:L70"), Some("shared"), "A1:A2"));
+
+    let (reopened, _) = read_xlsx(&bytes).unwrap();
+    let sh = reopened.sheet(0).unwrap();
+    for (address, text) in [("B1", "A$1:A1"), ("B70", "A$1:A70"), ("D2", "INDEX($1:2,1)"), ("G1", "INDEX($A:B,1)"), ("L70", "@A70:A71")] {
+        assert_eq!(sh.cell(at(address)).unwrap().formula.as_ref().unwrap().text(), text);
+    }
+}
+
+#[test]
 fn calculated_table_column_keeps_formula_and_cell_value() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
@@ -293,7 +369,7 @@ fn this_row_references_are_written_in_long_form() {
     let (back, _) = read_xlsx(&bytes).unwrap();
     let sh = back.sheet(0).unwrap();
     assert_eq!(sh.tables[0].columns[1].formula.as_deref(), Some("[@Input]*2"));
-    assert_eq!(sh.cell(at("B2")).unwrap().formula.as_ref().unwrap().text, "Data[@Input]*2");
+    assert_eq!(sh.cell(at("B2")).unwrap().formula.as_ref().unwrap().text(), "Data[@Input]*2");
 }
 
 /// Compare both cell and formula metadata, collecting all boundaries in the group on failure.
@@ -474,6 +550,7 @@ fn export_text(wb: &Workbook, at: CellRef, text: &str, names: &mut crate::array_
         Export::Unchanged => "unchanged".into(),
         Export::Dynamic => "dynamic".into(),
         Export::Legacy(e) => format!("legacy {}", gridcraft_formula::print(&e)),
+        Export::LegacyShared(e) => format!("legacy {}", gridcraft_formula::print(&e)),
     }
 }
 

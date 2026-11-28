@@ -6,12 +6,28 @@ use gridcraft_model::Formula;
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
+    if let Some((base, dr, dc)) = f.expr_shifted() {
+        return to_file_shifted(base, dr, dc);
+    }
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
         Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
         Some(e) => expr_to_file(Expr::clone(&e)),
-        None => f.text.clone(),
+        None => f.text().into_owned(),
     }
+}
+
+/// File-format spelling of `base` shifted by `(dr, dc)` without cloning when no file-spelling rewrite applies.
+pub fn to_file_shifted(base: &Expr, dr: i32, dc: i32) -> String {
+    if !needs_file_spelling(base) {
+        return if dr == 0 && dc == 0 {
+            gridcraft_formula::print(base)
+        } else {
+            gridcraft_formula::print_shifted(base, i64::from(dr), i64::from(dc))
+        };
+    }
+    let expr = if dr == 0 && dc == 0 { base.clone() } else { gridcraft_formula::adjust::shift_relative(base.clone(), i64::from(dr), i64::from(dc)) };
+    expr_to_file(expr)
 }
 
 /// Whether [`expr_to_file`] would change anything in `e`: a LET or LAMBDA (parameter prefixes),
@@ -171,7 +187,7 @@ fn strip_param_prefixes(e: Expr) -> Expr {
 
 /// The function Google Sheets' XLSX export wraps formulas in when it thinks Excel lacks one of
 /// their functions.
-const DUMMY_FUNCTION: &str = "__xludf.DUMMYFUNCTION";
+pub(crate) const DUMMY_FUNCTION: &str = "__xludf.DUMMYFUNCTION";
 
 /// Whether `text` may hold Google Sheets' export wrapper: a cheap test before parsing.
 fn mentions_dummy_function(text: &str) -> bool {
@@ -355,7 +371,7 @@ mod tests {
         // Found by the command-sequence fuzzer: deleting the anchor of `H5#` left `=#REF!` in
         // the workbook but `ANCHORARRAY(#REF!)` in the file, which read back differently.
         let deleted = Formula::from_expr(Expr::Unary(gridcraft_formula::UnOp::Spill, Box::new(Expr::Error(gridcraft_core::CellError::Ref))));
-        assert_eq!(deleted.text, "#REF!");
+        assert_eq!(deleted.text(), "#REF!");
         assert_eq!(to_file(&deleted), "#REF!");
     }
 
@@ -402,7 +418,7 @@ mod tests {
         // `Table1[#REF!]` was found by the command-sequence fuzzer (seed 40).
         for text in ["SUM(Table1[Done!])", "Table1[#REF!]", "Table1[@[x!]]", "Sheet2!A1+Table1[[#All],[a!b]]"] {
             let f = Formula::new(text);
-            assert_eq!(from_file(&to_file(&f)), f.text);
+            assert_eq!(from_file(&to_file(&f)), f.text());
         }
     }
 

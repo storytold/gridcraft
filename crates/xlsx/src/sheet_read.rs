@@ -3,10 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use craft_xlsx::{
-    CellFormula as CraftFormula, CellValue as CraftValue, FormulaKind as CraftFormulaKind, Row as CraftRow, SheetEntry as CraftSheetEntry,
-    SheetKind as CraftSheetKind, SheetPart as CraftSheetPart, Visibility as CraftVisibility,
-};
+use craft_xlsx::SheetPart as CraftSheetPart;
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -26,19 +23,43 @@ use crate::xml::{self, El};
 
 mod parts;
 mod rules;
+mod stream;
 
 pub use parts::read_autofilter;
 use parts::read_threaded;
 use rules::{read_cf, read_validation, read_x14_cf};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StreamedFormulaKind {
+    Normal,
+    Shared,
+    Array,
+    DataTable,
+}
+
+pub(super) struct StreamedFormula<'a> {
+    pub kind: StreamedFormulaKind,
+    pub text: &'a str,
+    pub shared_index: Option<u32>,
+    pub range: Option<RangeRef>,
+}
+
 struct Shared {
     anchor: CellRef,
-    expr: Option<Expr>,
+    expr: Option<Arc<Expr>>,
     text: String,
     unwrapped: bool,
     /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
     /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
     cost: u64,
+}
+
+struct ColTemplate {
+    base_row: u32,
+    base: Arc<Expr>,
+    /// True when `base` has no `Name`, `Struct`, or `SheetSel::Named`/`Span`, so ASCII case
+    /// differences outside quotes are guaranteed to parse to the exact same AST.
+    case_safe: bool,
 }
 
 /// What one sheet's hyperlinks have copied so far, across all its `<hyperlinks>` blocks.
@@ -49,8 +70,13 @@ struct LinkBudget {
 }
 
 #[derive(Default)]
-struct RowState {
+pub(super) struct RowState {
     shared: HashMap<u32, Shared>,
+    /// Per-column last parsed formula template, used to deduplicate non-shared repeated column
+    /// formulas (common in Google Sheets exports and Excel files) into shared `Arc<Expr>`s.
+    col_templates: HashMap<u32, ColTemplate>,
+    /// Reusable text buffer for shifted-formula fast-match comparisons.
+    scratch: String,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
     dynamic: Vec<RangeRef>,
@@ -62,7 +88,6 @@ struct RowState {
     /// inside an array range (where a formula's cached values otherwise give way to the spill).
     shared_copy_refused: bool,
 }
-
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
 /// value gives way to the formula that will fill it (or, for a Python cell, becomes its
 /// result). Charges every scanned range against one work budget, then gives up consulting the
@@ -189,212 +214,583 @@ fn to_range_ref(r: craft_xlsx::Range) -> RangeRef {
     RangeRef::new(CellRef::new(r.first.row, r.first.col), CellRef::new(r.last.row, r.last.col))
 }
 
-fn map_craft_error(e: craft_xlsx::CellError) -> CellError {
-    match e {
-        craft_xlsx::CellError::Null => CellError::Null,
-        craft_xlsx::CellError::Div0 => CellError::Div0,
-        craft_xlsx::CellError::Value => CellError::Value,
-        craft_xlsx::CellError::Ref => CellError::Ref,
-        craft_xlsx::CellError::Name => CellError::Name,
-        craft_xlsx::CellError::Num => CellError::Num,
-        craft_xlsx::CellError::NA => CellError::NA,
-        craft_xlsx::CellError::GettingData => CellError::GettingData,
-        craft_xlsx::CellError::Spill => CellError::Spill,
-        craft_xlsx::CellError::Calc => CellError::Calc,
-        _ => CellError::Value,
-    }
-}
-
 /// Reads the sheet part `part`, with the VML shape numbers of the form controls read into the
 /// model (pass-through keeps the other controls).
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, crate::controls::ReadControls), IoError> {
-    if !cx.pkg.has(part) {
+    let Some(bytes) = cx.pkg.read(part)? else {
         return Err(IoError::Format(format!("missing part {part}")));
-    }
+    };
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let entry = CraftSheetEntry {
-        name: name.to_string(),
-        sheet_id: 0,
-        rel_id: String::new(),
-        kind: CraftSheetKind::Worksheet,
-        visibility: CraftVisibility::Visible,
-        part: Some(part.to_string()),
-    };
-    let prev_warnings = cx.pkg.craft_mut().warnings().len();
-    let mut remaining_cells = MAX_CELLS.saturating_sub(cx.cells);
-    let mut rows = Vec::new();
-    let sheet_part = cx
-        .pkg
-        .craft_mut()
-        .sheet(&entry, |row| {
-            let n = row.cells.len() as u64;
-            if n > remaining_cells {
-                return Err(craft_xlsx::Error::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
-            }
-            remaining_cells -= n;
-            rows.push(row);
-            Ok(())
-        })
-        .map_err(|e| match e {
-            craft_xlsx::Error::TooLarge(m) if m.contains("XML") || m.contains("node") || m.contains("nested") => {
-                IoError::Format(format!("sheet \"{name}\" is damaged ({m})"))
-            }
-            other => craft_error(other),
-        })?;
-    let total_cells: u64 = rows.iter().map(|r| r.cells.len() as u64).sum();
-    if sheet_part.dropped_cells > 0 && sheet_part.dropped_cells.saturating_add(total_cells) > crate::xml::MAX_XML_NODES as u64 {
+    let streamed = stream::stream_worksheet(&bytes, cx, &mut sheet, &mut st)?;
+    drop(bytes);
+    if let Some(msg) = streamed.damaged {
+        cx.warn(format!("sheet \"{name}\" is damaged ({msg}); kept {} rows", streamed.rows_read));
+    }
+    if streamed.dropped_cells > 0 && streamed.dropped_cells.saturating_add(streamed.total_cells) > crate::xml::MAX_XML_NODES as u64 {
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} cells", crate::xml::MAX_XML_NODES));
         return Ok((Sheet::new(name), Default::default()));
     }
-    let too_many_merges = sheet_part.merges.len() > crate::xml::MAX_XML_NODES;
-    if too_many_merges {
-        cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
-    }
-    for row in &rows {
-        read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
-    }
-    charge_cells(cx, sheet_part.dropped_cells)?;
-    let new_warnings: Vec<String> = cx.pkg.craft_mut().warnings().get(prev_warnings..).unwrap_or_default().to_vec();
-    for w in new_warnings {
-        cx.warn(w);
+    charge_cells(cx, streamed.dropped_cells)?;
+    if streamed.dropped > 0 {
+        cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", streamed.dropped));
     }
     settle_python_spills_past_budget(&st, &mut sheet);
+    sheet.cells.shrink_to_fit();
 
-    apply_craft_sheet_part(cx, &sheet_part, &rels, name, too_many_merges, &mut sheet)?;
-    let root = from_craft_el(&sheet_part.root);
+    let root = streamed.root;
+    apply_sheet_root_xml(cx, &root, &rels, name, &mut sheet)?;
     let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
-    read_sheet_notes_and_tables(cx, &sheet_part, &rels, &mut sheet)?;
+
+    // Build a minimal CraftSheetPart shell (table_parts + legacy_drawing + rels) for tables/comments/note shapes.
+    let mut sp = CraftSheetPart { part: part.to_string(), ..Default::default() };
+    sp.rels = cx.pkg.craft_mut().rels(part).map_err(craft_error)?;
+    if let Some(tp) = root.child("tableParts") {
+        for t in tp.kids("tablePart") {
+            if let Some(id) = t.attr("id") {
+                sp.features.table_parts.push(id.to_string());
+            }
+        }
+    }
+    sp.features.legacy_drawing = root.child("legacyDrawing").and_then(|e| e.attr("id")).map(str::to_string);
+    read_sheet_notes_and_tables(cx, &sp, &rels, &mut sheet)?;
     Ok((sheet, read_controls))
 }
 
-fn apply_craft_sheet_part(
-    cx: &mut Ctx<'_>,
-    sp: &CraftSheetPart,
-    rels: &[Rel],
-    name: &str,
-    skip_merges: bool,
-    sheet: &mut Sheet,
-) -> Result<(), IoError> {
+fn apply_sheet_root_xml(cx: &mut Ctx<'_>, root: &El, rels: &[Rel], name: &str, sheet: &mut Sheet) -> Result<(), IoError> {
     let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
     for r in rels {
         rel_by_id.entry(r.id.as_str()).or_insert(r);
     }
-    if let Some(fmt) = &sp.features.format {
-        if let Some(h) = fmt.default_row_height {
+    if let Some(fmt) = root.child("sheetFormatPr") {
+        if let Some(h) = fmt.attr_f64("defaultRowHeight") {
             let px = pt_to_px(h);
             if px > 0.0 {
                 sheet.default_row_height = px;
             }
         }
-        if let Some(w) = fmt.default_col_width {
+        if let Some(w) = fmt.attr_f64("defaultColWidth") {
             let px = col_width_to_px(w);
             if px > 0.0 {
                 sheet.default_col_width = px;
             }
-        } else if let Some(b) = fmt.base_col_width {
+        } else if let Some(b) = fmt.attr_u32("baseColWidth") {
             let px = ((f64::from(b.min(255)) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
             sheet.default_col_width = px as f32;
         }
     }
-    let cols_blocks = sp.root.children.iter().filter(|n| matches!(n, craft_xml::Node::El(e) if e.name == "cols")).count();
-    if cols_blocks > 1 {
-        apply_xml_cols(cx, sp, sheet)?;
-    } else {
-        apply_craft_cols(cx, &sp.columns, sheet)?;
+    let mut remaining_cols = MAX_COLUMN_ASSIGNMENTS;
+    for cols in root.kids("cols") {
+        for c in cols.kids("col") {
+            let raw = RawCol {
+                min: c.attr_u32("min").unwrap_or(0),
+                max: c.attr_u32("max").unwrap_or(0),
+                width: c.attr_f64("width"),
+                custom_width: c.flag("customWidth", false),
+                best_fit: c.flag("bestFit", false),
+                hidden: c.flag("hidden", false),
+                outline_level: c.attr_u32("outlineLevel").unwrap_or(0).min(7) as u8,
+                collapsed: c.flag("collapsed", false),
+                style: c.attr_u32("style"),
+            };
+            apply_col_entry(cx, raw, &mut remaining_cols, sheet)?;
+        }
     }
-    if !skip_merges {
-        for m in &sp.merges {
-            if !m.is_single() {
-                sheet.merges.push(to_range_ref(*m));
+    if let Some(mc) = root.child("mergeCells") {
+        let count = mc.kids("mergeCell").count();
+        if count > crate::xml::MAX_XML_NODES {
+            cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
+        } else {
+            for m in mc.kids("mergeCell") {
+                if let Some(r) = m.attr("ref").and_then(RangeRef::parse)
+                    && !r.is_single()
+                {
+                    sheet.merges.push(r);
+                }
             }
         }
     }
-    if let Some(v) = sp.features.views.first() {
-        apply_craft_view(v, sheet);
+    if let Some(sv) = root.child("sheetViews").and_then(|v| v.child("sheetView")) {
+        apply_xml_view(sv, sheet);
     }
     let mut fit_to_page = false;
     let mut cf_kept_cells = 0u64;
     cx.cf_ext_ids.clear();
-    for cf in &sp.features.conditional_formats {
-        read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_cells);
+    for cf in root.kids("conditionalFormatting") {
+        read_cf(cx, cf, sheet, &mut cf_kept_cells);
     }
-    if let Some(vals) = &sp.features.validations {
-        for v in &vals.items {
-            if let Some(val) = read_validation(&from_craft_el(&v.to_el())) {
+    if let Some(vals) = root.child("dataValidations") {
+        for v in vals.kids("dataValidation") {
+            if let Some(val) = read_validation(v) {
                 sheet.validations.push(val);
             }
         }
     }
-    for node in &sp.root.children {
-        let craft_xml::Node::El(child) = node else { continue };
+    for child in &root.children {
         match child.name.as_str() {
             "sheetPr" => {
-                let e = from_craft_el(child);
-                if let Some(t) = e.child("tabColor") {
+                if let Some(t) = child.child("tabColor") {
                     sheet.tab_color = Some(read_color(t, &cx.palette));
                 }
-                if let Some(o) = e.child("outlinePr") {
+                if let Some(o) = child.child("outlinePr") {
                     sheet.summary_below = o.flag("summaryBelow", true);
                     sheet.summary_right = o.flag("summaryRight", true);
                 }
-                fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
+                fit_to_page = child.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetProtection" => {
-                let e = from_craft_el(child);
-                if e.flag("sheet", false) {
+                if child.flag("sheet", false) {
                     sheet.protection = Some(SheetProtection {
-                        password: read_password(&e, ""),
+                        password: read_password(child, ""),
                         legacy_password_hash: None,
-                        select_locked: !e.flag("selectLockedCells", false),
-                        select_unlocked: !e.flag("selectUnlockedCells", false),
-                        format_cells: !e.flag("formatCells", true),
-                        format_columns: !e.flag("formatColumns", true),
-                        format_rows: !e.flag("formatRows", true),
-                        insert_columns: !e.flag("insertColumns", true),
-                        insert_rows: !e.flag("insertRows", true),
-                        delete_columns: !e.flag("deleteColumns", true),
-                        delete_rows: !e.flag("deleteRows", true),
-                        sort: !e.flag("sort", true),
-                        autofilter: !e.flag("autoFilter", true),
+                        select_locked: !child.flag("selectLockedCells", false),
+                        select_unlocked: !child.flag("selectUnlockedCells", false),
+                        format_cells: !child.flag("formatCells", true),
+                        format_columns: !child.flag("formatColumns", true),
+                        format_rows: !child.flag("formatRows", true),
+                        insert_columns: !child.flag("insertColumns", true),
+                        insert_rows: !child.flag("insertRows", true),
+                        delete_columns: !child.flag("deleteColumns", true),
+                        delete_rows: !child.flag("deleteRows", true),
+                        sort: !child.flag("sort", true),
+                        autofilter: !child.flag("autoFilter", true),
                     });
                 }
             }
-            "protectedRanges" => read_protected_ranges(&from_craft_el(child), sheet),
-            "autoFilter" => sheet.autofilter = read_autofilter(cx, &from_craft_el(child)),
-            "extLst" => read_ext(cx, &from_craft_el(child), sheet, &mut cf_kept_cells),
+            "protectedRanges" => read_protected_ranges(child, sheet),
+            "autoFilter" => sheet.autofilter = read_autofilter(cx, child),
+            "extLst" => read_ext(cx, child, sheet, &mut cf_kept_cells),
             _ => {}
         }
     }
     let mut link_budget = LinkBudget::default();
-    let hyperlink_blocks = sp.root.children.iter().filter(|n| matches!(n, craft_xml::Node::El(e) if e.name == "hyperlinks")).count();
-    if hyperlink_blocks > 1 {
-        for node in &sp.root.children {
-            if let craft_xml::Node::El(hl) = node
-                && hl.name == "hyperlinks"
-            {
-                let hl_el = from_craft_el(hl);
-                for h in hl_el.kids("hyperlink") {
-                    let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-                    let raw = RawHyperlink { range, rel_id: h.attr("id"), location: h.attr("location"), tooltip: h.attr("tooltip") };
-                    if !push_hyperlink(cx, name, raw, &rel_by_id, sheet, &mut link_budget) {
-                        break;
-                    }
-                }
+    'hl: for hl in root.kids("hyperlinks") {
+        for h in hl.kids("hyperlink") {
+            let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
+            let raw = RawHyperlink { range, rel_id: h.attr("id"), location: h.attr("location"), tooltip: h.attr("tooltip") };
+            if !push_hyperlink(cx, name, raw, &rel_by_id, sheet, &mut link_budget) {
+                break 'hl;
             }
         }
-    } else {
-        read_craft_hyperlinks(cx, name, &sp.features.hyperlinks, &rel_by_id, sheet, &mut link_budget);
     }
-    apply_craft_print(&sp.features.print, fit_to_page, sheet);
-    if let Some(id) = &sp.features.drawing
-        && let Some(rel) = rel_by_id.get(id.as_str()).copied()
+    apply_xml_print(root, fit_to_page, sheet);
+    if let Some(id) = root.child("drawing").and_then(|d| d.attr("id"))
+        && let Some(rel) = rel_by_id.get(id).copied()
     {
         let target = rel.target.clone();
         crate::drawing::read_drawing(cx, &target, sheet)?;
     }
     Ok(())
+}
+
+fn apply_xml_view(v: &El, sheet: &mut Sheet) {
+    sheet.show_gridlines = v.flag("showGridLines", true);
+    sheet.show_headings = v.flag("showRowColHeaders", true);
+    sheet.show_formulas = v.flag("showFormulas", false);
+    sheet.show_zeros = v.flag("showZeros", true);
+    sheet.show_outline_symbols = v.flag("showOutlineSymbols", true);
+    sheet.right_to_left = v.flag("rightToLeft", false);
+    sheet.view = v.attr("view").and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();
+    if let Some(z) = v.attr_u32("zoomScale") {
+        sheet.zoom = z.clamp(10, 400) as u16;
+    }
+    if let Some(c) = v.attr("topLeftCell").and_then(CellRef::parse) {
+        sheet.view_top_left = c;
+    }
+    let mut active_pane = None;
+    if let Some(p) = v.child("pane") {
+        if matches!(p.attr("state"), Some("frozen" | "frozenSplit")) {
+            let cols = p.attr_f64("xSplit").unwrap_or(0.0).clamp(0.0, (MAX_COLS - 1) as f64) as u32;
+            let rows = p.attr_f64("ySplit").unwrap_or(0.0).clamp(0.0, (MAX_ROWS - 1) as f64) as u32;
+            if rows > 0 || cols > 0 {
+                sheet.freeze = Some((rows, cols));
+                if let Some(c) = p.attr("topLeftCell").and_then(CellRef::parse) {
+                    sheet.view_top_left = c;
+                }
+            }
+        }
+        active_pane = p.attr("activePane");
+    }
+    let sel = v.kids("selection").find(|s| s.attr("pane") == active_pane).or_else(|| v.kids("selection").last());
+    if let Some(c) = sel.and_then(|s| s.attr("activeCell")).and_then(CellRef::parse) {
+        sheet.view_active = c;
+    }
+}
+
+fn apply_xml_print(root: &El, fit_to_page: bool, sheet: &mut Sheet) {
+    if let Some(o) = root.child("printOptions") {
+        sheet.print.gridlines = o.flag("gridLines", false);
+        sheet.print.headings = o.flag("headings", false);
+        sheet.print.center_h = o.flag("horizontalCentered", false);
+        sheet.print.center_v = o.flag("verticalCentered", false);
+    }
+    if let Some(pm) = root.child("pageMargins") {
+        for (i, attr) in ["left", "right", "top", "bottom", "header", "footer"].into_iter().enumerate() {
+            if let (Some(v), Some(slot)) = (pm.attr_f64(attr), sheet.print.margins.get_mut(i)) {
+                *slot = v.clamp(0.0, 50.0) as f32;
+            }
+        }
+    }
+    if let Some(ps) = root.child("pageSetup") {
+        if ps.attr("orientation") == Some("landscape") {
+            sheet.print.orientation = Orientation::Landscape;
+        }
+        sheet.print.page_order = ps.attr("pageOrder").and_then(PageOrder::parse).unwrap_or_default();
+        sheet.print.first_page_number = if ps.flag("useFirstPageNumber", false) { ps.attr_u32("firstPageNumber") } else { None };
+        if let Some(p) = ps.attr_u32("paperSize").and_then(paper_name) {
+            sheet.print.paper = p.to_string();
+        }
+        if let Some(s) = ps.attr_u32("scale") {
+            sheet.print.scale = s.clamp(10, 400) as u16;
+        }
+        if fit_to_page {
+            let w = ps.attr_u32("fitToWidth").unwrap_or(1).min(32767) as u16;
+            let h = ps.attr_u32("fitToHeight").unwrap_or(1).min(32767) as u16;
+            sheet.print.fit_to = Some((w, h));
+        }
+    }
+    if let Some(hf) = root.child("headerFooter") {
+        let pr = &mut sheet.print;
+        for (tag, slot) in [
+            ("oddHeader", &mut pr.header),
+            ("oddFooter", &mut pr.footer),
+            ("evenHeader", &mut pr.even_header),
+            ("evenFooter", &mut pr.even_footer),
+            ("firstHeader", &mut pr.first_header),
+            ("firstFooter", &mut pr.first_footer),
+        ] {
+            *slot = hf.child(tag).map(|e| xml::decode_xstring(&e.text)).unwrap_or_default().chars().take(255).collect();
+        }
+        pr.different_first = hf.flag("differentFirst", false);
+        pr.different_odd_even = hf.flag("differentOddEven", false);
+        pr.hf_scale_with_doc = hf.flag("scaleWithDoc", true);
+        pr.hf_align_with_margins = hf.flag("alignWithMargins", true);
+    }
+    if let Some(rb) = root.child("rowBreaks") {
+        sheet.print.row_breaks = rb.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&r| r > 0 && r < MAX_ROWS).collect();
+    }
+    if let Some(cb) = root.child("colBreaks") {
+        sheet.print.col_breaks = cb.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&c| c > 0 && c < MAX_COLS).collect();
+    }
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_streamed_cell(
+    cx: &mut Ctx<'_>,
+    sheet: &mut Sheet,
+    st: &mut RowState,
+    pos: CellRef,
+    raw_style: u32,
+    value: Value,
+    raw_formula: Option<StreamedFormula<'_>>,
+    value_metadata: Option<u32>,
+    cell_metadata: Option<u32>,
+) {
+    let style = cx.style((raw_style != 0).then_some(raw_style));
+    let picture = value_metadata.and_then(|vm| {
+        if vm == 0 {
+            return None;
+        }
+        let picture = (vm as usize).checked_sub(1).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
+        if picture.is_none() {
+            cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
+        }
+        picture
+    });
+    if let Some(picture) = picture {
+        if raw_formula.is_some() {
+            cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
+        }
+        sheet.set_picture(pos, picture);
+        sheet.set_style(pos, style);
+        return;
+    }
+    let dynamic = cell_metadata.is_some();
+    st.shared_copy_refused = false;
+    let formula = raw_formula.as_ref().and_then(|f| read_streamed_formula(cx, st, f, pos, dynamic));
+    let py = match (&formula, &raw_formula) {
+        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, f.text),
+        _ => crate::python_part::PyFormula::Not,
+    };
+    let (formula, py) = match py {
+        crate::python_part::PyFormula::Not => (formula, None),
+        crate::python_part::PyFormula::Code(py) => (None, Some(Arc::new(py))),
+        crate::python_part::PyFormula::Missing => {
+            forget_dynamic(st, pos);
+            (None, None)
+        }
+    };
+    if py.is_some() {
+        record_python_spill(st, sheet, pos);
+    }
+    if formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_none() && f.has_cached_expr()) {
+        cx.legacy_formulas.push(pos);
+    }
+    let spilled_from = if formula.is_none() && py.is_none() && !st.shared_copy_refused { dynamic_range(st, pos) } else { None };
+    let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
+    let value = match spilled_from {
+        Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
+            if !value.is_empty() {
+                sheet.spill.insert(pos, value);
+            }
+            sheet.spill_ranges.insert(r.start, r);
+            Value::Empty
+        }
+        Some(_) if python_anchor => value,
+        Some(_) => Value::Empty,
+        None => value,
+    };
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, *r);
+    }
+    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
+}
+
+/// Whether `e` contains no `Name` or `Struct` whose identifier case is preserved by the parser,
+/// making outside-quotes ASCII case folding (with exact matching inside `"..."`, `'...'`, and
+/// unquoted sheet selectors before `!`) 100% AST-exact.
+fn is_case_safe(e: &Expr) -> bool {
+    let mut safe = true;
+    e.walk(&mut |x| {
+        if safe && matches!(x, Expr::Name(_) | Expr::Struct(_)) {
+            safe = false;
+        }
+    });
+    safe
+}
+
+/// Compares two formula strings for byte-for-byte equality inside `"..."`, `'...'`, and unquoted
+/// sheet selectors before `!`, and ASCII case-insensitive equality elsewhere.
+fn eq_formula_outside_quotes(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    let mut quote = 0u8;
+    for i in 0..ab.len() {
+        let (x, y) = (ab[i], bb[i]);
+        if quote != 0 {
+            if x != y {
+                return false;
+            }
+            if x == quote {
+                quote = 0;
+            }
+        } else if x == b'"' || x == b'\'' {
+            if x != y {
+                return false;
+            }
+            quote = x;
+        } else if x != y {
+            if !x.eq_ignore_ascii_case(&y) {
+                return false;
+            }
+            // Preserve exact case for unquoted sheet names (`Sheet1!A1`, `Sheet1:Sheet3!A1`).
+            let mut j = i + 1;
+            while j < ab.len() && (ab[j].is_ascii_alphanumeric() || matches!(ab[j], b'_' | b'.' | b':')) {
+                j += 1;
+            }
+            if ab.get(j) == Some(&b'!') {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Returns `true` when `cur` is structurally equal to `shift_relative(base, dr, dc)` without cloning `base`.
+fn expr_eq_shifted(base: &Expr, dr: i64, dc: i64, cur: &Expr) -> bool {
+    let mut stack = Vec::with_capacity(8);
+    stack.push((base, cur));
+    while let Some((a, b)) = stack.pop() {
+        match (a, b) {
+            (Expr::Number(x), Expr::Number(y)) if x.to_bits() == y.to_bits() => {}
+            (Expr::Text(x), Expr::Text(y)) if x == y => {}
+            (Expr::Bool(x), Expr::Bool(y)) if x == y => {}
+            (Expr::Error(x), Expr::Error(y)) if x == y => {}
+            (Expr::Missing, Expr::Missing) => {}
+            (Expr::Name(x), Expr::Name(y)) if x == y => {}
+            (Expr::Struct(x), Expr::Struct(y)) if x == y => {}
+            (Expr::Ref(ra), Expr::Ref(rb)) => {
+                if ra.sheet != rb.sheet {
+                    return false;
+                }
+                match gridcraft_formula::adjust::shift_ref_kind(&ra.kind, dr, dc) {
+                    Some(k) if k == rb.kind => {}
+                    _ => return false,
+                }
+            }
+            (Expr::Ref(ra), Expr::Error(CellError::Ref)) => {
+                if gridcraft_formula::adjust::shift_ref_kind(&ra.kind, dr, dc).is_some() {
+                    return false;
+                }
+            }
+            (Expr::Unary(oa, xa), Expr::Unary(ob, xb)) if oa == ob => stack.push((xa, xb)),
+            (Expr::Paren(xa), Expr::Paren(xb)) => stack.push((xa, xb)),
+            (Expr::Binary(oa, la, ra), Expr::Binary(ob, lb, rb)) if oa == ob => {
+                stack.push((ra, rb));
+                stack.push((la, lb));
+            }
+            (Expr::Call(na, aa), Expr::Call(nb, ab)) if na == nb && aa.len() == ab.len() => {
+                for (x, y) in aa.iter().zip(ab.iter()).rev() {
+                    stack.push((x, y));
+                }
+            }
+            (Expr::Invoke(ca, aa), Expr::Invoke(cb, ab)) if aa.len() == ab.len() => {
+                for (x, y) in aa.iter().zip(ab.iter()).rev() {
+                    stack.push((x, y));
+                }
+                stack.push((ca, cb));
+            }
+            (Expr::Array(ra), Expr::Array(rb)) if ra.len() == rb.len() => {
+                for (row_a, row_b) in ra.iter().zip(rb.iter()) {
+                    if row_a.len() != row_b.len() {
+                        return false;
+                    }
+                    for (x, y) in row_a.iter().zip(row_b.iter()) {
+                        stack.push((x, y));
+                    }
+                }
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Parses or deduplicates a non-shared formula text at `pos` against the column's previous template.
+fn parse_or_dedup_formula(st: &mut RowState, pos: CellRef, text: &str) -> Formula {
+    if let Some(tmpl) = st.col_templates.get(&pos.col) {
+        let dr = pos.row as i64 - tmpl.base_row as i64;
+        if dr != 0
+            && let Ok(dr32) = i32::try_from(dr)
+        {
+            st.scratch.clear();
+            gridcraft_formula::printer::write_shifted_into(&mut st.scratch, &tmpl.base, dr, 0);
+            if text == st.scratch || (tmpl.case_safe && eq_formula_outside_quotes(text, &st.scratch)) {
+                return Formula::from_shared(Arc::clone(&tmpl.base), dr32, 0);
+            }
+        }
+    }
+    match gridcraft_formula::parse(text) {
+        Ok(parsed) => {
+            if let Some(tmpl) = st.col_templates.get(&pos.col) {
+                let dr = pos.row as i64 - tmpl.base_row as i64;
+                if let Ok(dr32) = i32::try_from(dr)
+                    && expr_eq_shifted(&tmpl.base, dr, 0, &parsed)
+                {
+                    return Formula::from_shared(Arc::clone(&tmpl.base), dr32, 0);
+                }
+            }
+            let arc = Arc::new(parsed);
+            let case_safe = is_case_safe(&arc);
+            st.col_templates.insert(pos.col, ColTemplate { base_row: pos.row, base: Arc::clone(&arc), case_safe });
+            Formula::from_shared(arc, 0, 0)
+        }
+        Err(_) => Formula::new(text),
+    }
+}
+
+fn read_streamed_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &StreamedFormula<'_>, pos: CellRef, dynamic: bool) -> Option<Formula> {
+    let mut unwrapped = false;
+    let fm = read_streamed_formula_text(cx, st, f, pos, dynamic, &mut unwrapped)?;
+    let dynamic = dynamic || unwrapped;
+    Some(fm.with_dynamic(dynamic))
+}
+
+fn read_streamed_formula_text(
+    cx: &mut Ctx<'_>,
+    st: &mut RowState,
+    f: &StreamedFormula<'_>,
+    pos: CellRef,
+    dynamic: bool,
+    unwrapped: &mut bool,
+) -> Option<Formula> {
+    let mut model = from_file(f.text);
+    if let Some(known) = cx.known_function
+        && let Some(u) = unwrap_google_sheets(&model, known)
+    {
+        model = u;
+        *unwrapped = true;
+    }
+    let text = model.as_str();
+    match f.kind {
+        StreamedFormulaKind::Shared => {
+            let si = f.shared_index?;
+            if !text.is_empty() {
+                let expr = gridcraft_formula::parse(text).ok().map(Arc::new);
+                let cost = shared_cost(text, expr.as_deref());
+                let out = match &expr {
+                    Some(e) => Formula::from_shared(Arc::clone(e), 0, 0),
+                    None => Formula::new(text),
+                };
+                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped, cost });
+                Some(out)
+            } else {
+                let Some(sh) = st.shared.get(&si) else {
+                    cx.warn("a shared formula refers to a missing master cell; kept the cached value");
+                    return None;
+                };
+                if sh.expr.is_none()
+                    && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN
+                    && sh.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
+                {
+                    cx.warn(format!(
+                        "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
+                        gridcraft_formula::MAX_FORMULA_LEN
+                    ));
+                    st.shared_copy_refused = true;
+                    return None;
+                }
+                if !charge(&mut cx.shared_formula_bytes, extra_shared_cost(sh.cost), MAX_SHARED_FORMULA_BYTES) {
+                    cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
+                    st.shared_copy_refused = true;
+                    return None;
+                }
+                *unwrapped |= sh.unwrapped;
+                Some(match &sh.expr {
+                    Some(e) => {
+                        let dr = pos.row as i64 - sh.anchor.row as i64;
+                        let dc = pos.col as i64 - sh.anchor.col as i64;
+                        if let (Ok(dr32), Ok(dc32)) = (i32::try_from(dr), i32::try_from(dc)) {
+                            Formula::from_shared(Arc::clone(e), dr32, dc32)
+                        } else {
+                            Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.as_ref().clone(), dr, dc))
+                        }
+                    }
+                    None => Formula::new(&sh.text),
+                })
+            }
+        }
+        StreamedFormulaKind::Array => {
+            if text.is_empty() {
+                return None;
+            }
+            let mut fm = parse_or_dedup_formula(st, pos, text);
+            let range = f.range.unwrap_or(RangeRef::cell(pos));
+            if !range.is_single() {
+                push_dynamic(st, range);
+            }
+            if !dynamic {
+                fm.array = Some(range);
+            }
+            Some(fm)
+        }
+        StreamedFormulaKind::DataTable => {
+            cx.warn("what-if data tables are not supported; kept their values");
+            None
+        }
+        StreamedFormulaKind::Normal => {
+            if text.is_empty() {
+                None
+            } else {
+                Some(parse_or_dedup_formula(st, pos, text))
+            }
+        }
+    }
 }
 
 fn read_sheet_notes_and_tables(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], sheet: &mut Sheet) -> Result<(), IoError> {
@@ -470,138 +866,6 @@ fn apply_col_entry(cx: &Ctx<'_>, c: RawCol, remaining: &mut u64, sheet: &mut She
     Ok(())
 }
 
-fn apply_craft_cols(cx: &Ctx<'_>, cols: &[craft_xlsx::Column], sheet: &mut Sheet) -> Result<(), IoError> {
-    let mut remaining = MAX_COLUMN_ASSIGNMENTS;
-    for c in cols {
-        let raw = RawCol {
-            min: c.first + 1,
-            max: c.last + 1,
-            width: c.width,
-            custom_width: c.custom_width,
-            best_fit: c.best_fit,
-            hidden: c.hidden,
-            outline_level: c.outline_level,
-            collapsed: c.collapsed,
-            style: c.style,
-        };
-        apply_col_entry(cx, raw, &mut remaining, sheet)?;
-    }
-    Ok(())
-}
-
-fn apply_xml_cols(cx: &Ctx<'_>, sp: &CraftSheetPart, sheet: &mut Sheet) -> Result<(), IoError> {
-    let mut remaining = MAX_COLUMN_ASSIGNMENTS;
-    for node in &sp.root.children {
-        if let craft_xml::Node::El(cols_el) = node
-            && cols_el.name == "cols"
-        {
-            let cols = from_craft_el(cols_el);
-            for c in cols.kids("col") {
-                let raw = RawCol {
-                    min: c.attr_u32("min").unwrap_or(0),
-                    max: c.attr_u32("max").unwrap_or(0),
-                    width: c.attr_f64("width"),
-                    custom_width: c.flag("customWidth", false),
-                    best_fit: c.flag("bestFit", false),
-                    hidden: c.flag("hidden", false),
-                    outline_level: c.attr_u32("outlineLevel").unwrap_or(0).min(7) as u8,
-                    collapsed: c.flag("collapsed", false),
-                    style: c.attr_u32("style"),
-                };
-                apply_col_entry(cx, raw, &mut remaining, sheet)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn apply_craft_view(v: &craft_xlsx::SheetView, sheet: &mut Sheet) {
-    sheet.show_gridlines = v.show_grid_lines.unwrap_or(true);
-    sheet.show_headings = v.show_row_col_headers.unwrap_or(true);
-    sheet.show_formulas = v.show_formulas.unwrap_or(false);
-    sheet.show_zeros = v.show_zeros.unwrap_or(true);
-    sheet.show_outline_symbols = v.show_outline_symbols.unwrap_or(true);
-    sheet.right_to_left = v.right_to_left.unwrap_or(false);
-    sheet.view = v.view.as_deref().and_then(gridcraft_model::SheetViewMode::parse).unwrap_or_default();
-    if let Some(z) = v.zoom_scale {
-        sheet.zoom = z.clamp(10, 400) as u16;
-    }
-    if let Some(c) = v.top_left_cell.as_deref().and_then(CellRef::parse) {
-        sheet.view_top_left = c;
-    }
-    let mut active_pane = None;
-    if let Some(p) = &v.pane {
-        if matches!(p.state.as_deref(), Some("frozen" | "frozenSplit")) {
-            let cols = p.x_split.unwrap_or(0.0).clamp(0.0, (MAX_COLS - 1) as f64) as u32;
-            let rows = p.y_split.unwrap_or(0.0).clamp(0.0, (MAX_ROWS - 1) as f64) as u32;
-            if rows > 0 || cols > 0 {
-                sheet.freeze = Some((rows, cols));
-                if let Some(c) = p.top_left_cell.as_deref().and_then(CellRef::parse) {
-                    sheet.view_top_left = c;
-                }
-            }
-        }
-        active_pane = p.active_pane.as_deref();
-    }
-    let sel = v.selections.iter().find(|s| s.pane.as_deref() == active_pane).or_else(|| v.selections.last());
-    if let Some(c) = sel.and_then(|s| s.active_cell.as_deref()).and_then(CellRef::parse) {
-        sheet.view_active = c;
-    }
-}
-
-fn apply_craft_print(print: &craft_xlsx::Print, fit_to_page: bool, sheet: &mut Sheet) {
-    if let Some(o) = &print.options {
-        sheet.print.gridlines = o.grid_lines.unwrap_or(false);
-        sheet.print.headings = o.headings.unwrap_or(false);
-        sheet.print.center_h = o.horizontal_centered.unwrap_or(false);
-        sheet.print.center_v = o.vertical_centered.unwrap_or(false);
-    }
-    if let Some(pm) = &print.margins {
-        for (i, v) in [pm.left, pm.right, pm.top, pm.bottom, pm.header, pm.footer].into_iter().enumerate() {
-            if let (Some(v), Some(slot)) = (v, sheet.print.margins.get_mut(i)) {
-                *slot = v.clamp(0.0, 50.0) as f32;
-            }
-        }
-    }
-    if let Some(ps) = &print.setup {
-        if ps.orientation.as_deref() == Some("landscape") {
-            sheet.print.orientation = Orientation::Landscape;
-        }
-        sheet.print.page_order = ps.page_order.as_deref().and_then(PageOrder::parse).unwrap_or_default();
-        sheet.print.first_page_number = if ps.use_first_page_number.unwrap_or(false) { ps.first_page_number } else { None };
-        if let Some(p) = ps.paper_size.and_then(paper_name) {
-            sheet.print.paper = p.to_string();
-        }
-        if let Some(s) = ps.scale {
-            sheet.print.scale = s.clamp(10, 400) as u16;
-        }
-        if fit_to_page {
-            let w = ps.fit_to_width.unwrap_or(1).min(32767) as u16;
-            let h = ps.fit_to_height.unwrap_or(1).min(32767) as u16;
-            sheet.print.fit_to = Some((w, h));
-        }
-    }
-    if let Some(hf) = &print.header_footer {
-        let pr = &mut sheet.print;
-        for (src, slot) in [
-            (&hf.odd_header, &mut pr.header),
-            (&hf.odd_footer, &mut pr.footer),
-            (&hf.even_header, &mut pr.even_header),
-            (&hf.even_footer, &mut pr.even_footer),
-            (&hf.first_header, &mut pr.first_header),
-            (&hf.first_footer, &mut pr.first_footer),
-        ] {
-            *slot = src.as_deref().unwrap_or("").chars().take(255).collect();
-        }
-        pr.different_first = hf.different_first.unwrap_or(false);
-        pr.different_odd_even = hf.different_odd_even.unwrap_or(false);
-        pr.hf_scale_with_doc = hf.scale_with_doc.unwrap_or(true);
-        pr.hf_align_with_margins = hf.align_with_margins.unwrap_or(true);
-    }
-    sheet.print.row_breaks = print.row_breaks.iter().filter_map(|b| b.id).filter(|&r| r > 0 && r < MAX_ROWS).collect();
-    sheet.print.col_breaks = print.col_breaks.iter().filter_map(|b| b.id).filter(|&c| c > 0 && c < MAX_COLS).collect();
-}
-
 struct RawHyperlink<'a> {
     range: RangeRef,
     rel_id: Option<&'a str>,
@@ -645,27 +909,6 @@ fn push_hyperlink(cx: &mut Ctx<'_>, name: &str, h: RawHyperlink<'_>, rels: &Hash
         sheet.hyperlinks.insert(c, link.clone());
     }
     true
-}
-
-fn read_craft_hyperlinks(
-    cx: &mut Ctx<'_>,
-    name: &str,
-    links: &[craft_xlsx::Hyperlink],
-    rels: &HashMap<&str, &Rel>,
-    sheet: &mut Sheet,
-    budget: &mut LinkBudget,
-) {
-    for h in links {
-        let raw = RawHyperlink {
-            range: to_range_ref(h.range),
-            rel_id: h.rel_id.as_deref(),
-            location: h.location.as_deref(),
-            tooltip: h.tooltip.as_deref(),
-        };
-        if !push_hyperlink(cx, name, raw, rels, sheet, budget) {
-            return;
-        }
-    }
 }
 
 /// Buttons, scroll bars and spin buttons: the `<controls>` list (also inside
@@ -730,213 +973,6 @@ fn charge_cells(cx: &mut Ctx<'_>, n: u64) -> Result<(), IoError> {
     Ok(())
 }
 
-fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &CraftRow) -> Result<(), craft_xlsx::Error> {
-    let r = row.index;
-    let mut info = LineInfo::default();
-    if let Some(ht) = row.height {
-        info.custom = row.custom_height;
-        if info.custom || (pt_to_px(ht) - sheet.default_row_height).abs() > 0.5 {
-            info.size = Some(pt_to_px(ht));
-        }
-    }
-    info.hidden = row.hidden;
-    info.outline = row.outline_level.min(7);
-    info.collapsed = row.collapsed;
-    if let Some(s) = row.style {
-        info.style = Some(cx.style(Some(s)));
-    }
-    if info != LineInfo::default() {
-        sheet.rows.insert(r, info);
-    }
-    for c in &row.cells {
-        charge_cells(cx, 1).map_err(|e| craft_xlsx::Error::TooLarge(e.to_string()))?;
-        let pos = CellRef::new(c.at.row, c.at.col);
-        read_craft_cell(cx, sheet, st, c, pos);
-    }
-    Ok(())
-}
-
-fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &craft_xlsx::Cell, pos: CellRef) {
-    let style = cx.style((c.style != 0).then_some(c.style));
-    let value = match &c.value {
-        CraftValue::Empty => Value::Empty,
-        CraftValue::Shared(i) => match cx.sst.get(*i as usize) {
-            Some(s) => Value::Text(s.clone()),
-            None => {
-                cx.warn("some cells refer to missing shared strings");
-                Value::Empty
-            }
-        },
-        CraftValue::Text(t) => Value::Text(t.as_ref().into()),
-        CraftValue::Inline(s) => Value::Text(s.text.as_ref().into()),
-        CraftValue::Bool(b) => Value::Bool(*b),
-        CraftValue::Error(e) => Value::Error(map_craft_error(*e)),
-        CraftValue::Date(d) => match parse_iso_datetime(d, cx.date_system) {
-            Some(n) => Value::number(n),
-            None => {
-                cx.warn("some date cells could not be read");
-                Value::Empty
-            }
-        },
-        CraftValue::Number(n) => Value::Number(*n),
-        CraftValue::Invalid(_) => {
-            cx.warn("some numeric cells could not be read");
-            Value::Empty
-        }
-    };
-    let picture = c.value_metadata.and_then(|vm| {
-        if vm == 0 {
-            return None;
-        }
-        let picture = (vm as usize).checked_sub(1).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
-        if picture.is_none() {
-            cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
-        }
-        picture
-    });
-    if let Some(picture) = picture {
-        if c.formula.is_some() {
-            cx.warn("formula-generated cell pictures were imported as static pictures; their formulas were not retained");
-        }
-        sheet.set_picture(pos, picture);
-        sheet.set_style(pos, style);
-        return;
-    }
-    let dynamic = c.cell_metadata.is_some();
-    st.shared_copy_refused = false;
-    let formula = c.formula.as_ref().and_then(|f| read_craft_formula(cx, st, f, pos, dynamic));
-    let py = match (&formula, &c.formula) {
-        (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
-        _ => crate::python_part::PyFormula::Not,
-    };
-    let (formula, py) = match py {
-        crate::python_part::PyFormula::Not => (formula, None),
-        crate::python_part::PyFormula::Code(py) => (None, Some(Arc::new(py))),
-        crate::python_part::PyFormula::Missing => {
-            forget_dynamic(st, pos);
-            (None, None)
-        }
-    };
-    if py.is_some() {
-        record_python_spill(st, sheet, pos);
-    }
-    if formula.as_ref().is_some_and(|f| !f.dynamic && f.array.is_none() && f.expr_arc().is_some()) {
-        cx.legacy_formulas.push(pos);
-    }
-    let spilled_from = if formula.is_none() && py.is_none() && !st.shared_copy_refused { dynamic_range(st, pos) } else { None };
-    let python_anchor = spilled_from.is_some_and(|r| sheet.cells.get(r.start).is_some_and(|a| a.py.is_some()));
-    let value = match spilled_from {
-        Some(r) if python_anchor && r.count() <= gridcraft_model::python::MAX_RESULT_CELLS as u64 => {
-            if !value.is_empty() {
-                sheet.spill.insert(pos, value);
-            }
-            sheet.spill_ranges.insert(r.start, r);
-            Value::Empty
-        }
-        Some(_) if python_anchor => value,
-        Some(_) => Value::Empty,
-        None => value,
-    };
-    if dynamic
-        && formula.as_ref().is_some_and(|f| f.array.is_none())
-        && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
-    {
-        sheet.spill_ranges.insert(pos, *r);
-    }
-    sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
-}
-
-fn read_craft_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &CraftFormula, pos: CellRef, dynamic: bool) -> Option<Formula> {
-    let mut unwrapped = false;
-    let fm = read_craft_formula_text(cx, st, f, pos, dynamic, &mut unwrapped)?;
-    let dynamic = dynamic || unwrapped;
-    Some(Formula { dynamic, ..fm })
-}
-
-fn read_craft_formula_text(
-    cx: &mut Ctx<'_>,
-    st: &mut RowState,
-    f: &CraftFormula,
-    pos: CellRef,
-    dynamic: bool,
-    unwrapped: &mut bool,
-) -> Option<Formula> {
-    let mut model = from_file(f.text.trim());
-    if let Some(known) = cx.known_function
-        && let Some(u) = unwrap_google_sheets(&model, known)
-    {
-        model = u;
-        *unwrapped = true;
-    }
-    let text = model.as_str();
-    match f.kind {
-        CraftFormulaKind::Shared => {
-            let si = f.shared_index?;
-            if !text.is_empty() {
-                let expr = gridcraft_formula::parse(text).ok();
-                let cost = shared_cost(text, expr.as_ref());
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped, cost });
-                Some(Formula::new(text))
-            } else {
-                let Some(sh) = st.shared.get(&si) else {
-                    cx.warn("a shared formula refers to a missing master cell; kept the cached value");
-                    return None;
-                };
-                if sh.expr.is_none()
-                    && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN
-                    && sh.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
-                {
-                    cx.warn(format!(
-                        "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
-                        gridcraft_formula::MAX_FORMULA_LEN
-                    ));
-                    st.shared_copy_refused = true;
-                    return None;
-                }
-                if !charge(&mut cx.shared_formula_bytes, extra_shared_cost(sh.cost), MAX_SHARED_FORMULA_BYTES) {
-                    cx.warn("shared formulas expand to too much data; kept the cached values of the remaining cells that share them");
-                    st.shared_copy_refused = true;
-                    return None;
-                }
-                *unwrapped |= sh.unwrapped;
-                Some(match &sh.expr {
-                    Some(e) => {
-                        let dr = pos.row as i64 - sh.anchor.row as i64;
-                        let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
-                    }
-                    None => Formula::new(&sh.text),
-                })
-            }
-        }
-        CraftFormulaKind::Array => {
-            if text.is_empty() {
-                return None;
-            }
-            let mut fm = Formula::new(text);
-            let range = f.range.map(to_range_ref).unwrap_or(RangeRef::cell(pos));
-            if !range.is_single() {
-                push_dynamic(st, range);
-            }
-            if !dynamic {
-                fm.array = Some(range);
-            }
-            Some(fm)
-        }
-        CraftFormulaKind::DataTable => {
-            cx.warn("what-if data tables are not supported; kept their values");
-            None
-        }
-        CraftFormulaKind::Normal => {
-            if text.is_empty() {
-                None
-            } else {
-                Some(Formula::new(text))
-            }
-        }
-    }
-}
-
 /// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     parse_iso_datetime_with(s, |y, m, d| serial_from_ymd(sys, y, m, d))
@@ -990,6 +1026,20 @@ fn shared_cost(text: &str, expr: Option<&Expr>) -> u64 {
 /// formula cell's.
 fn extra_shared_cost(cost: u64) -> u64 {
     cost.saturating_sub(SHARED_FORMULA_FREE_COST)
+}
+
+/// The reader's charge for each dependent of this emitted master, or `None` when the
+/// reader cannot reconstruct it by shifting the same formula. The worksheet writer
+/// excludes Google Sheets wrappers, whose unwrapping depends on the reader's callback.
+pub(crate) fn shared_master_extra_cost(text: &str, base: &Expr, dr: i32, dc: i32) -> Option<u64> {
+    // `push_esc` drops characters XML cannot carry; all other formula text decodes losslessly.
+    if !text.chars().all(craft_xml::is_xml_char) {
+        return None;
+    }
+    let model = from_file(text.trim());
+    let expr = gridcraft_formula::parse(&model).ok()?;
+    // File normalization can change what parses as a relative reference, e.g. `_xlpm.A1`.
+    expr_eq_shifted(base, i64::from(dr), i64::from(dc), &expr).then(|| extra_shared_cost(shared_cost(&model, Some(&expr))))
 }
 
 /// Adds `cost` to `used` when that stays within `cap`; `false` (and `used` unchanged) otherwise.
@@ -1162,5 +1212,123 @@ mod tests {
         let ranges = parse_sqref(Some(&sq));
         assert_eq!(ranges.len(), 12_000);
         assert_eq!(ranges.last().copied(), RangeRef::parse("A12000"));
+    }
+
+    #[test]
+    fn stream_normalizes_xml_newlines_and_preserves_char_refs() {
+        let xml = concat!(
+            "<sheetData><row r=\"1\">",
+            "<c r=\"A1\" t=\"inlineStr\"><is><t>a\r\nb\rc&#xD;d</t></is></c>",
+            "<c r=\"B1\" t=\"str\"><v>x\r\ny\rz</v></c>",
+            "<c r=\"C1\" t=\"inlineStr\"><is><t><![CDATA[p\r\nq\rr]]></t></is></c>",
+            "</row></sheetData>",
+        );
+        let bytes = crate::tests::minimal(xml, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::text("a\nb\nc\rd"));
+        assert_eq!(sheet.value(CellRef::parse("B1").unwrap()), Value::text("x\ny\nz"));
+        assert_eq!(sheet.value(CellRef::parse("C1").unwrap()), Value::text("p\nq\nr"));
+    }
+
+    #[test]
+    fn stream_preserves_invalid_utf8_bytes_lossily() {
+        let mut sheet_xml = Vec::new();
+        sheet_xml.extend_from_slice(
+            br#"<?xml version="1.0" encoding="ISO-8859-1"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="str"><v>caf"#,
+        );
+        sheet_xml.push(0xE9);
+        sheet_xml.extend_from_slice(br#"</v></c><c r="B1" t="inlineStr"><is><t>na"#);
+        sheet_xml.push(0xEF);
+        sheet_xml.extend_from_slice(b"ve\r\nok</t></is></c></row></sheetData></worksheet>");
+        let wb = br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let wb_rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let bytes = crate::tests::make_zip(&[
+            ("[Content_Types].xml", crate::tests::CT.as_bytes()),
+            ("_rels/.rels", crate::tests::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wb),
+            ("xl/_rels/workbook.xml.rels", wb_rels),
+            ("xl/worksheets/sheet1.xml", &sheet_xml),
+        ]);
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::text("caf\u{FFFD}"));
+        assert_eq!(sheet.value(CellRef::parse("B1").unwrap()), Value::text("na\u{FFFD}ve\nok"));
+    }
+
+    #[test]
+    fn stream_ignores_stray_unmatched_end_tags_and_preserves_subsequent_rows() {
+        let xml = concat!(
+            r#"<sheetData>"#,
+            r#"<row r="1"><c r="A1"><v>1</v></c></foo><c r="B1"><v>2</v></c></c><c r="C1"><v>3</v></c></row>"#,
+            r#"</row>"#,
+            r#"<row r="2"><c r="A2"><v>4</v></c></row>"#,
+            r#"</sheetData>"#,
+        );
+        let bytes = crate::tests::minimal(xml, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sheet.value(CellRef::parse("B1").unwrap()), Value::Number(2.0));
+        assert_eq!(sheet.value(CellRef::parse("C1").unwrap()), Value::Number(3.0));
+        assert_eq!(sheet.value(CellRef::parse("A2").unwrap()), Value::Number(4.0));
+    }
+
+    #[test]
+    fn stream_warns_when_out_of_bounds_rows_or_cells_are_dropped() {
+        let xml = r#"<sheetData><row r="0"><c><v>1</v></c></row><row r="2000000"><c><v>2</v></c></row><row r="1"><c r="XFE1"><v>3</v></c><c r="A1"><v>4</v></c></row></sheetData>"#;
+        let bytes = crate::tests::minimal(xml, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::Number(4.0));
+        assert!(
+            cx.report.warnings.iter().any(|w| w.contains("3 cells or rows outside the 1,048,576 × 16,384 grid were dropped")),
+            "{:?}",
+            cx.report.warnings
+        );
+    }
+
+    #[test]
+    fn stream_truncated_sheet_data_flushes_open_cell_and_warns_damaged() {
+        let sheet_xml = br#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v>"#;
+        let wb = br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let wb_rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let bytes = crate::tests::make_zip(&[
+            ("[Content_Types].xml", crate::tests::CT.as_bytes()),
+            ("_rels/.rels", crate::tests::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wb),
+            ("xl/_rels/workbook.xml.rels", wb_rels),
+            ("xl/worksheets/sheet1.xml", sheet_xml),
+        ]);
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sheet.value(CellRef::parse("A2").unwrap()), Value::Number(2.0));
+        assert!(cx.report.warnings.iter().any(|w| w.contains("is damaged (unexpected end of file)")), "{:?}", cx.report.warnings);
+    }
+
+    #[test]
+    fn stream_truncated_mid_tag_flushes_open_cell_and_warns_damaged() {
+        let sheet_xml = br#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2"><c r="A2"><v>2</v></c"#;
+        let wb = br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+        let wb_rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+        let bytes = crate::tests::make_zip(&[
+            ("[Content_Types].xml", crate::tests::CT.as_bytes()),
+            ("_rels/.rels", crate::tests::ROOT_RELS.as_bytes()),
+            ("xl/workbook.xml", wb),
+            ("xl/_rels/workbook.xml.rels", wb_rels),
+            ("xl/worksheets/sheet1.xml", sheet_xml),
+        ]);
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sheet.value(CellRef::parse("A2").unwrap()), Value::Number(2.0));
+        assert!(cx.report.warnings.iter().any(|w| w.contains("is damaged (")), "{:?}", cx.report.warnings);
     }
 }

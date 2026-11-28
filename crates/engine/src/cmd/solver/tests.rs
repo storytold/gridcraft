@@ -1221,7 +1221,7 @@ fn nonlinear_sensitivity_signs_follow_the_goal() {
 
 fn formula(s: &Session, a1: &str) -> String {
     let d = s.doc().unwrap();
-    d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap_or_default()
+    d.wb.active().unwrap().cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text().into_owned()).unwrap_or_default()
 }
 
 #[test]

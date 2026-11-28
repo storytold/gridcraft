@@ -102,39 +102,285 @@ impl fmt::Display for CellError {
     }
 }
 
+/// Maximum total text bytes across keys in a [`TextIndex`] before indexing is declined.
+const MAX_TEXT_INDEX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Case-insensitive exact-text lookup index over an [`Array`]'s elements.
+#[derive(Default, Debug)]
+#[doc(hidden)]
+pub struct TextIndex {
+    by_text: Option<std::collections::HashMap<Arc<str>, Vec<u32>>>,
+    /// True if any text element contains a character whose Unicode `to_lowercase()` expands to
+    /// multiple `char`s (such as U+0130 `İ` -> `"i\u{307}"`), where 1-to-1 char folding used by
+    /// `COUNTIF`/`SUMIF`/`*IFS` differs from multi-char lowercase used by [`compare_text`].
+    has_multichar_lower: bool,
+}
+
+impl TextIndex {
+    /// Builds a case-insensitive text position index from `data`.
+    fn build(data: &[Value]) -> Self {
+        let mut by_text: std::collections::HashMap<Arc<str>, Vec<u32>> = std::collections::HashMap::new();
+        let mut key_bytes = 0usize;
+        let mut has_multichar_lower = false;
+        for (i, v) in data.iter().enumerate() {
+            if let Value::Text(t) = v {
+                if t.is_ascii() && !t.bytes().any(|b| b.is_ascii_uppercase()) {
+                    let entry = by_text.entry(Arc::clone(t)).or_insert_with(|| {
+                        key_bytes = key_bytes.saturating_add(t.len());
+                        Vec::new()
+                    });
+                    entry.push(i as u32);
+                } else {
+                    if !has_multichar_lower && has_multichar_lowercase(t) {
+                        has_multichar_lower = true;
+                    }
+                    let k = lower_text_key(t);
+                    if let Some(vec) = by_text.get_mut(k.as_str()) {
+                        vec.push(i as u32);
+                    } else {
+                        key_bytes = key_bytes.saturating_add(k.len());
+                        by_text.insert(Arc::from(k.into_boxed_str()), vec![i as u32]);
+                    }
+                }
+                if key_bytes > MAX_TEXT_INDEX_BYTES {
+                    return Self { by_text: None, has_multichar_lower };
+                }
+            }
+        }
+        Self { by_text: Some(by_text), has_multichar_lower }
+    }
+
+    /// Returns the 0-based positions whose text matches `pat` case-insensitively, or `None` when
+    /// the array exceeded [`MAX_TEXT_INDEX_BYTES`].
+    fn positions(&self, pat: &str) -> Option<&[u32]> {
+        let by_text = self.by_text.as_ref()?;
+        if pat.is_ascii() {
+            if !pat.bytes().any(|b| b.is_ascii_uppercase()) {
+                return Some(by_text.get(pat).map_or(&[], Vec::as_slice));
+            }
+            if pat.len() <= 128 {
+                let mut buf = [0u8; 128];
+                for (dst, src) in buf[..pat.len()].iter_mut().zip(pat.bytes()) {
+                    *dst = src.to_ascii_lowercase();
+                }
+                if let Ok(s) = std::str::from_utf8(&buf[..pat.len()]) {
+                    return Some(by_text.get(s).map_or(&[], Vec::as_slice));
+                }
+            }
+        }
+        let k = lower_text_key(pat);
+        Some(by_text.get(k.as_str()).map_or(&[], Vec::as_slice))
+    }
+}
+
+/// Exact-number lookup index over an [`Array`]'s elements (`0.0` and `-0.0` normalized to `+0.0`).
+#[derive(Default, Debug)]
+#[doc(hidden)]
+pub struct NumberIndex {
+    by_bits: std::collections::HashMap<u64, Vec<u32>>,
+}
+
+/// Canonical IEEE-754 bit pattern for exact numeric lookup (`-0.0` normalized to `+0.0`).
+#[inline]
+fn number_bits(n: f64) -> u64 {
+    if n == 0.0 { 0.0f64.to_bits() } else { n.to_bits() }
+}
+
+/// Rounds `x` to 15 significant digits identically to [`compare_numbers`], with an O(1) fast path
+/// for exact integers below 1e15 (which already have <= 15 significant digits).
+#[inline]
+fn round15_bits(x: f64) -> u64 {
+    if x == 0.0 {
+        return 0.0f64.to_bits();
+    }
+    if !x.is_finite() {
+        return x.to_bits();
+    }
+    if x.fract() == 0.0 && x.abs() < 1e15 {
+        return x.to_bits();
+    }
+    let r: f64 = format!("{x:.14e}").parse().unwrap_or(x);
+    number_bits(r)
+}
+
+impl NumberIndex {
+    /// Builds an exact numeric position index from `data`.
+    fn build(data: &[Value]) -> Self {
+        let mut by_bits: std::collections::HashMap<u64, Vec<u32>> = std::collections::HashMap::new();
+        for (i, v) in data.iter().enumerate() {
+            if let Value::Number(n) = v
+                && !n.is_nan()
+            {
+                by_bits.entry(number_bits(*n)).or_default().push(i as u32);
+            }
+        }
+        Self { by_bits }
+    }
+
+    /// Returns the 0-based positions whose numeric value equals `n` (`0.0 == -0.0`).
+    fn positions(&self, n: f64) -> &[u32] {
+        if n.is_nan() {
+            return &[];
+        }
+        self.by_bits.get(&number_bits(n)).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// 15-significant-digit numeric equality index for `COUNTIF`/`SUMIF`/`*IFS` criteria matching:
+/// indexes both `Value::Number` and numeric-text `Value::Text` cells (matching Excel's criteria
+/// rule that `"1"` equals `1` and 15-sig-digit rounding).
+#[derive(Default, Debug)]
+#[doc(hidden)]
+pub struct CriteriaNumberIndex {
+    by_round15: std::collections::HashMap<u64, Vec<u32>>,
+}
+
+impl CriteriaNumberIndex {
+    fn build(data: &[Value]) -> Self {
+        let mut by_round15: std::collections::HashMap<u64, Vec<u32>> = std::collections::HashMap::new();
+        for (i, v) in data.iter().enumerate() {
+            let n = match v {
+                Value::Number(x) if x.is_finite() => Some(*x),
+                Value::Text(t) => crate::parse::parse_number_text(t).filter(|x| x.is_finite()),
+                _ => None,
+            };
+            if let Some(n) = n {
+                by_round15.entry(round15_bits(n)).or_default().push(i as u32);
+            }
+        }
+        Self { by_round15 }
+    }
+
+    fn positions(&self, n: f64) -> &[u32] {
+        if !n.is_finite() {
+            return &[];
+        }
+        self.by_round15.get(&round15_bits(n)).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// Lowercases `s` for case-insensitive text indexing.
+fn lower_text_key(s: &str) -> String {
+    if s.is_ascii() { s.to_ascii_lowercase() } else { s.chars().flat_map(char::to_lowercase).collect() }
+}
+
+/// Whether `s` contains a non-ASCII character whose Unicode `to_lowercase()` expands to >1 `char`
+/// (for example U+0130 `İ` -> `"i\u{307}"`).
+#[inline]
+fn has_multichar_lowercase(s: &str) -> bool {
+    !s.is_ascii() && s.chars().any(|c| !c.is_ascii() && c.to_lowercase().nth(1).is_some())
+}
+
 /// A 2-D array of values (row-major). Always at least 1×1.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Array {
     pub rows: usize,
     pub cols: usize,
     pub data: Vec<Value>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub text_index: std::sync::OnceLock<TextIndex>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub text_queries: std::sync::atomic::AtomicU32,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub number_index: std::sync::OnceLock<NumberIndex>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub number_queries: std::sync::atomic::AtomicU32,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub criteria_number_index: std::sync::OnceLock<CriteriaNumberIndex>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub criteria_number_queries: std::sync::atomic::AtomicU32,
+    /// Cached positions where `compare(v, &Value::Empty) == Ordering::Equal` (`Empty`, `0.0`,
+    /// `""`, `FALSE`), built lazily on the second query for arrays of >= 64 elements.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub empty_eq_index: std::sync::OnceLock<Vec<u32>>,
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub empty_eq_queries: std::sync::atomic::AtomicU32,
+    /// Cached content scan bitflags: 0 = unknown, bit 0 = scanned, bit 1 = has errors,
+    /// bit 2 = has text.
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub error_state: std::sync::atomic::AtomicU8,
+}
+
+impl Default for Array {
+    fn default() -> Self {
+        Array::scalar(Value::Empty)
+    }
+}
+
+impl Clone for Array {
+    fn clone(&self) -> Self {
+        Array {
+            rows: self.rows,
+            cols: self.cols,
+            data: self.data.clone(),
+            text_index: std::sync::OnceLock::new(),
+            text_queries: std::sync::atomic::AtomicU32::new(0),
+            number_index: std::sync::OnceLock::new(),
+            number_queries: std::sync::atomic::AtomicU32::new(0),
+            criteria_number_index: std::sync::OnceLock::new(),
+            criteria_number_queries: std::sync::atomic::AtomicU32::new(0),
+            empty_eq_index: std::sync::OnceLock::new(),
+            empty_eq_queries: std::sync::atomic::AtomicU32::new(0),
+            error_state: std::sync::atomic::AtomicU8::new(0),
+        }
+    }
+}
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.rows == other.rows && self.cols == other.cols && self.data == other.data
+    }
 }
 
 impl Array {
+    fn with_data(rows: usize, cols: usize, data: Vec<Value>) -> Array {
+        Array {
+            rows,
+            cols,
+            data,
+            text_index: std::sync::OnceLock::new(),
+            text_queries: std::sync::atomic::AtomicU32::new(0),
+            number_index: std::sync::OnceLock::new(),
+            number_queries: std::sync::atomic::AtomicU32::new(0),
+            criteria_number_index: std::sync::OnceLock::new(),
+            criteria_number_queries: std::sync::atomic::AtomicU32::new(0),
+            empty_eq_index: std::sync::OnceLock::new(),
+            empty_eq_queries: std::sync::atomic::AtomicU32::new(0),
+            error_state: std::sync::atomic::AtomicU8::new(0),
+        }
+    }
     pub fn new(rows: usize, cols: usize, data: Vec<Value>) -> Option<Array> {
         if rows == 0 || cols == 0 || rows.checked_mul(cols)? != data.len() {
             return None;
         }
-        Some(Array { rows, cols, data })
+        Some(Array::with_data(rows, cols, data))
     }
     pub fn filled(rows: usize, cols: usize, v: Value) -> Array {
         let (rows, cols) = (rows.max(1), cols.max(1));
-        Array { rows, cols, data: vec![v; rows.saturating_mul(cols)] }
+        Array::with_data(rows, cols, vec![v; rows.saturating_mul(cols)])
     }
     pub fn scalar(v: Value) -> Array {
-        Array { rows: 1, cols: 1, data: vec![v] }
+        Array::with_data(1, 1, vec![v])
     }
     pub fn column(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: v.len(), cols: 1, data: v }
+        Array::with_data(v.len(), 1, v)
     }
     pub fn row(v: Vec<Value>) -> Array {
         if v.is_empty() {
             return Array::scalar(Value::Error(CellError::Calc));
         }
-        Array { rows: 1, cols: v.len(), data: v }
+        Array::with_data(1, v.len(), v)
     }
     pub fn get(&self, r: usize, c: usize) -> Option<&Value> {
         if r >= self.rows || c >= self.cols {
@@ -156,10 +402,126 @@ impl Array {
                 data.push(self.get(r, c).cloned().unwrap_or(Value::Empty));
             }
         }
-        Array { rows: self.cols, cols: self.rows, data }
+        Array::with_data(self.cols, self.rows, data)
     }
     pub fn iter(&self) -> impl Iterator<Item = &Value> {
         self.data.iter()
+    }
+    /// Positions (0-based into `data`, ascending) whose value is `Value::Text` equal to `pat`
+    /// under [`text_eq`], or `None` when the array is too small to index or only queried once.
+    pub fn text_positions(&self, pat: &str) -> Option<&[u32]> {
+        if self.data.len() < 64 {
+            return None;
+        }
+        if self.text_index.get().is_none() && self.text_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        self.text_index.get_or_init(|| TextIndex::build(&self.data)).positions(pat)
+    }
+    /// Positions (0-based into `data`, ascending) whose `Value::Text` equals `pat` under 1-to-1
+    /// character lowercase folding (`COUNTIF`/`SUMIF`/`*IFS`), or `None` when the array is too
+    /// small, queried once, or either the array or `pat` contains a multi-char Unicode lowercase
+    /// expansion such as U+0130 `İ` -> `"i\u{307}"`.
+    pub fn criteria_text_positions(&self, pat: &str) -> Option<&[u32]> {
+        if self.data.len() < 64 || has_multichar_lowercase(pat) {
+            return None;
+        }
+        if self.text_index.get().is_none() && self.text_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        let idx = self.text_index.get_or_init(|| TextIndex::build(&self.data));
+        if idx.has_multichar_lower {
+            return None;
+        }
+        idx.positions(pat)
+    }
+    /// Positions (0-based into `data`, ascending) whose value is `Value::Number` equal to `n`
+    /// (`0.0 == -0.0`), or `None` when the array is too small to index or only queried once.
+    pub fn number_positions(&self, n: f64) -> Option<&[u32]> {
+        if self.data.len() < 64 {
+            return None;
+        }
+        if self.number_index.get().is_none() && self.number_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        Some(self.number_index.get_or_init(|| NumberIndex::build(&self.data)).positions(n))
+    }
+    /// Positions (0-based into `data`, ascending) whose value satisfies Excel numeric criteria
+    /// equality (`COUNTIF`/`SUMIF`/`*IFS`: `Value::Number` or numeric `Value::Text` equal under
+    /// 15-significant-digit [`compare_numbers`]), or `None` when too small or only queried once.
+    pub fn criteria_number_positions(&self, n: f64) -> Option<&[u32]> {
+        if self.data.len() < 64 || !n.is_finite() {
+            return None;
+        }
+        if self.criteria_number_index.get().is_none() && self.criteria_number_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        Some(self.criteria_number_index.get_or_init(|| CriteriaNumberIndex::build(&self.data)).positions(n))
+    }
+    /// Positions (0-based into `data`, ascending) where `compare(v, &Value::Empty) == Equal`
+    /// (`Value::Empty`, `Value::Number(0.0)`, `Value::Text("")`, `Value::Bool(false)`), or `None`
+    /// when the array is too small to index or only queried once. Exact for `Value::Empty` and a
+    /// tight superset for `""`, `0.0`, and `FALSE`.
+    pub fn empty_eq_positions(&self) -> Option<&[u32]> {
+        if self.data.len() < 64 {
+            return None;
+        }
+        if self.empty_eq_index.get().is_none() && self.empty_eq_queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+            return None;
+        }
+        Some(
+            self.empty_eq_index
+                .get_or_init(|| {
+                    self.data
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, v)| {
+                            let is_eq = match v {
+                                Value::Empty | Value::Bool(false) => true,
+                                Value::Number(n) => *n == 0.0,
+                                Value::Text(t) => t.is_empty(),
+                                _ => false,
+                            };
+                            is_eq.then_some(i as u32)
+                        })
+                        .collect()
+                })
+                .as_slice(),
+        )
+    }
+    fn scan_flags(&self) -> u8 {
+        let flags = self.error_state.load(std::sync::atomic::Ordering::Relaxed);
+        if flags != 0 {
+            return flags;
+        }
+        let mut computed = 1u8;
+        for v in &self.data {
+            match v {
+                Value::Error(_) => computed |= 2,
+                Value::Text(_) => computed |= 4,
+                _ => {}
+            }
+            if computed == (1 | 2 | 4) {
+                break;
+            }
+        }
+        self.error_state.store(computed, std::sync::atomic::Ordering::Relaxed);
+        computed
+    }
+    /// Whether any element of `data` is `Value::Error` (cached after first check).
+    pub fn has_errors(&self) -> bool {
+        (self.scan_flags() & 2) != 0
+    }
+    /// Whether any element of `data` is `Value::Text` (cached after first check).
+    pub fn has_text(&self) -> bool {
+        (self.scan_flags() & 4) != 0
+    }
+    /// Whether a text, number, or empty-equality lookup index has been built on this array.
+    pub fn has_lookup_index(&self) -> bool {
+        self.text_index.get().is_some_and(|idx| idx.by_text.is_some())
+            || self.number_index.get().is_some()
+            || self.criteria_number_index.get().is_some()
+            || self.empty_eq_index.get().is_some_and(|v| !v.is_empty())
     }
 }
 
@@ -317,8 +679,20 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, Value::Number(n)) => compare_numbers(0.0, *n),
         (Value::Number(n), Value::Empty) => compare_numbers(*n, 0.0),
-        (Value::Empty, Value::Text(t)) => "".cmp(&t.to_lowercase() as &str),
-        (Value::Text(t), Value::Empty) => (t.to_lowercase() as String).as_str().cmp(""),
+        (Value::Empty, Value::Text(t)) => {
+            if t.is_empty() {
+                Ordering::Equal
+            } else {
+                Ordering::Less
+            }
+        }
+        (Value::Text(t), Value::Empty) => {
+            if t.is_empty() {
+                Ordering::Equal
+            } else {
+                Ordering::Greater
+            }
+        }
         (Value::Empty, Value::Bool(b)) => false.cmp(b),
         (Value::Bool(b), Value::Empty) => b.cmp(&false),
         (Value::Number(x), Value::Number(y)) => compare_numbers(*x, *y),

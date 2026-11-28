@@ -17,11 +17,12 @@ mod format;
 mod lambda;
 mod reference_fns;
 mod special;
+mod sumproduct;
 
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
-pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
+pub use special::{PrecedentTemplate, SPECIAL_FUNCTIONS, is_known_function, precedents, precedents_at, precedents_at_shifted, resized_sum_range};
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
@@ -60,6 +61,8 @@ pub struct Lambda {
     pub params: Vec<String>,
     pub body: Expr,
     pub env: Vec<(String, Ev)>,
+    /// Relative reference shift captured from a shared formula (0, 0 for owned formulas/names).
+    pub shift: (i32, i32),
 }
 
 /// What the tail of a LAMBDA body came to.
@@ -124,6 +127,17 @@ pub(crate) fn stack_position() -> usize {
     std::hint::black_box(&marker) as *const u8 as usize
 }
 
+/// Outcome of lazily ensuring a PivotTable's `GETPIVOTDATA` index during evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PivotIndexState {
+    /// `PivotTable::data_index` holds cells and is ready for hash lookup.
+    Ready,
+    /// The stored report no longer matches its source (`#REF!` until refresh).
+    Stale,
+    /// No indexer is registered or building failed for another reason (use sheet-scan fallback).
+    Fallback,
+}
+
 /// What the evaluator needs from its surroundings.
 pub trait Host {
     fn workbook(&self) -> &Workbook;
@@ -140,6 +154,12 @@ pub trait Host {
     /// Values of a block, row-major. Hosts can override with a sparse fast path.
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
+    }
+    /// Values of a block as an [`Array`]. Hosts can cache immutable evaluated ranges.
+    fn range_array(&mut self, sheet: usize, range: RangeRef) -> Option<Arc<Array>> {
+        let (h, w) = (range.height() as usize, range.width() as usize);
+        let data = self.range_values(sheet, range);
+        Array::new(h, w, data).map(Arc::new)
     }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
@@ -164,15 +184,22 @@ pub trait Host {
     }
     /// Called when a formula's evaluation runs past the stack budget.
     fn stack_exhausted(&mut self) {}
+    /// Ensures the PivotTable at `(sheet, pivot_idx)` has its `data_index` populated if possible.
+    /// Hosts whose workbook is immutable during a pass can memoize failures per
+    /// `(sheet, pivot_idx)` without mutating the shared `PivotLookup`.
+    fn ensure_pivot_index(&mut self, sheet: usize, pivot_idx: usize) -> PivotIndexState {
+        crate::pivotdata::build_pivot_index(self.workbook(), sheet, pivot_idx)
+    }
 }
 
 pub struct Evaluator<'h> {
     pub host: &'h mut dyn Host,
     pub sheet: usize,
     pub at: CellRef,
+    /// Relative reference shift applied on the fly to `Expr::Ref` (for shared formulas).
+    pub shift: (i32, i32),
     env: Vec<(String, Ev)>,
     depth: usize,
-    /// LAMBDA calls in progress.
     calls: usize,
     /// `stack_position()` at the outermost `eval`.
     stack_top: usize,
@@ -237,6 +264,7 @@ impl Ctx for FnCtx<'_, '_> {
             host: &mut *self.ev.host,
             sheet: area.sheet,
             at,
+            shift: (0, 0),
             env,
             depth: self.ev.depth,
             calls: self.ev.calls,
@@ -277,10 +305,15 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
+        Self::with_shift(host, sheet, at, (0, 0))
+    }
+
+    pub fn with_shift(host: &'h mut dyn Host, sheet: usize, at: CellRef, shift: (i32, i32)) -> Self {
         Evaluator {
             host,
             sheet,
             at,
+            shift,
             env: Vec::new(),
             depth: 0,
             calls: 0,
@@ -344,9 +377,23 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    fn shifted_range(&self, r: &Reference) -> Result<RangeRef, CellError> {
+        if self.shift == (0, 0) {
+            Ok(r.range())
+        } else {
+            gridcraft_formula::adjust::shift_ref_kind(&r.kind, i64::from(self.shift.0), i64::from(self.shift.1))
+                .map(|kind| Reference { sheet: SheetSel::Current, kind }.range())
+                .ok_or(CellError::Ref)
+        }
+    }
+
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
-        let range = r.range();
-        Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
+        let range = self.shifted_range(r)?;
+        self.reference_areas_raw(&r.sheet, range)
+    }
+
+    fn reference_areas_raw(&self, sheet_sel: &SheetSel, range: RangeRef) -> Result<Vec<Area>, CellError> {
+        Ok(self.resolve_sheet(sheet_sel)?.into_iter().map(|sheet| Area { sheet, range }).collect())
     }
 
     /// Dereferences: one cell → its value; a block → an array; several areas → `#VALUE!`.
@@ -381,8 +428,7 @@ impl<'h> Evaluator<'h> {
         if !self.spend((h as u64) * (w as u64)) {
             return Value::Error(CellError::Calc);
         }
-        let data = self.host.range_values(a.sheet, range);
-        Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
+        self.host.range_array(a.sheet, range).map(Value::Array).unwrap_or(Value::Error(CellError::Value))
     }
 
     /// The block that reading `a` gives: `a` itself, or when it is large (or runs to the sheet's
@@ -515,11 +561,14 @@ impl<'h> Evaluator<'h> {
                     } else {
                         expr
                     };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
+                    let saved_sheet = self.sheet;
+                    let saved_shift = self.shift;
+                    // Unqualified references in a name refer to the scope sheet with no shared-formula shift.
                     self.sheet = scope;
+                    self.shift = (0, 0);
                     let r = self.eval(&expr);
-                    self.sheet = saved;
+                    self.sheet = saved_sheet;
+                    self.shift = saved_shift;
                     r
                 }
                 Err(_) => err(CellError::Name),

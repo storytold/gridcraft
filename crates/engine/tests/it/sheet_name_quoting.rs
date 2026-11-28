@@ -10,7 +10,7 @@ fn run(s: &mut Session, command: &str, params: Json) -> Json {
 }
 
 fn formula(s: &Session, cell: &str) -> String {
-    s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(cell).unwrap()).unwrap().formula.as_ref().unwrap().text.clone()
+    s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(cell).unwrap()).unwrap().formula.as_ref().unwrap().text().into_owned()
 }
 
 #[test]

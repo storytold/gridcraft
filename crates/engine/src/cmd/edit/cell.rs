@@ -49,7 +49,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         cell.style = style;
         // Formulas whose result is a date/time get a format from functions like TODAY().
         if wb.styles.get(style).num_fmt.as_str() == "General" {
-            let f = cell.formula.as_ref().map(|f| f.text.to_ascii_uppercase()).unwrap_or_default();
+            let f = cell.formula.as_ref().map(|f| f.text().to_ascii_uppercase()).unwrap_or_default();
             let auto = if f.starts_with("TODAY(")
                 || f.starts_with("DATE(")
                 || f.starts_with("EDATE(")

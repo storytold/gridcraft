@@ -33,7 +33,7 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         let mut cell = Cell::value(value);
         if let Some(a1) = &c.formula {
             let f = Formula::new(a1);
-            if f.expr.is_some() {
+            if f.has_cached_expr() {
                 cell.formula = Some(Arc::new(f));
             } else {
                 skipped += 1;

@@ -208,7 +208,7 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
     for (at, c) in &s.cells {
         let formula = c.formula.as_ref().and_then(|f| {
             let mut parsed = Formula::new(&f.text);
-            if parsed.expr.is_none() {
+            if !parsed.has_cached_expr() {
                 *unparsed = true;
                 return None;
             }
