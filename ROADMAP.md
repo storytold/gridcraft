@@ -391,3 +391,37 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+
+## Contribution #2824 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+### Compatibility hardening: imported values (#2770)
+
+Cache-preserving open, missing-result calculation, an explicit full-recalc opt-in and a
+stale-cache warning build on #2308. A missing function no longer makes its call implicitly volatile on every edit;
+argument edits and supported dynamic references continue to recalculate. Synthetic
+engine lifecycle regressions cover this scope. Sparse cached array followers survive export
+beyond a million positions, and declared legacy-array ranges protect uncached followers
+from partial content edits, including Clear Contents and Clear All. Whole-array
+selection unions remain clearable; filter-hidden rows are excluded from the footprint.
+Missing array anchors retain stored followers when evaluation fails or produces no
+placeable replacement array. Accepted multi-cell metadata survives saturation by single-cell
+array metadata. The freshness notice includes follower-only caches. Structural edits still
+perform a full recalc; readiness estimates and migration qualification are unchanged.
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
+| 2026-10-30 | trivial | Imported formula results update: 2026-10-30 · Cache-preserving open, missing-result calculation and explicit recalculation build on #2308 by @mrzv. Saved results can be stale; structural edits still perform full recalculation. Readiness estimates unchanged. |
+| 2026-10-30 | minor | Reject partial Clear Contents/Clear All selections inside legacy arrays using declared ranges, including missing cached followers; allow whole-array selection unions and respect filter-hidden rows. |
+| 2026-10-30 | minor | Preserve XLSX legacy/dynamic array follower caches in spill storage and retain bounded ranges, so cached open and save/reopen do not lose stored array results; explicit full recalculation remains supported. |
+| 2026-10-30 | minor | Keep stored array followers when a missing anchor cannot produce a replacement; retain accepted multi-cell range metadata after single-cell metadata saturation; include follower-only caches in the freshness notice. |
+| 2026-10-30 | minor | Export sparse array caches by stored entries without the million-cell cutoff; protect missing legacy-array followers using declared ranges, including when no follower cache exists. |
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |

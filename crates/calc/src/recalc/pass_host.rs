@@ -1,5 +1,5 @@
 use super::graph::{HashMap, HashSet, Key};
-use super::{Evaluator, Host, Workbook, stack_position};
+use super::{Evaluator, Host, Workbook, cached_array_range, stack_position};
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -62,6 +62,10 @@ pub(super) struct PassHost<'a> {
     /// Iterative calculation: a circular reference reads the cell's previous value instead of
     /// giving `#CIRC!`.
     pub(super) iterate: bool,
+    /// Missing-only import may retain saved array followers until an array replaces them.
+    pub(super) preserve_cached_arrays: bool,
+    /// Stored ownership includes absent cached followers; scalar-only passes do not build it.
+    pub(super) declared_spill_index: std::cell::OnceCell<SpillIndex>,
     /// Values from the previous iteration; cells not in it read their stored value.
     prev: HashMap<Key, Value>,
     /// Formulas being evaluated, innermost last (kept only when iterating).
@@ -116,6 +120,8 @@ impl<'a> PassHost<'a> {
             spill_visits: 0,
             cycle_seen: HashSet::default(),
             iterate: false,
+            preserve_cached_arrays: false,
+            declared_spill_index: std::cell::OnceCell::new(),
             prev: HashMap::default(),
             stack: Vec::new(),
             members: HashSet::default(),
@@ -172,26 +178,26 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
-    let own = sh.spill_ranges.get(&anchor);
+    let mut owners = Vec::new();
+    host.declared_spill_index.get_or_init(|| super::stored_spill_index(host.wb)).meeting(sheet, range, &mut owners);
     let default = super::Standing::default();
     let standing = host.standing.unwrap_or(&default);
-    let spilled_over = |c: CellRef| {
-        !own.is_some_and(|o| o.contains(c))
-            && sh.spill_ranges.iter().any(|(o, r)| {
-                // A formula or Python cell recalculated in this pass lays its array out again.
-                *o != anchor
-                    && r.contains(c)
-                    && !host.exprs.contains_key(&(sheet, *o))
-                    && !host.python.contains_key(&(sheet, *o))
-                    && standing.outranks_at(((sheet, *o), Some(*r)), ((sheet, anchor), own.copied()), c)
-            })
+    let own = sh.spill_ranges.get(&anchor);
+    // Pending formulas and Python cells may replace their declarations in this pass.
+    owners.retain(|owner| !host.exprs.contains_key(&(sheet, *owner)) && !host.python.contains_key(&(sheet, *owner)));
+    let declared_blocked = if host.preserve_cached_arrays {
+        owners
+            .iter()
+            .any(|owner| *owner != anchor && sh.spill_ranges.get(owner).is_some_and(|area| super::spill_area_intersects(*area, range, anchor)))
+    } else {
+        super::declared_owner_blocks(sh, ((sheet, anchor), own.copied()), range, standing, &owners)
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
         || (a.data.len() > 1 && sh.tables.iter().any(|t| t.range.contains(anchor)))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
-        || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+        || declared_blocked
 }
 
 /// Whether `arr`, anchored at `anchor`, would spill exactly what the sheet already holds over
@@ -360,9 +366,11 @@ impl PassHost<'_> {
         }
         // A legacy array formula fills the range it was entered in.
         let legacy = self.wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+        let keep_failed_cache =
+            self.preserve_cached_arrays && matches!(&v, Value::Error(_)) && self.wb.sheet(k.0).and_then(|sh| cached_array_range(sh, k.1)).is_some();
         let v = match legacy {
-            Some(range) => fit_to_range(v, range),
-            None => v,
+            Some(range) if !keep_failed_cache => fit_to_range(v, range),
+            _ => v,
         };
         self.depth -= 1;
         self.in_progress.remove(&k);
@@ -573,7 +581,14 @@ impl Host for PassHost<'_> {
         }
         // Recalculated in this pass: its new array, unless something blocks it (#SPILL!).
         self.compute(k);
-        let arr = self.spills.get(&k)?;
+        let Some(arr) = self.spills.get(&k) else {
+            // Do not use the cached range while its anchor is still recursively evaluating.
+            return if self.preserve_cached_arrays && self.results.contains_key(&k) {
+                self.wb.sheet(sheet).and_then(|sh| cached_array_range(sh, anchor))
+            } else {
+                None
+            };
+        };
         let end = CellRef::new(
             anchor.row.saturating_add((arr.rows as u32).saturating_sub(1)),
             anchor.col.saturating_add((arr.cols as u32).saturating_sub(1)),

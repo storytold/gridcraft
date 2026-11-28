@@ -50,7 +50,7 @@ craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev 
 # SpreadsheetML worksheet/drawing/string/package XML; workbook model mapping stays in gridcraft-xlsx.
 craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
-craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-xls = { git = "https://github.com/ro-legal-docx/craft-libs", rev = "6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca", version = "0.1.0" }
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "=0.1.0" }
 

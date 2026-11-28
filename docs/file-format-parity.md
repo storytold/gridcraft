@@ -256,3 +256,79 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-11 | minor | XLSX: Allow Edit Ranges (`protectedRanges`) read and written with their password hashes (#307) |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
 | 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates | 
+
+
+## Contribution #2824 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+Topic change: saved XLS array results and cache-preserving calculation retained with deterministic spill precedence.
+
+### Saved formula results on open (#2770)
+XLSX legacy and dynamic arrays retain their stored follower values and declared ranges in
+spill storage. They are not ordinary cells that block later recalculation. Synthetic controls
+cover unsupported cached anchors, zero, empty text, false and errors across unrelated edits
+and save/reopen, plus row/column shifts of legacy array ranges. Sparse followers beyond
+a million positions survive export without enumerating the declared area. Legacy-array
+ranges protect partial content edits even when follower caches are sparse or empty;
+formatting and whole-array replacement remain supported. Clear Contents/Clear All also
+reject partial selections before changing the workbook; whole-array clears accept unions
+of areas but exclude filter-hidden rows from coverage. Missing cache entries are not
+reconstructed and no native Excel corpus qualification is claimed. A missing explicitly
+marked array anchor keeps stored followers when its calculation fails or produces no
+placeable replacement array; a successful replacement still supersedes old results. The
+freshness notice covers follower-only caches. Accepted multi-cell ranges keep their
+metadata even after single-cell metadata admission reaches its limit; the existing
+multi-cell count, area and scan-work budgets remain in force.
+`file.open` keeps nonempty formula caches and fills absent results unless the workbook
+requests `fullCalcOnLoad`. An explicit `recalculate: true` or `recalculate: false` wins over
+that flag. The info bar reports the chosen policy without a modal message box. Normal argument
+edits invalidate their dependents, while unrelated edits no longer invalidate a saved
+unresolved function solely because its name is unknown. Calculate Now and structural
+edits still recalculate all formulas, which can replace unsupported results with errors.
+The synthetic lifecycle checks are in `crates/engine/tests/it/cached_open.rs`; they do not
+prove cache freshness or arbitrary Excel-authored file fidelity. This open policy uses
+#2308's additive calculation API rather than duplicating it.
+The deterministic spill-precedence integration keeps imported followers fixed during missing-only
+opening, including when an earlier missing anchor has a recorded range of its own. Explicit full
+and incremental recalculation retain upstream's standing/reading-order behavior. A synthetic
+calc control covers both cache variants and the later explicit recalculation transition.
+
+Native JSON rejects invalid cached spill ranges rather than discarding metadata that protects
+array contents. The error identifies the offending anchor cell.
+
+#### Shared-reader integration for saved XLS arrays
+
+The shared reader retains stored non-empty array follower results separately from ordinary
+cells. The adapter maps them to sparse spill values, records the anchor's declared range,
+and restores ordinary values when an anchor cannot be parsed. Missing results stay absent.
+The dependency is temporarily pinned to [the supporting contribution](https://github.com/ro-legal-docx/craft-libs/commit/749dda3370eab6cec7409d5c15bceee0e37ec540)
+based on the same upstream revision; package versions and the other library code are unchanged.
+
+Malformed XLS array declarations whose range starts away from the formula anchor are rejected
+before creating spill metadata, so a saved native workbook cannot become unreadable on reopen.
+
+Stored array declarations reserve absent follower cells as well as saved ones during cached
+opening. A missing array blocked during write-back is retried when another pending area shrinks.
+Explicit edits retain upstream standing/reading-order takeover, including when both anchors held
+an area. Cleanup of a displaced sparse area is bounded by stored entries rather than every
+coordinate in its declaration. Synthetic controls cover dynamic/legacy caches, explicit edits,
+and takeover of a 16-million-cell sparse declaration without erasing the winning array.
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-15 | minor | Keep sparse saved XLS array results through the craft-xls adapter and retain unknown-function dependency behavior after the iterative precedent collector refactor; all earlier cache-preserving regressions remain. |
+| 2026-11-11 | trivial | Invalid native JSON spill-cache diagnostics name the offending anchor; strict rejection protects array contents. A calculation regression checks cached unknown calls with explicit argument dependencies after graph rebuild. |
+| 2026-11-10 | minor | XLS import moves stored legacy-array followers into sparse spill caches and keeps declared ranges before cached open; genuinely absent followers stay sparse, while unsupported formulas keep their values as ordinary cells. |
+| 2026-11-10 | minor | Native JSON retains sparse spill values and ranges, including unmarked and unsupported arrays, without evaluating cached formulas; older JSON that omitted spill data requires explicit recalculation to reconstruct supported arrays. |
+| 2026-11-10 | minor | Honour fullCalcOnLoad unless an explicit recalculation parameter overrides it; report the chosen policy in the info bar without a modal; keep the writer's missing-result flag and explicitly unflag cache-preserving fixtures. |
+| 2026-10-30 | minor | Reject partial Clear Contents/Clear All selections inside legacy arrays using declared ranges, including missing cached followers; allow whole-array selection unions and respect filter-hidden rows. |
+| 2026-10-30 | minor | Preserve XLSX legacy/dynamic array follower caches in spill storage and retain bounded ranges, so cached open and save/reopen do not lose stored array results; explicit full recalculation remains supported. |
+| 2026-10-30 | minor | Keep stored array followers when a missing anchor cannot produce a replacement; retain accepted multi-cell range metadata after single-cell metadata saturation; include follower-only caches in the freshness notice. |
+| 2026-10-30 | minor | Export sparse array caches by stored entries without the million-cell cutoff; protect missing legacy-array followers using declared ranges, including when no follower cache exists. |
+| 2026-10-28 | trivial | Keep the stale formula-cache warning visible ahead of overflowing import warnings; a synthetic XLSX regression verifies the visible notice, retained warnings and overflow count |
+| 2026-10-28 | minor | Cache-preserving imported formula open and explicit recalculation, building on #2308; synthetic lifecycle coverage, remaining structural-recalc limitation (#2770). |

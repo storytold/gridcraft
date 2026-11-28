@@ -161,7 +161,11 @@ impl Precedents<'_> {
                 self.dynamic = true
             }
             Expr::Name(_) | Expr::Struct(_) => self.dynamic = true,
-            Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) => self.dynamic = true,
+            // Only workbook-defined calls can hide references beyond their explicit arguments.
+            // Unknown calls must keep an imported saved result across unrelated edits.
+            Expr::Call(n, _) if gridcraft_functions::lookup(n).is_none() && !is_special(n) && self.wb.name(n, self.sheet).is_some() => {
+                self.dynamic = true
+            }
             // A range ending in a function's result (`A1:INDEX(B1:B9,n)`), or a chain of plain
             // references the parser can't fold into one (`A1:B2:C3`), covers the cells between the
             // references inside it, not only those references. Both operands are visited once,
