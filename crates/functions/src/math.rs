@@ -60,8 +60,10 @@ fn clean(x: f64) -> f64 {
     to_sig_digits(x, 15)
 }
 
+/// A digits argument: rounded to 15 significant digits, then truncated toward 0, so
+/// 2.9999999999999996 is 3 (observed on Windows Excel 16.0.20430), while 1.5 is 1 and -1.5 is -1.
 fn digits_arg(a: &[Arg], i: usize) -> R<i32> {
-    let d = opt_num(a, i, 0.0)?.trunc();
+    let d = clean(opt_num(a, i, 0.0)?).trunc();
     Ok(d.clamp(-400.0, 400.0) as i32)
 }
 
