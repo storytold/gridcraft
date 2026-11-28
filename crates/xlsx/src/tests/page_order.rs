@@ -109,3 +109,13 @@ fn first_page_number_is_read_and_written_back() {
     let xml = sheet_xml(&write_xlsx(&wb).unwrap());
     assert!(xml.contains(r#"firstPageNumber="1""#) && xml.contains(r#"useFirstPageNumber="1""#), "{xml}");
 }
+
+#[test]
+fn first_page_number_defaults_to_one_when_enabled() {
+    let body = r#"<sheetData/><pageSetup paperSize="9" useFirstPageNumber="1"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.first_page_number, Some(1));
+
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(0).unwrap().print.first_page_number, Some(1));
+}
