@@ -237,6 +237,63 @@ fn delimiter_sniffing() {
 }
 
 #[test]
+fn a_tie_between_tab_and_comma_reads_as_tab_separated() {
+    // Every line holds one tab and one comma, so both split each line into the same number of fields.
+    let text = "name\tnote,extra\n1\tx,y\n2\tz,w\n";
+    assert_eq!(sniff_delimiter(text, '"'), b'\t');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b'\t'));
+    assert_eq!(v(&wb, 0, 1), Value::text("note,extra"));
+    assert_eq!(v(&wb, 1, 0), Value::Number(1.0));
+    assert_eq!(v(&wb, 2, 1), Value::text("z,w"));
+}
+
+#[test]
+fn a_first_record_wider_than_the_sniff_sample_keeps_its_delimiter() {
+    // A header row of about 105 KiB: longer than the sample delimiter detection reads.
+    let header: Vec<String> = (0..12_000).map(|i| format!("col{i:05}")).collect();
+    let text = format!("{}\n1;2;3\n", header.join(";"));
+    assert!(text.len() > 96 << 10);
+    assert_eq!(sniff_delimiter(&text, '"'), b';');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(v(&wb, 1, 1), Value::Number(2.0));
+}
+
+#[test]
+fn a_multi_byte_first_field_longer_than_64_kib_keeps_its_delimiter() {
+    // 23,000 three-byte characters (69,000 bytes) come before the first `;`: past 64 KiB of bytes,
+    // inside the 65,536 characters delimiter detection reads.
+    let first = "\u{4e00}".repeat(23_000);
+    let text = format!("{first};title\n1;2\n3;4\n");
+    assert!(first.len() > 64 << 10);
+    assert_eq!(sniff_delimiter(&text, '"'), b';');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(v(&wb, 0, 0), Value::text(first.as_str()));
+    assert_eq!(v(&wb, 0, 1), Value::text("title"));
+    assert_eq!(v(&wb, 2, 0), Value::Number(3.0));
+    assert_eq!(v(&wb, 2, 1), Value::Number(4.0));
+}
+
+#[test]
+fn a_sparse_semicolon_export_reopens_with_its_cells() {
+    // Only B40001 holds a value: the 40,000 rows above it are written as bare separators, more
+    // than the sample delimiter detection reads.
+    let mut s = Sheet::new("S");
+    s.set_value(CellRef::new(40_000, 1), Value::Number(7.0));
+    let raw = |c: CellRef| match s.value(c) {
+        Value::Number(n) => gridcraft_core::number_to_text(n),
+        _ => String::new(),
+    };
+    let out = write_csv(&s, b';', raw).unwrap();
+    assert!(out.len() > 64 << 10);
+    let back = read_csv(&out, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(back.csv_delimiter, Some(b';'));
+    assert_eq!(v(&back, 40_000, 1), Value::Number(7.0));
+}
+
+#[test]
 fn writing() {
     let mut wb = Workbook::new();
     let mut s = Sheet::new("S");
