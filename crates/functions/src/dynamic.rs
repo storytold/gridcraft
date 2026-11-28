@@ -431,7 +431,7 @@ fn wrapcols(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 /// Range of kept indices for TAKE (`take = true`) or DROP along an axis of length `len`.
 fn span(len: usize, n: Option<i64>, take: bool) -> R<(usize, usize)> {
     let Some(n) = n else { return Ok((0, len)) };
-    let k = (n.unsigned_abs() as usize).min(len);
+    let k = usize::try_from(n.unsigned_abs()).unwrap_or(len).min(len);
     if take {
         if n == 0 {
             return Err(CellError::Calc);
@@ -1325,6 +1325,16 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![nv(1.0), nv(3.0)], vec![nv(2.0), nv(0.0)]]);
         is_err(ev("WRAPROWS", vec![rf(grid()), n(2.0)]), CellError::Value);
         is_err(ev("WRAPROWS", vec![av(row(&[1.0])), n(0.0)]), CellError::Num);
+    }
+
+    #[test]
+    fn take_and_drop_clamp_large_counts() {
+        for count in [4_294_967_296.0, -4_294_967_296.0] {
+            let all = rows_of(&grid());
+            let result = ev("TAKE", vec![rf(grid()), n(count)]);
+            assert_eq!(rows_of(&result), all);
+            is_err(ev("DROP", vec![rf(grid()), n(count)]), CellError::Calc);
+        }
     }
 
     #[test]
