@@ -29,6 +29,10 @@ gridcraft-math = { workspace = true }
 image = { workspace = true }
 unicode-segmentation = "=1.13.3"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Hunspell-compatible spelling (installed `de_DE`, `en_US` … dictionaries), pure Rust.
+spellbook = "0.4"
+
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 gridcraft-model = { workspace = true, features = ["test-support"] }

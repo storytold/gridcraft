@@ -317,7 +317,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 - PivotTables: Insert/Recommended PivotTables, field list pane, compact/outline/tabular layouts,
   values on rows or columns, date grouping, sort, filters, show-values-as, refresh, and XLSX round-trip.
 - Page layout & print: Page Break Preview, print settings, PDF export and printing.
-- What-if: Goal Seek, scenarios, data tables. Spelling (system word list) and thesaurus.
+- What-if: Goal Seek, scenarios, data tables. Spelling (system word list and installed Hunspell dictionaries, e.g. `de_DE`) and thesaurus.
 - Draw: pen, highlighter, eraser, ink strokes and Ink to Shape. Task panes: Comments (threaded
   replies, resolve), Watch Window, Selection, Format Chart.
 - Charts: column, bar, line, area, pie, doughnut (one concentric ring per series), scatter,
