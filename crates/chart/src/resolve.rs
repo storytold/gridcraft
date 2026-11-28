@@ -223,8 +223,9 @@ fn formula_volatile<'a>(wb: &'a Workbook, sheet: usize, f: &str, depth: u32, see
 /// Whether formula text `f` calls one of the volatile functions by name.
 fn calls_volatile(f: &str) -> bool {
     const VOLATILE: [&str; 5] = ["NOW", "TODAY", "RAND", "RANDBETWEEN", "RANDARRAY"];
-    // Formulas read from a file may carry the `_xlfn.` prefix of newer functions.
-    let up = f.to_ascii_uppercase().replace("_XLFN.", "");
+    // Formulas read from a file may carry the `_xlfn.`/`_xlws.` prefixes of newer functions,
+    // stacked; a `_XLWS.` left in place would put a `.` before the name and hide it.
+    let up = f.to_ascii_uppercase().replace("_XLFN.", "").replace("_XLWS.", "");
     VOLATILE.iter().any(|name| {
         up.match_indices(name).any(|(i, _)| {
             let before = up[..i].chars().next_back();
