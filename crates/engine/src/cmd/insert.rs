@@ -280,6 +280,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unknown_shape_kinds_are_refused_without_inserting_a_rectangle() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        for kind in ["triange", "unsupported"] {
+            let error = s.execute("insert.shape", json!({"kind": kind})).unwrap_err();
+            assert!(error.to_string().contains(kind), "{error}");
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        // Omitted kind still creates a rectangle, and the existing oval alias stays supported.
+        s.execute("insert.shape", json!({})).unwrap();
+        s.execute("insert.shape", json!({"kind": "oval"})).unwrap();
+        let sheet = s.active().unwrap().wb.active().unwrap();
+        assert_eq!(sheet.shapes.iter().map(|shape| shape.kind).collect::<Vec<_>>(), [ShapeKind::Rectangle, ShapeKind::Ellipse]);
+    }
+
+    #[test]
     fn chart_from_whole_columns_uses_the_rows_in_use() {
         // #3114: selecting two whole columns of data refused the chart as "range too large".
         let mut s = Session::new();
