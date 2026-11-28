@@ -81,6 +81,12 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     let after_page = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
+
+    h.key_press(Key::Backspace);
+    h.run_steps(3);
+    let dialog = h.state().dialog.as_ref().unwrap();
+    assert!(dialog.search.is_empty());
+    assert_eq!(dialog.list_index, 0, "editing the query selects the first result");
 }
 
 /// The palette displays the engine metadata unchanged on either runtime OS.
