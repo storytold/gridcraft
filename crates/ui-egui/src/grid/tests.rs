@@ -131,6 +131,38 @@ fn center_across_run_stops_at_first_non_continuing_column() {
 }
 
 #[test]
+fn picking_a_dropdown_item_recalculates_an_if_that_tests_the_cell() {
+    // #3570, through the app: the arrow opens the picker on the toggle, and a clicked item is
+    // entered with the same `run_or_alert("cell.set", …)` call `list_picker` makes. The IF beside
+    // it, and the text the grid paints for it, follow the pick.
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Default::default());
+    app.run("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"Yes,No\""})).unwrap();
+    app.run("cell.set", json!({"cell": "B1", "input": "=IF(A1=\"Yes\",\"shown\",\"hidden\")"})).unwrap();
+    let a1 = CellRef::new(0, 0);
+    let b1 = CellRef::new(0, 1);
+    let painted = |app: &SheetApp| {
+        let wb = app.session.active().unwrap().wb.clone();
+        let sh = wb.sheet(0).unwrap();
+        let (lk, _) = look(&wb, 0, sh, b1, &mut CfCache::new());
+        display_text(&wb, sh, b1, &sh.value(b1), &lk.style, 200.0, 7.0).0
+    };
+    assert_eq!(painted(&app), "hidden");
+    for (item, outcome) in [("Yes", "shown"), ("No", "hidden"), ("Yes", "shown")] {
+        app.grid.list_picker = Some(a1);
+        let wb = app.session.active().unwrap().wb.clone();
+        let dv = wb.sheet(0).unwrap().validations[0].clone();
+        let items = gridcraft_engine::cmd::data::list_items(&wb, 0, a1, &dv);
+        let it = items.iter().find(|x| x.as_str() == item).unwrap().clone();
+        app.run_or_alert("cell.set", json!({"cell": a1.a1(), "input": it}));
+        assert!(app.message.is_none(), "picking {item} was refused: {:?}", app.message);
+        assert_eq!(app.session.active().unwrap().wb.sheet(0).unwrap().value(b1), Value::Text(outcome.into()), "B1 after picking {item}");
+        assert_eq!(painted(&app), outcome, "painted B1 after picking {item}");
+    }
+}
+
+#[test]
 fn conditional_number_format_reaches_the_cell_text() {
     // #1163: a rule's number format replaces the cell's own; unmatched cells keep theirs.
     let mut session = gridcraft_engine::Session::new();
