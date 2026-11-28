@@ -22,9 +22,9 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@6bde9f8b9ba76635d00f6369d58313d1269b4191
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@bf94b15b708089b95c4e2d1c978e66ecf1f2f4f3
     with:
-      tooling-revision: 6bde9f8b9ba76635d00f6369d58313d1269b4191
+      tooling-revision: bf94b15b708089b95c4e2d1c978e66ecf1f2f4f3
       app-name: gridcraft
       manual-actors: '["bflatastic","dylanmtaylor","echelon","FredApps","skylartaylor"]'
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83

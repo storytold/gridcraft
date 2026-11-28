@@ -561,6 +561,16 @@ pub struct Series {
     /// Trendlines fitted to this series (Excel allows several per series).
     #[serde(default)]
     pub trendlines: Vec<Trendline>,
+    /// Number format of literal values (an array constant, such as a PivotChart's cached
+    /// points). Values that reference cells use the cells' format instead.
+    #[serde(default)]
+    pub number_format: Option<String>,
+    /// The categories are a multi-level block (a PivotChart's `multiLvlStrRef`): a column (or
+    /// row) of cells per level, the innermost last. Only the innermost level is drawn, one
+    /// label per point. The reference is kept, and XLSX saves it as a `multiLvlStrRef` with a
+    /// cache of every level; a PivotChart reads that back with this flag set again.
+    #[serde(default)]
+    pub innermost_categories: bool,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
@@ -1305,6 +1315,10 @@ pub enum FilterCriterion {
     Values {
         values: Vec<String>,
         blanks: bool,
+        /// Exact checklist identities from dropdown or selected-cell UI actions so rows whose
+        /// formatted display text collides (for example under Show Formulas) stay distinct.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        identities: Vec<String>,
     },
     /// Custom: one or two comparisons (`op` like `>=`, `=*abc*`), joined by and/or.
     Custom {

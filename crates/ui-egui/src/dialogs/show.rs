@@ -537,6 +537,7 @@ pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), 
     r
 }
 
+/// Draws the standard OK and Cancel button row, consuming unmodified Enter on confirmation (#2189).
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ok_cancel_enabled(ui, confirm, open, true);
 }
@@ -552,7 +553,9 @@ pub(super) fn ok_cancel_enabled(ui: &mut egui::Ui, confirm: &mut bool, open: &mu
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok =
                 ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if enabled && (ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter))) {
+            // Consume Enter so a newly opened error message cannot dismiss itself (#2189).
+            let enter = enabled && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
+            if enabled && (ok.clicked() || enter) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
