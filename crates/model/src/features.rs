@@ -549,6 +549,15 @@ pub struct Series {
     /// X values for scatter / bubble sizes.
     pub bubble_sizes: Option<String>,
     pub color: Option<Color>,
+    /// Suppress the series fill while retaining any explicit outline.
+    #[serde(default)]
+    pub no_fill: bool,
+    /// Explicit outline colour, independent of the series fill.
+    #[serde(default)]
+    pub outline_color: Option<Color>,
+    /// Physical horizontal and vertical axes imported with this series.
+    #[serde(default)]
+    pub axes: Option<SeriesAxes>,
     /// Combo charts: this series drawn as a line on the secondary axis.
     pub secondary: bool,
     pub kind: Option<ChartKind>,
@@ -571,6 +580,20 @@ pub struct Series {
     /// cache of every level; a PivotChart reads that back with this flag set again.
     #[serde(default)]
     pub innermost_categories: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SeriesAxes {
+    pub x: ChartAxis,
+    pub y: ChartAxis,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChartAxis {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub reversed: bool,
+    pub hidden: bool,
 }
 
 /// Regression a trendline fits (`c:trendlineType`).
@@ -741,6 +764,7 @@ fn combo_series_kind(own: Option<ChartKind>, i: usize) -> ChartKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Grouped {
     Column,
+    Bar,
     Line,
     Area,
 }
@@ -749,6 +773,7 @@ fn grouped(k: ChartKind) -> Option<Grouped> {
     use ChartKind::*;
     match k {
         ColumnClustered | ColumnStacked | ColumnStacked100 => Some(Grouped::Column),
+        BarClustered | BarStacked | BarStacked100 => Some(Grouped::Bar),
         Line | LineMarkers | LineStacked | LineStacked100 | LineStacked100Markers => Some(Grouped::Line),
         Area | AreaStacked | AreaStacked100 => Some(Grouped::Area),
         _ => None,
@@ -782,11 +807,21 @@ fn regroup(k: ChartKind, first: ChartKind) -> ChartKind {
 }
 
 impl Chart {
+    /// Horizontal ranges with an XY overlay retain both their orientation and numeric X values.
+    pub fn horizontal_xy_combo(&self) -> bool {
+        use ChartKind::*;
+        self.kind == Combo
+            && self.series.iter().any(|s| matches!(s.kind, Some(BarClustered | BarStacked | BarStacked100)))
+            && self.series.iter().any(|s| matches!(s.kind, Some(Scatter | ScatterLines)))
+            && self.series.iter().all(|s| matches!(s.kind, Some(BarClustered | BarStacked | BarStacked100 | Scatter | ScatterLines)))
+    }
+
     /// The kind series `i` is drawn as, and saved as (the one rule the renderer and every file
     /// format share).
     ///
     /// In a combo chart: the series' own kind, else a column for the first series and a line
-    /// for the rest. A combo is drawn on category axes, so bars stand upright as columns; pies,
+    /// for the rest. Horizontal bar/XY combinations keep their bars and numeric XY overlay.
+    /// Other combos are drawn on category axes, so bars stand upright as columns; pies,
     /// doughnuts, bubbles and chartex kinds are clustered columns; scatter series are lines with
     /// markers, and scatter-with-lines and radar series plain lines. The series of one type on
     /// one pair of axes share the first one's grouping (as Excel keeps them): a stacked column
@@ -798,13 +833,15 @@ impl Chart {
         let own = self.series.get(i).and_then(|s| s.kind).filter(|k| *k != ChartKind::Combo);
         match (self.kind, own) {
             (ChartKind::Combo, own) => {
-                let k = combo_series_kind(own, i);
+                let horizontal = self.horizontal_xy_combo();
+                let kind = |own: Option<ChartKind>, i| if horizontal { own.unwrap_or(ChartKind::Line) } else { combo_series_kind(own, i) };
+                let k = kind(own, i);
                 let Some(t) = grouped(k) else { return k };
                 let secondary = self.series.get(i).is_some_and(|s| s.secondary);
                 let first = self.series.iter().enumerate().take(i).find_map(|(j, s)| {
                     #[cfg(any(test, feature = "test-support"))]
                     work::visit();
-                    let kj = combo_series_kind(s.kind, j);
+                    let kj = kind(s.kind, j);
                     (s.secondary == secondary && grouped(kj) == Some(t)).then_some(kj)
                 });
                 first.map_or(k, |f| regroup(k, f))
@@ -820,13 +857,14 @@ impl Chart {
             return (0..self.series.len()).map(|i| self.series_kind(i)).collect();
         }
         let mut firsts: Vec<(Grouped, bool, ChartKind)> = Vec::new();
+        let horizontal = self.horizontal_xy_combo();
         self.series
             .iter()
             .enumerate()
             .map(|(i, s)| {
                 #[cfg(any(test, feature = "test-support"))]
                 work::visit();
-                let k = combo_series_kind(s.kind, i);
+                let k = if horizontal { s.kind.unwrap_or(ChartKind::Line) } else { combo_series_kind(s.kind, i) };
                 let Some(t) = grouped(k) else { return k };
                 match firsts.iter().find(|(ft, sec, _)| *ft == t && *sec == s.secondary) {
                     Some((_, _, f)) => regroup(k, *f),

@@ -483,22 +483,28 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
 /// values (scatter/bubble), bubble sizes, number formats and colours (explicit, else the
 /// default palette derived from the workbook theme accents).
 pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
+    let horizontal_xy = chart.horizontal_xy_combo();
     let numeric_x = matches!(chart.kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let mut series = Vec::new();
     let mut categories: Option<Vec<String>> = None;
     let limit = points_per_series(chart.series.len());
     let mut trend_left = MAX_TRENDLINES;
     let mut category_levels = Vec::new();
+    let kinds = chart.series_kinds();
     for (i, s) in chart.series.iter().take(MAX_SERIES).enumerate() {
         let values = nums(wb, sheet, &s.values, limit);
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
-        let color = s
+        let series_color = s
             .color
             .as_ref()
             .and_then(|c| c.resolve(&wb.theme))
             .map(|[r, g, b]| [r, g, b, 0xFF])
             .unwrap_or_else(|| chart_style_series_color(&wb.theme, chart.style, i, chart.series.len().min(MAX_SERIES)));
-        let kind = chart.series_kind(i);
+        let mut color = series_color;
+        if s.no_fill {
+            color[3] = 0;
+        }
+        let kind = kinds.get(i).copied().unwrap_or(chart.kind);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
@@ -507,6 +513,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             _ => None,
         };
         if categories.is_none()
+            && (!horizontal_xy || !matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines))
             && let Some(f) = &s.categories
         {
             let (mut c, outer) = category_table(wb, sheet, f, &s.values, limit, s.innermost_categories);
@@ -523,7 +530,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             .take(trend_left)
             .map(|t| TrendlineData {
                 spec: t.clone(),
-                color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(color),
+                color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(series_color),
             })
             .collect::<Vec<_>>();
         trend_left = trend_left.saturating_sub(trendlines.len());
@@ -533,6 +540,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             x,
             sizes,
             color,
+            outline_color: s.outline_color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 255]),
             kind,
             secondary: s.secondary,
             smooth: s.smooth,
@@ -543,7 +551,12 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             },
         });
     }
-    let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
+    let n = series
+        .iter()
+        .filter(|s| !horizontal_xy || !matches!(s.kind, ChartKind::Scatter | ChartKind::ScatterLines))
+        .map(|s| s.values.len())
+        .max()
+        .unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = if matches!(chart.style, 1 | 9) {
         (0..n.min(PALETTE_CYCLE)).map(|i| chart_style_series_color(&wb.theme, chart.style, i, n)).collect()

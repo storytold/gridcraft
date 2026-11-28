@@ -49,6 +49,7 @@ fn series(name: &str, values: &str) -> Series {
         quartiles: Default::default(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }
 }
 

@@ -143,6 +143,9 @@ pub struct SeriesData {
     /// Bubble sizes.
     pub sizes: Option<Vec<Option<f64>>>,
     pub color: Rgba,
+    /// Explicit bar outline, independent of fill visibility.
+    #[serde(default)]
+    pub outline_color: Option<Rgba>,
     /// The kind this series is drawn as. `resolve` sets it from `Chart::series_kind`. `render`
     /// reads it for every series of a vertical cartesian or scatter chart, so a hand-built
     /// `ChartData` sets it too (`SeriesData::default()` gives `ColumnClustered`).
@@ -172,6 +175,7 @@ impl Default for SeriesData {
             x: None,
             sizes: None,
             color: [0x15, 0x60, 0x82, 0xFF],
+            outline_color: None,
             kind: ChartKind::ColumnClustered,
             secondary: false,
             smooth: false,

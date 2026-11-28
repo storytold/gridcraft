@@ -148,6 +148,7 @@ pub(crate) fn sanitize(d: &ChartData) -> ChartData {
                 x: s.x.as_deref().map(sanitize_vals),
                 sizes: s.sizes.as_deref().map(sanitize_vals),
                 color: s.color,
+                outline_color: s.outline_color,
                 // `resolve` gives each series the kind it is drawn as (`Chart::series_kind`); a
                 // caller's combo kind is drawn as a combo's defaults: a column first, then lines.
                 kind: match s.kind {
@@ -264,7 +265,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
                 Waterfall => waterfall(ctx, chart, data, area),
                 BoxWhisker => box_whisker(ctx, chart, data, area),
                 Stock => stock(ctx, chart, data, area),
-                _ => cartesian(ctx, chart, data, area, false),
+                _ => cartesian(ctx, chart, data, area, chart.horizontal_xy_combo()),
             }
         }
     }

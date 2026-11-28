@@ -297,6 +297,16 @@ fn validate_xlsx_workbook(wb: &Workbook) -> Result<(), IoError> {
     if wb.sheets.iter().any(|sheet| sheet.cell_pictures.keys().any(|c| sheet.cell(*c).is_some_and(|cell| cell.formula.is_some()))) {
         return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
     }
+    for sheet in &wb.sheets {
+        for chart in &sheet.charts {
+            if crate::chart::needs_extra_axis_pair(chart) && crate::passthrough::kept_chart(wb, sheet, chart).is_none() {
+                return Err(IoError::Format(format!(
+                    "A horizontal bar/XY chart on sheet \"{}\" requires more than two axis pairs. XLSX export supports one pair for the bars and one for the XY series.",
+                    sheet.name
+                )));
+            }
+        }
+    }
     check_sheet_names(wb)
 }
 

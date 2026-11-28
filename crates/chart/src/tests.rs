@@ -8,6 +8,477 @@ use crate::*;
 mod budget;
 mod data_table;
 
+#[test]
+fn floating_bar_ranges_keep_offsets_and_numeric_price_overlay() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    let axes = SeriesAxes { x: ChartAxis { min: Some(200.0), ..Default::default() }, y: ChartAxis { reversed: true, ..Default::default() } };
+    c.series = vec![
+        Series {
+            categories: Some("{\"Approach A\",\"Approach B\"}".into()),
+            values: "{300,550}".into(),
+            kind: Some(ChartKind::BarStacked),
+            no_fill: true,
+            axes: Some(axes.clone()),
+            ..Default::default()
+        },
+        Series {
+            values: "{300,230}".into(),
+            kind: Some(ChartKind::BarStacked),
+            color: Some(Color::Rgb(0x008040)),
+            axes: Some(axes),
+            ..Default::default()
+        },
+        Series {
+            categories: Some("{494,494}".into()),
+            values: "{0,1}".into(),
+            kind: Some(ChartKind::ScatterLines),
+            color: Some(Color::Rgb(0xf07020)),
+            secondary: true,
+            axes: Some(SeriesAxes {
+                x: ChartAxis { min: Some(200.0), max: Some(900.0), hidden: true, ..Default::default() },
+                y: ChartAxis { min: Some(0.0), max: Some(1.0), hidden: true, ..Default::default() },
+            }),
+            ..Default::default()
+        },
+    ];
+    let wb = Workbook::default();
+    let data = resolve(&wb, 0, &c);
+    assert_eq!(data.series[0].color[3], 0);
+    assert_eq!(data.series[2].x, Some(vec![Some(494.0), Some(494.0)]));
+    let primitives = render(&c, &data, 900.0, 500.0, &ApproxMeasure);
+    let ranges: Vec<_> = primitives
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, w, h, fill: Some([0, 128, 64, 255]), .. } => Some((*x, *y, *w, *h)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ranges.len(), 2, "only the floating range series paints bars");
+    assert!(ranges.iter().all(|(_, _, w, h)| w > h), "ranges run horizontally");
+    assert!(ranges[0].1 < ranges[1].1, "the reversed category axis puts the first approach on top");
+    let price = primitives
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert!(price.len() >= 2);
+    assert!((price[0][0] - price[1][0]).abs() < 0.01, "equal numeric X values draw a vertical line");
+    assert!(price[0][1] > ranges[1].1 && price[1][1] < ranges[0].1, "the line spans the plot");
+    assert!(ranges[0].0 < price[0][0] && price[0][0] < ranges[0].0 + ranges[0].2, "price is inside the first range");
+    assert!(price[0][0] < ranges[1].0, "price is below the second range's low");
+    let price_fraction = (price[0][0] - ranges[0].0) / ranges[0].2;
+    assert!((price_fraction - (494.0 - 300.0) / 300.0).abs() < 0.001, "primary automatic bounds align with the saved overlay scale");
+}
+
+#[test]
+fn saved_axis_bounds_keep_ticks_inside_and_rescale_spacing() {
+    use gridcraft_model::ChartAxis;
+    let base = nice_scale(0.0, 1000.0, true);
+    for (min, max) in [(200.0, 900.0), (200.0, 201.0), (-0.73, 0.88)] {
+        let bounded = base.with_bounds(Some(&ChartAxis { min: Some(min), max: Some(max), ..Default::default() }));
+        let ticks = bounded.ticks();
+        assert!(ticks.len() > 1, "saved bounds need useful tick spacing");
+        assert!(ticks.iter().all(|v| *v >= min && *v <= max), "ticks must stay inside saved bounds: {ticks:?}");
+    }
+}
+
+fn bar_xy_chart() -> Chart {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = chart(ChartKind::Combo);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.series = vec![
+        Series {
+            values: "{4,8}".into(),
+            kind: Some(ChartKind::BarClustered),
+            color: Some(Color::Rgb(0x008040)),
+            axes: Some(SeriesAxes { x: ChartAxis { min: Some(0.0), max: Some(10.0), ..Default::default() }, ..Default::default() }),
+            ..Default::default()
+        },
+        Series {
+            categories: Some("{4,4}".into()),
+            values: "{0,1}".into(),
+            kind: Some(ChartKind::ScatterLines),
+            secondary: true,
+            color: Some(Color::Rgb(0xf07020)),
+            ..Default::default()
+        },
+    ];
+    c
+}
+
+fn draw_chart(c: &Chart) -> Vec<Prim> {
+    render(c, &resolve(&Workbook::default(), 0, c), 900.0, 500.0, &ApproxMeasure)
+}
+
+fn green_bars(prims: &[Prim]) -> Vec<[f32; 4]> {
+    prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, w, h, fill: Some([0, 128, 64, 255]), .. } => Some([*x, *y, *w, *h]),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn xy_points_do_not_add_bar_categories() {
+    let mut c = bar_xy_chart();
+    // Put XY first to exercise category resolution as well as renderer slot allocation.
+    c.series.swap(0, 1);
+    let before = draw_chart(&c);
+    c.series[0].values = "{0,1,2,5,10}".into();
+    c.series[0].categories = Some("{4,4,4,4,4}".into());
+    let after = draw_chart(&c);
+    assert_eq!(green_bars(&before), green_bars(&after), "XY point counts cannot change category spacing");
+    let points = after
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(points.len(), 5, "all XY points are drawn");
+}
+
+#[test]
+fn xy_overlays_share_automatic_y_bounds() {
+    let mut c = bar_xy_chart();
+    c.series[1].values = "{0,10}".into();
+    let mut short = c.series[1].clone();
+    short.values = "{0,1}".into();
+    short.categories = Some("{6,6}".into());
+    short.color = Some(Color::Rgb(0x123456));
+    c.series.push(short);
+    let prims = draw_chart(&c);
+    let line = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: col, .. } if *col == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let long = line([240, 112, 32, 255]);
+    let short = line([18, 52, 86, 255]);
+    assert!((long[0][1] - short[0][1]).abs() < 0.01, "equal values share a position");
+    assert!(
+        (short[0][1] - short[1][1]).abs() < (long[0][1] - long.last().unwrap()[1]).abs() / 2.0,
+        "a short overlay must not independently span the plot"
+    );
+}
+
+#[test]
+fn xy_overlay_uses_its_numeric_range_with_one_saved_x_bound() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    for (x, min, max, bound_point, tick) in [("{20,50,60}", Some(20.0), None, 0, "0"), ("{-60,-50,-20}", None, Some(-20.0), 2, "10")] {
+        let mut c = bar_xy_chart();
+        let overlay = &mut c.series[1];
+        overlay.categories = Some(x.into());
+        overlay.values = "{0,1,2}".into();
+        overlay.axes = Some(SeriesAxes { x: ChartAxis { min, max, ..Default::default() }, ..Default::default() });
+        let prims = draw_chart(&c);
+        let plot_edge = prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text, .. } if text == tick => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        let points = prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+                _ => None,
+            })
+            .unwrap();
+        assert!((points[bound_point][0] - plot_edge).abs() < 0.01, "the saved bound anchors its edge");
+        assert!(points.windows(2).all(|pair| pair[0][0] < pair[1][0]), "the automatic endpoint leaves room for each numeric X");
+    }
+}
+
+#[test]
+fn xy_overlay_clips_to_the_plot_at_segment_intersections() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    let axis = ChartAxis { min: Some(0.0), max: Some(10.0), ..Default::default() };
+    c.series[1].axes = Some(SeriesAxes { x: axis.clone(), y: axis });
+    c.series[1].categories = Some("{0,10}".into());
+    c.series[1].values = "{0,10}".into();
+    fn line_points(p: &Prim) -> Option<&[[f32; 2]]> {
+        match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        }
+    }
+    let reference = draw_chart(&c);
+    let &[bottom_left, top_right] = reference.iter().find_map(line_points).unwrap() else { panic!("expected a two-point plot diagonal") };
+    let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+    let inside = |[x, y]: [f32; 2]| bottom_left[0] <= x && x <= top_right[0] && top_right[1] <= y && y <= bottom_left[1];
+
+    c.series[1].categories = Some("{-20,5,30,30,5,-20}".into());
+    c.series[1].values = "{2,7,2,8,3,8}".into();
+    let clipped = draw_chart(&c);
+    let runs: Vec<_> = clipped.iter().filter_map(line_points).collect();
+    assert_eq!(runs.len(), 2, "the excursion beyond the right edge splits the line");
+    for (run, entry_x, exit_x, height) in [(runs[0], bottom_left[0], top_right[0], 0.6), (runs[1], top_right[0], bottom_left[0], 0.4)] {
+        let y = bottom_left[1] + height * (top_right[1] - bottom_left[1]);
+        let entry = run.first().unwrap();
+        let exit = run.last().unwrap();
+        assert!(close(entry[0], entry_x) && close(entry[1], y), "entry is the segment intersection");
+        assert!(close(exit[0], exit_x) && close(exit[1], y), "exit is the segment intersection");
+        assert!(run.iter().copied().all(inside));
+    }
+    c.series[1].smooth = true;
+    let smooth = draw_chart(&c);
+    let runs: Vec<_> = smooth.iter().filter_map(line_points).collect();
+    assert_eq!(runs.len(), 2);
+    assert!(runs.iter().all(|run| run.len() > 3 && run.iter().copied().all(inside)));
+
+    c.series[1].kind = Some(ChartKind::Scatter);
+    c.series[1].categories = Some("{-1,5,0,6}".into());
+    c.series[1].values = "{4,5,5,11}".into();
+    let markers = draw_chart(&c);
+    let mut interior = 0;
+    let mut boundary = 0;
+    for prim in markers {
+        match prim {
+            Prim::Circle { cx, cy, r, fill: Some([240, 112, 32, 255]), .. } => {
+                assert!(inside([cx - r, cy - r]) && inside([cx + r, cy + r]));
+                interior += 1;
+            }
+            Prim::Polygon { pts, fill: [240, 112, 32, 255], .. } => {
+                assert!(pts.iter().copied().all(inside) && pts.iter().any(|p| close(p[0], bottom_left[0])));
+                boundary += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!((interior, boundary), (1, 1), "outside markers are hidden and the boundary marker is clipped");
+}
+
+#[test]
+fn xy_overlay_keeps_a_saved_y_minimum_above_all_values() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    let overlay = &mut c.series[1];
+    overlay.kind = Some(ChartKind::Scatter);
+    overlay.values = "{1,2}".into();
+    overlay.axes = Some(SeriesAxes { y: ChartAxis { min: Some(20.0), ..Default::default() }, ..Default::default() });
+    let has_overlay = |prims: &[Prim]| {
+        prims.iter().any(|p| matches!(p, Prim::Circle { fill: Some([240, 112, 32, 255]), .. } | Prim::Polygon { fill: [240, 112, 32, 255], .. }))
+    };
+    assert!(!has_overlay(&draw_chart(&c)), "the saved minimum clips the entire series");
+    c.series[1].values = "{1,20}".into();
+    assert!(has_overlay(&draw_chart(&c)), "the saved minimum itself lies on the plot edge");
+}
+
+#[test]
+fn xy_trendline_uses_numeric_points_and_leaves_bar_categories_unchanged() {
+    use gridcraft_model::{ChartAxis, SeriesAxes, Trendline};
+    let mut c = bar_xy_chart();
+    let overlay = &mut c.series[1];
+    overlay.categories = Some("{2,5,8}".into());
+    overlay.values = "{1,5,9}".into();
+    let reversed = ChartAxis { min: Some(0.0), max: Some(10.0), reversed: true, ..Default::default() };
+    overlay.axes = Some(SeriesAxes { x: reversed.clone(), y: reversed });
+    overlay.trendlines.push(Trendline { color: Some(Color::Rgb(0x123456)), ..Default::default() });
+    let prims = draw_chart(&c);
+    let line = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { pts, color: actual, .. } if *actual == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let points = line([240, 112, 32, 255]);
+    let fitted = line([18, 52, 86, 255]);
+    for (point, end) in [(points.first().unwrap(), fitted.first().unwrap()), (points.last().unwrap(), fitted.last().unwrap())] {
+        assert!((point[0] - end[0]).abs() < 0.01 && (point[1] - end[1]).abs() < 0.01, "the fit meets the numeric endpoints");
+    }
+    c.series[1].trendlines[0].forward = 1.0;
+    assert_eq!(green_bars(&prims), green_bars(&draw_chart(&c)), "an XY forecast does not add bar categories");
+}
+
+#[test]
+fn reversed_bar_labels_follow_positive_and_negative_value_endpoints() {
+    let mut c = bar_xy_chart();
+    c.data_labels = true;
+    c.series[0].values = "{4,-3}".into();
+    let axis = &mut c.series[0].axes.as_mut().unwrap().x;
+    axis.min = Some(-10.0);
+    axis.reversed = true;
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    let label = |value| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { text, x, align, .. } if text == value => Some((*x, *align)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let (positive_x, positive_align) = label("4");
+    let (negative_x, negative_align) = label("-3");
+    assert!(positive_x < bars[0][0] && matches!(positive_align, HAlign::Right));
+    assert!(negative_x > bars[1][0] + bars[1][2] && matches!(negative_align, HAlign::Left));
+}
+
+#[test]
+fn reversed_value_axis_keeps_bars_ticks_and_xy_aligned() {
+    let mut c = bar_xy_chart();
+    let original = green_bars(&draw_chart(&c));
+    let axes = c.series[0].axes.as_mut().unwrap();
+    axes.x.reversed = true;
+    c.series[1].axes = Some(gridcraft_model::SeriesAxes { x: axes.x.clone(), ..Default::default() });
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    assert!(bars[0][0] > bars[1][0], "larger bars extend further left");
+    assert!((bars[0][2] - original[0][2]).abs() < 0.01, "reversal preserves magnitude");
+    let price = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { pts, color: [240, 112, 32, 255], .. } => Some(pts),
+            _ => None,
+        })
+        .unwrap();
+    assert!((price[0][0] - bars[0][0]).abs() < 0.01, "bar endpoint and equal numeric X align");
+    let label_x = |text| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text: t, .. } if t == text => Some(*x),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(label_x("0") > label_x("10"), "numeric tick labels follow axis reversal");
+}
+
+#[test]
+fn unfilled_bar_keeps_its_explicit_outline() {
+    let mut c = bar_xy_chart();
+    c.series[0].no_fill = true;
+    c.series[0].outline_color = Some(Color::Rgb(0x123456));
+    let prims = draw_chart(&c);
+    let outlined = prims.iter().filter(|p| matches!(p, Prim::Rect { stroke: Some(([18, 52, 86, 255], _)), .. })).count();
+    assert_eq!(outlined, 2, "both unfilled bars retain their visible outlines");
+}
+
+#[test]
+fn xy_labels_follow_points_on_the_first_saved_axes() {
+    use gridcraft_model::{ChartAxis, SeriesAxes};
+    let mut c = bar_xy_chart();
+    c.data_labels = true;
+    c.series[1].values = "{123,456}".into();
+    let mut second = c.series[1].clone();
+    second.color = Some(Color::Rgb(0x123456));
+    second.axes = Some(SeriesAxes {
+        x: ChartAxis { min: Some(0.0), max: Some(20.0), ..Default::default() },
+        y: ChartAxis { min: Some(0.0), max: Some(1000.0), reversed: true, ..Default::default() },
+    });
+    c.series.push(second);
+    let prims = draw_chart(&c);
+    let points = |color| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line { color: c, pts, .. } if *c == color => Some(pts),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let first = points([240, 112, 32, 255]);
+    assert_eq!(first, points([18, 52, 86, 255]), "both overlays use the saved axes");
+    assert!(first[0][1] < first[1][1], "saved Y reversal applies to the first series too");
+    assert!(first[0][0] < green_bars(&prims)[0][0] + green_bars(&prims)[0][2], "saved X bounds apply");
+    for (point, label) in first.iter().zip(["123", "456"]) {
+        assert!(prims.iter().any(|p| matches!(p, Prim::Text { x, y, text, .. }
+            if text == label && (*x - point[0]).abs() < 0.01 && (0.0..10.0).contains(&(point[1] - *y)))));
+    }
+    c.series.truncate(2);
+    c.series[1].values = format!("{{{}}}", vec!["123"; 201].join(","));
+    c.series[1].categories = None;
+    assert!(draw_chart(&c).iter().all(|p| !matches!(p, Prim::Text { text, .. } if text == "123")), "dense overlays omit data labels");
+}
+
+#[test]
+fn secondary_bar_ticks_and_trendline_follow_reversed_axes() {
+    use gridcraft_model::Trendline;
+    let mut c = bar_xy_chart();
+    c.series[0].secondary = true;
+    c.series[1].secondary = false;
+    c.series[0].categories = Some("{\"First\",\"Second\"}".into());
+    c.series[0].trendlines.push(Trendline::default());
+    c.series[0].outline_color = Some(Color::Rgb(0x123456));
+    c.series[0].no_fill = true;
+    let axes = c.series[0].axes.as_mut().unwrap();
+    axes.x.reversed = true;
+    axes.y.reversed = true;
+    let prims = draw_chart(&c);
+    let text_pos = |label| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, y, text, .. } if text == label => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(text_pos("First").1 < text_pos("Second").1);
+    assert!(text_pos("0").0 > text_pos("10").0);
+    let bars: Vec<_> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Rect { x, y, h, stroke: Some(([18, 52, 86, 255], _)), .. } => Some([*x, *y + *h / 2.0]),
+            _ => None,
+        })
+        .collect();
+    let ends = prims
+        .iter()
+        .find_map(|p| match p {
+            Prim::Line { color: [0, 128, 64, 255], pts, .. } => Some((pts.first().unwrap(), pts.last().unwrap())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(bars.len(), 2);
+    for (bar, end) in bars.iter().zip([ends.0, ends.1]) {
+        assert!((bar[0] - end[0]).abs() < 0.01 && (bar[1] - end[1]).abs() < 0.01, "the opaque trendline meets the reversed bar ends");
+    }
+}
+
+#[test]
+fn saved_axis_bounds_clip_bars_at_the_plot() {
+    let mut c = bar_xy_chart();
+    c.series[0].categories = Some("{\"First category\",\"Second category\"}".into());
+    c.series[0].values = "{4,1}".into();
+    c.series[0].axes.as_mut().unwrap().x.min = Some(2.0);
+    c.series[1].categories = Some("{4,4}".into());
+    let prims = draw_chart(&c);
+    let bars = green_bars(&prims);
+    assert_eq!(bars.len(), 1, "a bar entirely beyond the plot is omitted");
+    let tick_x = |label| {
+        prims
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { x, text, .. } if text == label => Some(*x),
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!((bars[0][0] - tick_x("2")).abs() < 0.01, "the visible bar starts at the plot edge");
+    assert!((bars[0][0] + bars[0][2] - tick_x("4")).abs() < 0.01, "the in-bounds end retains its position");
+}
+
 const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
@@ -68,6 +539,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         x: Some(values.iter().enumerate().map(|(i, _)| Some(i as f64 * 1.5 + 2.0)).collect()),
         sizes: Some(values.iter().map(|v| Some(v.abs() + 1.0)).collect()),
         color,
+        outline_color: None,
         kind,
         secondary: false,
         smooth: false,
@@ -554,6 +1026,7 @@ fn resolve_from_workbook() {
             // References use their cells' format, whatever the series says.
             number_format: Some("0%".into()),
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: None,
@@ -568,6 +1041,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: Some("Literal".into()),
@@ -582,6 +1056,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: Some("0.0%".into()),
             innermost_categories: false,
+            ..Default::default()
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -624,6 +1099,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
         Series {
             name: None,
@@ -638,6 +1114,7 @@ fn resolve_from_workbook() {
             trendlines: Vec::new(),
             number_format: None,
             innermost_categories: false,
+            ..Default::default()
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -657,6 +1134,7 @@ fn resolve_from_workbook() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -677,6 +1155,7 @@ fn resolve_from_workbook() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -965,6 +1444,7 @@ fn fuzz_random_data_and_sizes() {
                 x: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
                 sizes: if r.next().is_multiple_of(2) { Some((0..npts).map(|_| val(&mut r)).collect()) } else { None },
                 color: [(r.next() % 256) as u8, 100, 50, 255],
+                outline_color: None,
                 kind: ALL_KINDS[(r.next() % ALL_KINDS.len() as u64) as usize],
                 secondary: r.next().is_multiple_of(3),
                 smooth: r.next().is_multiple_of(4),
@@ -1384,6 +1864,7 @@ fn pie_points_follow_workbook_theme() {
         trendlines: Vec::new(),
         number_format: None,
         innermost_categories: false,
+        ..Default::default()
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1838,6 +2319,7 @@ fn volatile_series_formulas_are_detected() {
             trendlines: vec![],
             innermost_categories: false,
             number_format: None,
+            ..Default::default()
         });
         c
     };
@@ -1870,6 +2352,7 @@ fn volatile_defined_names_are_followed() {
             trendlines: vec![],
             innermost_categories: false,
             number_format: None,
+            ..Default::default()
         });
         c
     };

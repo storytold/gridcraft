@@ -11,6 +11,169 @@ fn ser(i: usize) -> String {
 
 const AX: &str = "<c:axId val=\"1\"/><c:axId val=\"2\"/>";
 
+/// Authored XML fixture: a transparent stack offset with an XY reference line on hidden axes.
+#[test]
+fn horizontal_range_and_xy_overlay_survive_chart_roundtrip() {
+    let xml = format!(
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <c:chart><c:plotArea>
+        <c:barChart><c:barDir val="bar"/><c:grouping val="stacked"/>
+          {}{}{AX}</c:barChart>
+        <c:scatterChart><c:scatterStyle val="lineMarker"/>
+          <c:ser><c:idx val="2"/><c:order val="2"/>
+            <c:xVal><c:numRef><c:f>Data!$D$1:$D$2</c:f></c:numRef></c:xVal>
+            <c:yVal><c:numRef><c:f>Data!$E$1:$E$2</c:f></c:numRef></c:yVal>
+          </c:ser><c:axId val="3"/><c:axId val="4"/>
+        </c:scatterChart>
+        <c:catAx><c:axId val="1"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:axPos val="l"/></c:catAx>
+        <c:valAx><c:axId val="2"/><c:scaling><c:min val="200"/></c:scaling><c:axPos val="b"/></c:valAx>
+        <c:valAx><c:axId val="3"/><c:scaling><c:min val="200"/><c:max val="900"/></c:scaling><c:axPos val="b"/><c:tickLblPos val="none"/></c:valAx>
+        <c:valAx><c:axId val="4"/><c:scaling><c:min val="0"/><c:max val="1"/></c:scaling><c:axPos val="r"/><c:tickLblPos val="none"/></c:valAx>
+      </c:plotArea></c:chart></c:chartSpace>"#,
+        ser(0).replace("<c:val>", "<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr><c:val>"),
+        ser(1)
+    );
+    let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+    let expected = vec![ChartKind::BarStacked, ChartKind::BarStacked, ChartKind::ScatterLines];
+    assert_eq!(original.series_kinds(), expected);
+    assert!(original.series[0].no_fill);
+    assert!(!original.series[1].no_fill);
+    assert!(original.series[2].secondary);
+    let axes = original.series[0].axes.as_ref().unwrap();
+    assert!(axes.y.reversed);
+    assert!(axes.x.min.is_some());
+    let wb = gridcraft_model::Workbook::default();
+    let saved = crate::chart::write_chart(&wb, 0, &original, "Book.xlsx");
+    let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(restored.series_kinds(), expected);
+    for (a, b) in original.series.iter().zip(&restored.series) {
+        assert_eq!(a.no_fill, b.no_fill);
+        assert_eq!(a.axes, b.axes);
+        assert_eq!(a.categories, b.categories);
+        assert_eq!(a.values, b.values);
+        assert_eq!(a.secondary, b.secondary);
+    }
+}
+
+/// Authored fixtures cover an explicit outline independently of a disabled fill.
+#[test]
+fn unfilled_series_keep_visible_outlines_through_chart_xml() {
+    let stroke = "<a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill>";
+    for line in [stroke, "<a:noFill/>"] {
+        let series = ser(0).replace("<c:val>", &format!("<c:spPr><a:noFill/><a:ln>{line}</a:ln></c:spPr><c:val>"));
+        let xml = format!(
+            "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+            bar(&series)
+        );
+        let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+        assert!(original.series[0].no_fill);
+        assert_eq!(original.series[0].outline_color.is_some(), line == stroke);
+        let saved = crate::chart::write_chart(&gridcraft_model::Workbook::default(), 0, &original, "Book.xlsx");
+        let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+        assert!(restored.series[0].no_fill);
+        assert_eq!(restored.series[0].outline_color, original.series[0].outline_color);
+    }
+}
+
+#[test]
+fn bar_to_column_normalization_rotates_axis_metadata() {
+    let xml = format!(
+        r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea>
+        {}{}
+        <c:catAx><c:axId val="1"/><c:scaling><c:orientation val="maxMin"/></c:scaling><c:axPos val="l"/></c:catAx>
+        <c:valAx><c:axId val="2"/><c:scaling><c:min val="200"/><c:max val="900"/></c:scaling><c:axPos val="b"/></c:valAx>
+        </c:plotArea></c:chart></c:chartSpace>"#,
+        bar(&ser(0)).replace("val=\"col\"", "val=\"bar\""),
+        line(&ser(1))
+    );
+    let original = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(original.series_kinds()[0], ChartKind::ColumnClustered);
+    let axes = original.series[0].axes.as_ref().unwrap();
+    assert!(axes.x.reversed && axes.x.min.is_none(), "category settings move to horizontal axis");
+    assert!(axes.y.min.is_some() && axes.y.max.is_some(), "value bounds move to vertical axis");
+    let saved = crate::chart::write_chart(&gridcraft_model::Workbook::default(), 0, &original, "Book.xlsx");
+    let restored = read_chart(&parse(saved.as_bytes()).unwrap()).unwrap().0;
+    assert_eq!(original.series[0].axes, restored.series[0].axes);
+}
+
+#[test]
+fn horizontal_xy_families_keep_distinct_axes_regardless_of_order_or_assignment() {
+    use gridcraft_model::{Chart, Series, Workbook};
+    for reverse in [false, true] {
+        for (bar_secondary, scatter_secondary) in [(false, false), (true, true), (false, true), (true, false)] {
+            let mut series = vec![
+                Series { kind: Some(ChartKind::BarStacked), values: "{2,3}".into(), secondary: bar_secondary, ..Default::default() },
+                Series {
+                    kind: Some(ChartKind::ScatterLines),
+                    categories: Some("{17,17}".into()),
+                    values: "{0,1}".into(),
+                    secondary: scatter_secondary,
+                    ..Default::default()
+                },
+            ];
+            if reverse {
+                series.reverse();
+            }
+            let base_xml = format!(
+                "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+                bar(&ser(0))
+            );
+            let base = read_chart(&parse(base_xml.as_bytes()).unwrap()).unwrap().0;
+            let original = Chart { kind: ChartKind::Combo, series, ..base };
+            let saved = crate::chart::write_chart(&Workbook::default(), 0, &original, "Book.xlsx");
+            let root = parse(saved.as_bytes()).unwrap();
+            let plot = root.path(&["chart", "plotArea"]).unwrap();
+            let ids = |name| plot.child(name).unwrap().kids("axId").map(|e| e.attr("val").unwrap()).collect::<Vec<_>>();
+            assert_ne!(ids("barChart"), ids("scatterChart"), "incompatible families need distinct axis pairs");
+            let restored = read_chart(&root).unwrap().0;
+            assert_eq!(restored.series_kinds(), original.series_kinds());
+            for (a, b) in original.series.iter().zip(&restored.series) {
+                assert_eq!(a.values, b.values);
+                assert_eq!(a.categories, b.categories);
+            }
+            assert_ne!(restored.series[0].secondary, restored.series[1].secondary);
+            if bar_secondary != scatter_secondary {
+                assert_eq!(restored.series[0].secondary, original.series[0].secondary);
+            }
+        }
+    }
+}
+
+#[test]
+fn horizontal_xy_export_reports_when_it_cannot_keep_both_bar_partitions() {
+    use gridcraft_model::{ChartAxis, Series, SeriesAxes, Workbook};
+    let base_xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}</c:plotArea></c:chart></c:chartSpace>",
+        bar(&ser(0))
+    );
+    let mut original = read_chart(&parse(base_xml.as_bytes()).unwrap()).unwrap().0;
+    original.kind = ChartKind::Combo;
+    original.series.clear();
+    for (kind, secondary, min) in
+        [(ChartKind::BarStacked, false, 10.0), (ChartKind::BarClustered, true, 100.0), (ChartKind::ScatterLines, true, 50.0)]
+    {
+        original.series.push(Series {
+            kind: Some(kind),
+            secondary,
+            values: "{2,3}".into(),
+            categories: Some("{55,55}".into()),
+            axes: Some(SeriesAxes {
+                x: ChartAxis { min: Some(min), max: Some(min * 2.0), ..Default::default() },
+                y: ChartAxis { reversed: secondary, ..Default::default() },
+            }),
+            ..Default::default()
+        });
+    }
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().charts.push(original);
+    assert!(matches!(
+        crate::write_xlsx(&wb),
+        Err(crate::IoError::Format(message)) if message.contains("more than two axis pairs")
+    ));
+    wb.sheet_mut(0).unwrap().charts[0].series.remove(1);
+    assert!(crate::write_xlsx(&wb).is_ok(), "a chart with one bar pair and one XY pair still saves");
+}
+
 fn bar(sers: &str) -> String {
     format!("<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{sers}{AX}</c:barChart>")
 }
