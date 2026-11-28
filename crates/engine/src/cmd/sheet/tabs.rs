@@ -221,9 +221,13 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 
 pub(super) fn tab_color(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
-    let c = crate::cmd::format::color_param(p.get("color"));
+    // The Tab Color keytip omits color to clear it.
+    let c = match p.get("color") {
+        None => gridcraft_model::Color::Auto,
+        Some(value) => crate::cmd::format::color_param(Some(value)).ok_or_else(|| bad("sheet.tabColor", "invalid `color`"))?,
+    };
     edit(s, |cx| {
-        cx.sheet_mut(i)?.tab_color = c.filter(|c| *c != gridcraft_model::Color::Auto);
+        cx.sheet_mut(i)?.tab_color = (c != gridcraft_model::Color::Auto).then_some(c);
         Ok(Json::Null)
     })
 }
@@ -285,4 +289,68 @@ pub(super) fn step_sheet(s: &mut Session, dir: isize) -> Result<Json> {
     }
     // No visible sheet in this direction: keep the current sheet and its selection.
     ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gridcraft_model::Color;
+
+    #[test]
+    fn invalid_tab_colors_preserve_the_existing_color_and_history() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("sheet.tabColor", json!({"color": "#FF0000"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "redo marker"})).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        let (before, revision, undo, redo) = {
+            let doc = s.doc().unwrap();
+            assert_eq!(doc.wb.active().unwrap().tab_color, Some(Color::Rgb(0xFF0000)));
+            assert!(!doc.undo.is_empty() && !doc.redo.is_empty());
+            (doc.wb.clone(), doc.revision, doc.undo.len(), doc.redo.len())
+        };
+        for params in [
+            json!({"color": "#GG0000"}),
+            json!({"color": "#GGFF0000"}),
+            json!({"color": ""}),
+            json!({"color": null}),
+            json!({"color": false}),
+            json!({"color": 7}),
+            json!({"color": []}),
+            json!({"color": {}}),
+            json!({"color": {"theme": "bad"}}),
+        ] {
+            let error = s.execute("sheet.tabColor", params.clone()).unwrap_err().to_string();
+            assert!(error.contains("invalid `color`"), "{params}: {error}");
+            let doc = s.doc().unwrap();
+            assert_eq!(*doc.wb, *before, "{params}");
+            assert_eq!((doc.revision, doc.undo.len(), doc.redo.len()), (revision, undo, redo), "{params}");
+        }
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 2)), gridcraft_core::Value::from("redo marker"));
+    }
+
+    #[test]
+    fn tab_colors_still_accept_rgb_theme_and_clearing() {
+        let mut s = Session::new();
+        s.new_workbook();
+        for (color, expected) in [
+            (json!("#00FF00"), Color::Rgb(0x00FF00)),
+            (json!("#80FF0000"), Color::Rgb(0xFF0000)),
+            (json!({"theme": 3, "tint": 0.4}), Color::Theme(3, 400)),
+        ] {
+            s.execute("sheet.tabColor", json!({"color": color})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().tab_color, Some(expected));
+        }
+        for clear in ["none", "auto", "automatic", "NoNe"] {
+            s.execute("sheet.tabColor", json!({"color": "#FF0000"})).unwrap();
+            s.execute("sheet.tabColor", json!({"color": clear})).unwrap();
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().tab_color, None, "{clear}");
+        }
+        s.execute("sheet.tabColor", json!({"color": "#FF0000"})).unwrap();
+        s.journal.clear();
+        s.execute("sheet.tabColor", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().tab_color, None, "omitted color still clears the tab");
+        assert!(s.journal.iter().any(|(id, _)| id == "sheet.tabColor"), "menu-style invocation is still journaled");
+    }
 }
