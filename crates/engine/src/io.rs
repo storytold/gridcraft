@@ -115,7 +115,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
         let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep, None);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)
