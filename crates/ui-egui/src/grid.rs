@@ -331,6 +331,13 @@ pub struct GridState {
     pub filter_checks: Option<Vec<gridcraft_engine::cmd::data::FilterChoice>>,
     pub filter_search: String,
     pub filter_buttons: Vec<egui::Id>,
+    /// Whether a non-empty search narrows an unfiltered column to its matching values on Apply.
+    /// False once the column already has a criterion or the user edits checkboxes across searches.
+    pub filter_narrow_search: bool,
+    /// The trimmed lowercase search string active when checkboxes were last edited while
+    /// `filter_narrow_search` was still true; changing the search after that edit switches to
+    /// accumulating mode.
+    pub filter_edited_search: Option<String>,
     pub context_menu: Option<Pos2>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,
@@ -467,6 +474,21 @@ impl GridState {
     pub fn set_selection_mode(&mut self, mode: SelectionMode) {
         self.selection_mode = mode;
         self.add_pending = None;
+    }
+
+    /// Drops pending filter popup edits when switching columns or closing the popup.
+    pub(crate) fn clear_filter_menu_state(&mut self) {
+        self.filter_checks = None;
+        self.filter_search.clear();
+        self.filter_buttons.clear();
+        self.filter_narrow_search = false;
+        self.filter_edited_search = None;
+    }
+
+    /// Closes the filter popup and drops its pending edits.
+    pub(crate) fn close_filter_menu(&mut self) {
+        self.clear_filter_menu_state();
+        self.filter_menu = None;
     }
 }
 
