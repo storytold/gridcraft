@@ -43,6 +43,94 @@ const CTRL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cm
 const CTRL_SHIFT: Modifiers = Modifiers { shift: true, ..CTRL };
 
 #[test]
+fn ctrl_one_format_cells_takes_focus_and_switches_tabs_by_keyboard() {
+    use egui::accesskit::Role;
+
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::Num1, CTRL);
+    assert!(h.get_by_role_and_label(Role::Tab, "Number").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert!(h.get_all_by_label("General").any(|node| node.is_focused()), "Tab reaches the number format categories");
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert!(h.get_all_by_label("Number").any(|node| node.is_focused()), "Down reaches the next category");
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert!(h.get_by_role_and_label(Role::Tab, "Number").is_focused());
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::Tab, "Alignment").is_focused());
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::Tab, "Number").is_focused());
+
+    key(&mut h, Key::Tab, CTRL_SHIFT);
+    assert!(h.get_by_role_and_label(Role::Tab, "Protection").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::CheckBox, "Locked").is_focused());
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert!(h.get_by_role_and_label(Role::Tab, "Protection").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::Tab, CTRL);
+    assert!(h.get_by_role_and_label(Role::Tab, "Number").is_focused(), "Ctrl+Tab also works from a field");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "B1", "the grid gets its keyboard back");
+}
+
+#[test]
+fn format_cells_enter_on_cancel_discards_the_keyboard_edit() {
+    use egui::accesskit::Role;
+
+    let mut h = harness(book("A1"));
+    let original = style(&h, "A1");
+    key(&mut h, Key::Num1, CTRL);
+    key(&mut h, Key::Tab, CTRL_SHIFT);
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    let draft = &h.state().dialog.as_ref().expect("Enter on a checkbox keeps the dialog open").values["style"];
+    assert_eq!(draft["protection"]["locked"], json!(!original.protection.locked));
+
+    for _ in 0..3 {
+        key(&mut h, Key::Tab, Modifiers::NONE);
+    }
+    assert!(h.get_by_role_and_label(Role::Button, " Cancel ").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    let focus = h.ctx.memory(|m| m.focused()).and_then(|id| h.ctx.read_response(id));
+    let dialog = h.ctx.memory(|m| m.top_modal_layer());
+    assert_eq!(focus.map(|r| r.layer_id), dialog, "Tab wraps inside the dialog");
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert!(h.get_by_role_and_label(Role::Button, " Cancel ").is_focused());
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(style(&h, "A1"), original);
+}
+
+#[test]
+fn format_cells_can_apply_a_fill_from_the_keyboard() {
+    use egui::accesskit::Role;
+
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::Num1, CTRL);
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::Tab, "Fill").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    assert!(h.get_by_role_and_label(Role::Button, "No Color").is_focused());
+    key(&mut h, Key::Tab, Modifiers::NONE);
+    let first = h.ctx.memory(|m| m.focused()).expect("a swatch has focus");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_ne!(h.ctx.memory(|m| m.focused()), Some(first), "the arrow moves to an adjacent swatch");
+    key(&mut h, Key::Space, Modifiers::NONE);
+    let draft = h.state().dialog.as_ref().expect("choosing a color only edits the draft");
+    let draft: gridcraft_engine::model::Style = serde_json::from_value(draft.values["style"].clone()).unwrap();
+    assert_ne!(draft.fill, style(&h, "A1").fill);
+    key(&mut h, Key::Tab, CTRL);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(style(&h, "A1").fill, draft.fill);
+}
+
+#[test]
 fn ctrl_shift_symbols_apply_number_formats_and_borders() {
     let mut h = harness(book("A1:B2"));
     key(&mut h, Key::Num4, CTRL_SHIFT);

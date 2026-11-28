@@ -1,26 +1,117 @@
-use super::show::ok_cancel;
+use egui::{Key, Modifiers, Role};
+
+use super::show::ok_cancel_row;
 use super::{Dialog, SheetApp, json, theme};
 
+const KEEP_TAB: egui::EventFilter = egui::EventFilter { tab: true, horizontal_arrows: false, vertical_arrows: false, escape: false };
+
+const TABS: [(&str, &str); 6] = [
+    ("Number", "Number"),
+    ("Alignment", "Alignment"),
+    ("Font", "Font"),
+    ("Border", "Border"),
+    ("Fill", "Format Cells|Fill"),
+    ("Protection", "Protection"),
+];
+
+fn tabs(ui: &mut egui::Ui, d: &mut Dialog, lang: crate::i18n::Language) -> bool {
+    let current = TABS.iter().position(|(tab, _)| *tab == d.tab).unwrap_or(0);
+    let focused = ui.memory(|m| m.focused());
+    let row = ui.horizontal(|ui| {
+        ui.ctx().accesskit_node_builder(ui.unique_id(), |node| node.set_role(Role::TabList));
+        TABS.map(|(tab, key)| {
+            // The selected tab is the single Tab stop for the strip. Other tabs remain clickable.
+            let label = lang.tr(key);
+            let selected = d.tab == tab;
+            let sense = if selected { egui::Sense::click() } else { egui::Sense::CLICK };
+            let r = ui.add(egui::Button::selectable(selected, label).sense(sense));
+            r.widget_info(|| egui::WidgetInfo::labeled(Role::Tab, ui.is_enabled(), label));
+            ui.ctx().accesskit_node_builder(r.id, |node| {
+                node.clear_toggled();
+                node.set_selected(selected);
+            });
+            if r.has_focus() {
+                let color = theme::Tokens::get(ui.ctx()).popup_focus_ring();
+                ui.painter().rect_stroke(r.rect, 3.0, egui::Stroke::new(1.5, color), egui::StrokeKind::Inside);
+            }
+            r
+        })
+    });
+    let responses = row.inner;
+    let tab_focused = focused == Some(responses[current].id);
+    let step = ui.input_mut(|i| {
+        if i.consume_key(Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) || (tab_focused && i.consume_key(Modifiers::NONE, Key::ArrowLeft)) {
+            TABS.len() - 1
+        } else if i.consume_key(Modifiers::CTRL, Key::Tab) || (tab_focused && i.consume_key(Modifiers::NONE, Key::ArrowRight)) {
+            1
+        } else {
+            0
+        }
+    });
+    let clicked = responses.iter().position(|r| r.clicked());
+    if step != 0 || clicked.is_some() || (!d.focus_initialized && ui.is_visible()) {
+        let next = clicked.unwrap_or((current + step) % TABS.len());
+        d.tab = TABS[next].0.into();
+        d.focus_initialized = true;
+        ui.memory_mut(|m| {
+            m.move_focus(egui::FocusDirection::None);
+            m.request_focus_with_filter(responses[next].id, KEEP_TAB);
+        });
+        ui.ctx().request_repaint();
+    }
+    tab_focused
+}
+
+fn tab_through_controls(ui: &egui::Ui) {
+    let layer = ui.layer_id();
+    let backwards =
+        ui.input_mut(
+            |i| {
+                if i.consume_key(Modifiers::SHIFT, Key::Tab) { Some(true) } else { i.consume_key(Modifiers::NONE, Key::Tab).then_some(false) }
+            },
+        );
+    let moved = ui.memory_mut(|m| {
+        let focused = m.focused();
+        if let Some(backwards) = backwards {
+            let stops: Vec<_> = m.focus_candidates().iter().filter(|stop| stop.layer == layer).map(|stop| stop.id).collect();
+            let next = match (stops.iter().position(|id| Some(*id) == focused), backwards) {
+                (Some(index), true) => index.checked_sub(1).and_then(|index| stops.get(index)).or(stops.last()),
+                (Some(index), false) => stops.get(index + 1).or(stops.first()),
+                (None, true) => stops.last(),
+                (None, false) => stops.first(),
+            };
+            if let Some(&next) = next {
+                m.move_focus(egui::FocusDirection::None);
+                m.request_focus_with_filter(next, KEEP_TAB);
+                return true;
+            }
+        }
+        if let Some(id) = focused
+            && m.focus_candidates().iter().any(|stop| stop.layer == layer && stop.id == id)
+        {
+            // Keep Tab in egui input so the framework's window-wide traversal does not
+            // pick a stop outside this window. Preserve arrow and Escape handling in fields.
+            let filter = m.focus_lock_filter().unwrap_or_default();
+            if !filter.tab {
+                m.request_focus_with_filter(id, egui::EventFilter { tab: true, ..filter });
+            }
+        }
+        false
+    });
+    if moved {
+        ui.ctx().request_repaint();
+    }
+}
+
 /// Draws the six-tab Format Cells editor (number, alignment, font, border, fill, protection); the Number tab shows a sample preview, and the style draft updates.
-pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
     // `d.tab` stays the English name (it is what `open_dialog` and tests pass); only the drawn
     // labels are translated. The Fill tab is keyed by context: the Alignment tab's "Fill" is a
     // different word in some languages.
     let lang = app.ui.language;
-    ui.horizontal(|ui| {
-        for (tab, key) in [
-            ("Number", "Number"),
-            ("Alignment", "Alignment"),
-            ("Font", "Font"),
-            ("Border", "Border"),
-            ("Fill", "Format Cells|Fill"),
-            ("Protection", "Protection"),
-        ] {
-            if ui.selectable_label(d.tab == tab, lang.tr(key)).clicked() {
-                d.tab = tab.to_string();
-            }
-        }
-    });
+    let popup_open = egui::Popup::is_any_open(ui.ctx());
+    let editing_code = d.tab == "Number" && ui.ctx().text_edit_focused();
+    let tab_focused = tabs(ui, d, lang);
     ui.separator();
     let mut st: gridcraft_engine::model::Style = d.values.get("style").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let sample = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.value(doc.selection.active))).unwrap_or_default();
@@ -148,7 +239,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             });
             ui.label(lang.tr("Color:"));
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("Automatic")) {
+            if let Some(c) = crate::widgets::dialog_color_palette(ui, &colors, lang.tr("Automatic")) {
                 st.font.color =
                     if c == "none" { gridcraft_engine::model::Color::Auto } else { gridcraft_engine::model::Color::from_hex(&c).unwrap_or_default() };
             }
@@ -203,7 +294,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         "Fill" => {
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
             ui.label(lang.tr("Background Color:"));
-            if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
+            if let Some(c) = crate::widgets::dialog_color_palette(ui, &colors, lang.tr("No Color")) {
                 st.fill = if c == "none" {
                     Default::default()
                 } else {
@@ -226,13 +317,14 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     if let Ok(v) = serde_json::to_value(&st) {
         d.values.insert("style".into(), v);
     }
-    let mut open = true;
-    ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(style) = d.values.get("style").cloned() {
-        app.run_or_alert("home.formatCells", json!({"style": style}));
+    ok_cancel_row(ui, confirm, open, true, tab_focused || editing_code);
+    if *open && !*confirm && !popup_open && ui.is_visible() {
+        tab_through_controls(ui);
     }
-    if !open {
-        app.dialog = None;
-        *confirm = true; // closes
+    if *open
+        && *confirm
+        && let Some(style) = d.values.get("style").cloned()
+    {
+        app.run_or_alert("home.formatCells", json!({"style": style}));
     }
 }

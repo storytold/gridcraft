@@ -202,6 +202,12 @@ editor (Excel's VBA editor has no counterpart here) and others exist. Missing or
 Solver, Power Query editor, Insert Object, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker. Like Excel's, every dialog opens centred and moves by its
 title bar, keeping its place while it is open (#1250).
+
+Format Cells opens with focus on its selected tab. Left and Right switch tabs from the tab strip,
+and Ctrl+Tab and Ctrl+Shift+Tab switch tabs from the controls. Tab and Shift+Tab move between
+controls on the selected page. Escape closes the dialog and returns keyboard control to the sheet
+(#3555).
+
 Go To lists the named ranges of every sheet (a name scoped to another sheet as `Sheet2!Name`) and
 the references entered before; a double-click goes to one. Its Reference box takes several names
 or references separated by commas (`Price, Type`, `B14:C22,F19:G30`) and selects them all.
