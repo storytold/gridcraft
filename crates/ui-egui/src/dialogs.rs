@@ -186,6 +186,13 @@ impl Dialog {
         ref_edit::picks(self)
     }
 
+    /// Whether this dialog leaves the keyboard to the sheet while the sheet has the focus, as Find
+    /// and Replace does in Excel (#4587): cells can be typed in and edited with it open. Every
+    /// other dialog is modal.
+    pub fn is_modeless(&self) -> bool {
+        self.name == "find"
+    }
+
     /// Whether a click on the grid goes to a formula box of this dialog rather than the selection.
     pub fn picks_references(&self) -> bool {
         self.pick.is_some()

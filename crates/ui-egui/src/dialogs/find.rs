@@ -8,7 +8,10 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
     // is undone without closing it first); inside a text box they edit the typed text instead.
     // A modal message blocks workbook shortcuts; otherwise use the grid's own shortcut table.
-    if app.message.is_none() && !ui.ctx().text_edit_focused() {
+    // The dialog is modeless (#4587): when the sheet had the keyboard this pass, it already took
+    // its keys (Undo, and Enter, which moves on the sheet rather than finding the next match).
+    let sheet_keys = app.grid.keyboard_pass == Some(ui.ctx().cumulative_pass_nr());
+    if app.message.is_none() && !ui.ctx().text_edit_focused() && !sheet_keys {
         let pressed = ui.input_mut(|i| {
             [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Z), (Modifiers::COMMAND, Key::Y)]
                 .into_iter()
@@ -94,7 +97,7 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             p["all"] = json!(true);
             d.result = app.run("edit.find", p).ok();
         }
-        if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+        if ui.button("Find Next").clicked() || (!sheet_keys && ui.input(|i| i.key_pressed(Key::Enter))) {
             if let Err(e) = app.run("edit.find", base.clone()) {
                 app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
             }

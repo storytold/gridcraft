@@ -17,9 +17,10 @@ fn keyboard_elsewhere(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from), and a macro's question.
+    // arrow key would move the selection the menu fills from), and a macro's question. A modeless
+    // dialog (Find and Replace) leaves the keyboard to the grid while the grid has the focus (#4587).
     editing
-        || app.dialog.is_some()
+        || app.dialog.as_ref().is_some_and(|d| !d.is_modeless())
         || other_focus
         || app.message.is_some()
         || app.grid.filter_menu.is_some()
@@ -36,6 +37,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     if ctx.memory(|m| m.focused()).is_none() {
         resp.request_focus();
     }
+    app.grid.keyboard_pass = Some(ctx.cumulative_pass_nr());
     // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
     ctx.memory_mut(|m| {
         m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
@@ -315,7 +317,19 @@ fn toggle_selection_mode(app: &mut SheetApp, shift: bool) {
 /// This frame's input events, without those the focused form control took.
 fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui::Event> {
     let events = ctx.input(|i| i.events.clone());
-    events.into_iter().filter(|ev| !form_control_event(app, sh, ev)).collect()
+    let find_open = app.dialog.as_ref().is_some_and(|d| d.name == "find");
+    events.into_iter().filter(|ev| !(find_open && find_shortcut(ev)) && !form_control_event(app, sh, ev)).collect()
+}
+
+/// Ctrl+F or Ctrl+H (⌘F, ⌘H, Ctrl+Shift+H): with Find and Replace open these belong to it, so a
+/// press on the sheet doesn't open it again over the search typed in it. Ctrl+Shift+F stays the
+/// grid's.
+fn find_shortcut(ev: &egui::Event) -> bool {
+    match ev {
+        egui::Event::Key { key: egui::Key::F, modifiers: m, .. } => m.command && !m.alt && !m.shift,
+        egui::Event::Key { key: egui::Key::H, modifiers: m, .. } => m.command && !m.alt,
+        _ => false,
+    }
 }
 
 /// Whether the focused form control takes `ev`: arrows, Page Up and Down, Home, End, Space and
