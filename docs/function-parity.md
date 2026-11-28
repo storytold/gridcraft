@@ -163,6 +163,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-10-31 | minor | BETA.DIST density returns `#NUM!` at the lower endpoint with alpha less than or equal to 1 and upper endpoint with beta less than or equal to 1; cumulative behavior is unchanged |
 | 2026-10-31 | minor | HARMEAN returns `#N/A` when array or reference inputs contain no numbers; nonpositive numeric observations remain `#NUM!` |
 | 2026-10-31 | minor | YEARFRAC basis 0 tests the end-31 rule against the original start day; MOD returns `#NUM!` from a quotient of 1.1259E12; PERCENTRANK returns `#DIV/0!` from significance 309 and 15 significant digits from 15 (Excel 16) |
+| 2026-10-30 | minor | BESSELI uses a normalized downward recurrence for orders 2 and above; orders 0 and 1 retain the existing series implementation |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
