@@ -140,9 +140,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HSO", Entry::Finish(Action::Command("data.sortDescending"))), // Excel: Sort Z to A
     ("HSS", Entry::Finish(Action::Command("data.sortAscending"))), // Excel: Sort A to Z
     ("HSU", Entry::Finish(Action::Command("data.sort"))), // Excel: Custom Sort
-    ("HT", Entry::Continue),  // Excel: Format as Table; group level:
-    ("HTN", Entry::Finish(Action::Command("table.style"))), // Excel: New Table Style
-    ("HTP", Entry::Finish(Action::Command("table.style"))), // Excel: New Pivot Table Style
+    ("HT", Entry::Finish(Action::Control("home.formatAsTable"))), // Excel: Format as Table
     ("HU", Entry::Continue),  // Excel: AutoSum; group level:
     ("HUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Average; AutoSum: Average (variant TBD)
     ("HUC", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Count Numbers; AutoSum: Count (variant TBD)

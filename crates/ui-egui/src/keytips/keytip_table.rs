@@ -318,7 +318,7 @@ mod tests {
         assert_eq!(anchor_badge("H", &["edit.paste", "edit.pasteSpecial", "dialog:pasteSpecial"]), Some("HV"));
         assert_eq!(anchor_badge("P", &["pageLayout.orientation"]), Some("PO"), "a direct finish paints itself");
         assert_eq!(anchor_badge("N", &["insert.picture"]), Some("NP"), "NP dominates the lone NM (SmartArt) entry");
-        assert_eq!(anchor_badge("H", &["table.style"]), Some("HT"));
+        assert_eq!(control_badge("H", "home.formatAsTable"), Some("HT"));
         assert!(anchor_badge("", &["edit.paste"]).is_none(), "empty prefix shows only tab badges");
         assert!(anchor_badge("H", &["view.zoom"]).is_none(), "no sequences under this prefix");
     }

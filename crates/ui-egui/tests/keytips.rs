@@ -827,3 +827,45 @@ fn borders_keytip_opens_the_borders_menu() {
     assert_eq!(h.state().keytips.prefix(), Some("H"), "Esc backs out to the Home letters");
     assert!(!egui::Popup::is_any_open(&h.ctx), "and closes the menu");
 }
+
+#[test]
+fn format_as_table_keytip_opens_the_home_gallery() {
+    fn tables(h: &Harness) -> &[gridcraft_engine::model::Table] {
+        &h.state().session.active().unwrap().wb.active().unwrap().tables
+    }
+
+    for selection in ["A1:B2", "B2"] {
+        let mut s = blank();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Score"], ["Ada", 42]]})).unwrap();
+        s.execute("selection.set", json!({"range": selection})).unwrap();
+        let mut h = harness(s);
+
+        alt_down(&mut h, Key::AltLeft);
+        alt_up(&mut h, Key::AltLeft);
+        letter(&mut h, Key::H, false);
+        letter(&mut h, Key::T, false);
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        assert!(h.state().toast.is_none() && h.state().message.is_none());
+        assert!(tables(&h).is_empty(), "opening the gallery does not create a table");
+        assert!(h.query_by_label("TableStyleLight1").is_some(), "the gallery exposes its styles");
+
+        key(&mut h, Key::Escape);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        assert!(tables(&h).is_empty(), "Escape cancels without applying a style");
+
+        sequence(&mut h, &[Key::H, Key::T], false);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "TableStyleLight1").click();
+        h.run_steps(2);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        assert_eq!(tables(&h).len(), 1);
+        assert_eq!(tables(&h)[0].range.a1(), "A1:B2");
+        assert_eq!(tables(&h)[0].style, "TableStyleLight1");
+
+        sequence(&mut h, &[Key::H, Key::T], false);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "TableStyleLight2").click();
+        h.run_steps(2);
+        assert_eq!(tables(&h).len(), 1, "inside a table, Format as Table restyles it");
+        assert_eq!(tables(&h)[0].style, "TableStyleLight2");
+        assert!(h.state().toast.is_none() && h.state().message.is_none());
+    }
+}

@@ -960,22 +960,9 @@
   },
   {
    "seq": "HT",
-   "kind": "continue",
+   "kind": "control",
+   "target": "home.formatAsTable",
    "excel": "Format as Table",
-   "note": "group level:"
-  },
-  {
-   "seq": "HTN",
-   "kind": "command",
-   "target": "table.style",
-   "excel": "New Table Style",
-   "note": ""
-  },
-  {
-   "seq": "HTP",
-   "kind": "command",
-   "target": "table.style",
-   "excel": "New Pivot Table Style",
    "note": ""
   },
   {
