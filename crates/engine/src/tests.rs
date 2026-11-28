@@ -6066,6 +6066,51 @@ fn precision_as_displayed_applies_in_manual_mode() {
     assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 1.23 * 100.0));
 }
 
+/// #4549: two sheets in manual mode, each with a formula left stale by an edit. `Data` holds
+/// `B1 = A1*2` with A1 changed from 1 to 5 since it was calculated; `Sheet1` holds the same.
+fn two_stale_sheets() -> Session {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s
+}
+
+fn data_b1(s: &Session) -> Value {
+    let wb = &s.doc().unwrap().wb;
+    wb.sheet(wb.sheet_index("Data").unwrap()).unwrap().value(CellRef::parse("B1").unwrap())
+}
+
+#[test]
+fn calculate_sheet_recalculates_the_active_sheet() {
+    let mut s = two_stale_sheets();
+    assert_eq!(v(&s, "B1"), Value::Number(2.0), "manual mode leaves Sheet1!B1 stale");
+    s.execute("formulas.calculateSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(10.0));
+}
+
+#[test]
+fn calculate_sheet_leaves_other_sheets_alone() {
+    // Excel's Shift+F9 calculates the active worksheet only; another sheet keeps its stale value.
+    let mut s = two_stale_sheets();
+    s.execute("formulas.calculateSheet", json!({})).unwrap();
+    assert_eq!(data_b1(&s), Value::Number(2.0));
+}
+
+#[test]
+fn calculate_now_still_recalculates_every_sheet() {
+    let mut s = two_stale_sheets();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!((v(&s, "B1"), data_b1(&s)), (Value::Number(10.0), Value::Number(10.0)));
+}
+
 #[test]
 fn precision_as_displayed_on_a_protected_sheet_keeps_locked_constants() {
     let mut s = s();
