@@ -64,6 +64,23 @@ fn the_golden_workbook_opens_and_saves_back_unchanged() {
 }
 
 #[test]
+fn a_json_workbook_without_sheets_keeps_its_calculation_settings() {
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.calc.iterative = true;
+    wb.calc.set_max_iterations(7);
+    wb.calc.set_max_change(0.25);
+    wb.calc.precision_as_displayed = true;
+    let mut file: serde_json::Value = serde_json::from_slice(&crate::io::save_bytes(&wb, "book.json").unwrap()).unwrap();
+    file["sheets"] = json!([]);
+
+    let (opened, warnings) = crate::io::open_bytes("book.json", &serde_json::to_vec(&file).unwrap()).unwrap();
+
+    assert_eq!(opened.sheets.len(), 1);
+    assert_eq!(opened.calc, wb.calc);
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
 fn macros_in_a_newer_format_are_written_back_as_the_file_held_them() {
     // The save that splices kept macros back into `macros` goes through a JSON value.
     let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(golden("book.json")).unwrap()).unwrap();

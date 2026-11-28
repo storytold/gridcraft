@@ -321,8 +321,10 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if wb.sheets.is_empty() {
                 // The file's macros are read after this (`macros::load`), so they come along.
                 let macros = std::mem::take(&mut wb.macros_read);
+                let calc = std::mem::take(&mut wb.calc);
                 wb = Workbook::new();
                 wb.macros_read = macros;
+                wb.calc = calc;
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
