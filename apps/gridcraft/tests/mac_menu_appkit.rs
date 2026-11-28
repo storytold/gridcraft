@@ -19,7 +19,7 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let mut menu = native_menu::NativeMenu::install(&ctx);
+    let mut menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::En);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
@@ -36,6 +36,13 @@ fn main() {
     assert_eq!(open.len(), 1, "one workbook window");
     let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
     assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
+
+    // Choosing another interface language relabels the bar on the next poll.
+    let zh = gridcraft_ui_egui::i18n::Language::ZhHant;
+    app.ui.language = zh;
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+    let file = bar.itemAtIndex(1).and_then(|item| item.submenu()).expect("the File menu");
+    assert_eq!(file.title().to_string(), zh.tr("File"), "the menu bar follows the interface language");
 
     println!("mac_menu_appkit: ok");
 }

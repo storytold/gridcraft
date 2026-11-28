@@ -23,6 +23,9 @@ mod launch_profile;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+// The menu bar's labels, tested on every platform (on macOS through `native_menu`).
+#[cfg(all(test, not(target_os = "macos")))]
+mod native_menu_tree;
 mod nightly_session;
 mod opener;
 mod print;
@@ -57,7 +60,7 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.menu = Some(native_menu::NativeMenu::install(ctx));
+                self.menu = Some(native_menu::NativeMenu::install(ctx, self.app.ui.language));
             }
             if let Some(m) = &mut self.menu {
                 m.poll(&mut self.app, ctx, self.windows.focused_viewport());
