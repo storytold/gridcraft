@@ -124,7 +124,7 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], limits: x::Limits, functions: Func
                 report.warn(warning(&skipped));
             }
         }
-        let sheet = sheet_of(s, &styles, &mut unparsed);
+        let sheet = sheet_of(s, &styles, &mut unparsed)?;
         wb.sheets.push(Arc::new(sheet));
     }
     if unparsed {
@@ -197,7 +197,7 @@ fn calc_of(c: &x::Calc) -> CalcSettings {
 
 /// One worksheet. `unparsed` is set when a formula's text is one GridCraft can't parse: the cell
 /// keeps its saved result.
-fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
+fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Result<Sheet, IoError> {
     let style = |f: Option<u16>| f.and_then(|i| styles.get(usize::from(i)).copied()).unwrap_or(StyleId::DEFAULT);
     let mut sheet = Sheet::new(&s.name);
     sheet.visibility = match s.visibility {
@@ -206,6 +206,10 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
         _ => Visibility::Visible,
     };
     for (at, c) in &s.cells {
+        if c.formula.as_ref().and_then(|f| f.array).is_some_and(|r| r.first != *at) {
+            // Native saved spill metadata requires the declaration to start at its anchor.
+            return Err(invalid("an array formula's range does not start at its anchor cell"));
+        }
         let formula = c.formula.as_ref().and_then(|f| {
             let mut parsed = Formula::new(&f.text);
             if parsed.expr.is_none() {
@@ -217,7 +221,23 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
             parsed.array = f.array.map(range);
             Some(Arc::new(parsed))
         });
+        if let Some(range) = formula.as_ref().and_then(|f| f.array) {
+            // Keep the declaration even when no follower has a stored result.
+            sheet.spill_ranges.insert(cell_ref(*at), range);
+        }
         sheet.cells.set(cell_ref(*at), Cell { value: value(&c.value), formula, style: style(c.format), py: None });
+    }
+    for (at, (anchor, saved)) in &s.array_results {
+        let (at, anchor) = (cell_ref(*at), cell_ref(*anchor));
+        let imported = sheet.cell(anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(at));
+        if imported {
+            sheet.spill.insert(at, value(saved));
+        } else {
+            // If GridCraft cannot parse the anchor, retain its followers as ordinary values.
+            let mut cell = sheet.cell(at).cloned().unwrap_or_else(|| Cell::value(Value::Empty));
+            cell.value = value(saved);
+            sheet.cells.set(at, cell);
+        }
     }
     sheet.merges = s.merges.iter().map(|r| range(*r)).collect();
     if let Some(h) = s.default_row_height {
@@ -269,7 +289,7 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
         sheet.print.title_rows = rows;
         sheet.print.title_cols = cols;
     }
-    sheet
+    Ok(sheet)
 }
 
 /// A data validation rule, as `sheet_read` maps a SpreadsheetML `dataValidation`: a list that

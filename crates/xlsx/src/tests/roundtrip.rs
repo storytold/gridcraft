@@ -20,7 +20,15 @@ fn rr(a: &str) -> RangeRef {
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
-    wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
+    wb.calc = CalcSettings {
+        full_calc_on_load: true,
+        mode: CalcMode::Manual,
+        iterative: true,
+        max_iterations: 42,
+        max_change: 0.5,
+        precision_as_displayed: true,
+        r1c1: true,
+    };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
     wb.write_reservation = Some(gridcraft_model::WriteReservation {
@@ -1235,7 +1243,8 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
     assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
-    // Uncalculated, the dynamic array keeps the area the file says it spilled over.
+    // Cached open retains the file's declared range even before calculation; cm still marks
+    // this as dynamic, while D2 below remains a legacy array.
     assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2:C4\">TANH(A1:A3)</f>"), "{xml}");
     assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
     let (back, _) = read_xlsx(&bytes).unwrap();
@@ -1243,6 +1252,9 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
         assert_eq!(text(&back, a), text(&wb, a), "{a}");
         let formula = back.sheet(0).unwrap().cell(at(a)).unwrap().formula.as_ref().unwrap();
         assert_eq!(formula.dynamic, dynamic, "{a}: dynamic-array metadata survives saving");
+    }
+    for book in [&wb, &back] {
+        assert_eq!(book.sheet(0).unwrap().spill_ranges.get(&at("C2")), Some(&rr("C2:C4")));
     }
 }
 

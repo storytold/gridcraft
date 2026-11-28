@@ -1070,6 +1070,11 @@ dependencies = [
 [[package]]
 name = "craft-cfb"
 version = "0.1.0"
+source = "git+https://github.com/ro-legal-docx/craft-libs?rev=6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca#6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca"
+
+[[package]]
+name = "craft-cfb"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21#8fa4db64a9bb943520259ea95331a303ba788f21"
 
 [[package]]
@@ -1240,7 +1245,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21#8fa4db64a9bb943520259ea95331a303ba788f21"
 dependencies = [
  "craft-odf",
- "craft-sheet",
+ "craft-sheet 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21)",
  "craft-xml",
  "thiserror 2.0.21",
 ]
@@ -1252,7 +1257,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259e
 dependencies = [
  "aes",
  "base64 0.23.1",
- "craft-cfb",
+ "craft-cfb 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21)",
  "craft-xml",
  "getrandom 0.3.4",
  "hmac",
@@ -1364,6 +1369,11 @@ dependencies = [
  "web-sys",
  "web-time",
 ]
+
+[[package]]
+name = "craft-sheet"
+version = "0.1.0"
+source = "git+https://github.com/ro-legal-docx/craft-libs?rev=6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca#6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca"
 
 [[package]]
 name = "craft-sheet"
@@ -1670,10 +1680,10 @@ dependencies = [
 [[package]]
 name = "craft-xls"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21#8fa4db64a9bb943520259ea95331a303ba788f21"
+source = "git+https://github.com/ro-legal-docx/craft-libs?rev=6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca#6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca"
 dependencies = [
- "craft-cfb",
- "craft-sheet",
+ "craft-cfb 0.1.0 (git+https://github.com/ro-legal-docx/craft-libs?rev=6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca)",
+ "craft-sheet 0.1.0 (git+https://github.com/ro-legal-docx/craft-libs?rev=6c8b19fd36ac51e921a7aa1bbaa5a9119cde62ca)",
  "md-5",
  "miniz_oxide 0.9.1",
  "sha1 0.10.7",
@@ -1687,7 +1697,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259e
 dependencies = [
  "craft-drawingml",
  "craft-opc",
- "craft-sheet",
+ "craft-sheet 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21)",
  "craft-xml",
  "thiserror 2.0.21",
 ]
@@ -3077,7 +3087,7 @@ dependencies = [
 name = "gridcraft-xlsx"
 version = "0.19.1"
 dependencies = [
- "craft-cfb",
+ "craft-cfb 0.1.0 (git+https://github.com/storytold/craft-libs?rev=8fa4db64a9bb943520259ea95331a303ba788f21)",
  "craft-csv",
  "craft-drawingml",
  "craft-math",
