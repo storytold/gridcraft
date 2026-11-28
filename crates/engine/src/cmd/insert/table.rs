@@ -175,7 +175,12 @@ pub(super) fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json>
                     t.totals_row = v;
                     if v {
                         t.range.end.row += 1;
-                        if let Some(first) = t.columns.first_mut() {
+                        // A row turned on again keeps what it held when it was turned off (Excel keeps
+                        // it in the file): only a first column with nothing of its own says "Total".
+                        if let Some(first) = t.columns.first_mut()
+                            && first.totals == TotalsFn::None
+                            && first.totals_label.is_none()
+                        {
                             first.totals_label = Some("Total".into());
                         }
                         if t.columns.len() > 1
@@ -221,8 +226,13 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
     let row = t.range.end.row;
     for (i, col) in t.columns.iter().enumerate() {
         let c = CellRef::new(row, t.range.start.col + i as u32);
-        if let Some(code) = col.totals.subtotal_code() {
-            let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
+        // A custom total is its formula (`totalsRowFormula`, kept in `totals_label`), not a label.
+        let formula = match (&col.totals_label, col.totals.subtotal_code()) {
+            (_, Some(code)) => Some(format!("=SUBTOTAL({code},{}[{}])", t.name, col.name)),
+            (Some(f), None) if col.totals == TotalsFn::Custom && !f.trim().is_empty() => Some(format!("={}", f.trim_start_matches('='))),
+            _ => None,
+        };
+        if let Some(f) = formula {
             sh.set_cell(
                 c,
                 Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
