@@ -251,3 +251,21 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-10 | minor | Updated for the 10-10 merges (#17, #31, #38, #62, #82, #104, #116) and the new chart resize bug (#190) |
 | 2026-10-10 | minor | Noted that no gap blocks the alpha gate |
 | 2026-10-10 | major | Created: 24 ranked gaps with evidence, from the full re-measure and the 60 open issues |
+
+
+## Contribution #2739 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+Topic change: MCP file confinement retained with upstream Arabic PDF progress.
+
+> **Automation confinement update:** 2026-10-30 · Headless MCP accepts operator-selected read/write roots, applied before `--in` and at file I/O. Native reads and atomic saves bind their operations to open authorized directory handles; exclusive random temporary names prevent stale `.sctmp` files from blocking saves. Desktop `--connect` confinement and process-wide OS sandboxing remain outside this change. Readiness estimates unchanged. See [MCP file access](mcp.md#restrict-file-access-to-a-folder).
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-29 | minor | Align root flags with DeckCraft, cover nested write roots and macOS case aliases; desktop scope and readiness estimates unchanged |
+| 2026-10-27 | minor | Headless MCP filesystem roots, initial `--in` confinement and regression tests; desktop control scope and readiness estimates unchanged |
