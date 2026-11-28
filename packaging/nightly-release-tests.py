@@ -214,15 +214,22 @@ class TrustedSourcePreparation(unittest.TestCase):
                     (indicator, expression), = job_conditions(jobs)
                     self.assertFalse(indicator == ">-" and " ".join(expression.split()) == expected)
 
-    def test_no_nightly_schedule_is_registered(self):
-        for name, event in (("nightly.yml", "workflow_dispatch"),
-                            ("nightly-sign.yml", "workflow_dispatch")):
+    def test_nightly_triggers_match_reviewed_schedule(self):
+        expected_triggers = {
+            "nightly.yml": ["  schedule:", "  workflow_dispatch:"],
+            "nightly-sign.yml": ["  workflow_dispatch:"],
+            "nightly-dispatch.yml": ["  workflow_run:"],
+        }
+        for name, expected in expected_triggers.items():
             source = (ROOT / ".github/workflows" / name).read_text()
             events = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
             triggers = [line for line in events.splitlines() if line.startswith("  ")
                         and not line.startswith("   ") and line.strip() and not line.lstrip().startswith("#")]
             with self.subTest(workflow=name):
-                self.assertEqual(triggers, [f"  {event}:"], "schedule/activation needs explicit review")
+                self.assertEqual(triggers, expected, "schedule/activation needs explicit review")
+        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
+        self.assertEqual(re.findall(r"(?m)^    - cron: '([^']+)'$", nightly), ["30 3 * * *"],
+                         "scheduled nightly cadence must match the reviewed cron expression")
 
     def test_signer_serialization_contract_is_enforced(self):
         assert_nightly_serialization((ROOT / ".github/workflows/nightly-sign.yml").read_text())
@@ -258,17 +265,17 @@ class TrustedSourcePreparation(unittest.TestCase):
         self.assertEqual(len(entries), len(expected), "duplicate fixture classification")
 
     def test_no_cache_actions_or_cache_setup_options_in_app_trusted_closure(self):
-        for name in ("nightly.yml", "nightly-sign.yml"):
+        for name in ("nightly.yml", "nightly-dispatch.yml", "nightly-sign.yml"):
             source = (ROOT / ".github/workflows" / name).read_text()
             executable = "\n".join(line for line in source.splitlines()
                                    if not line.lstrip().startswith("#"))
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                # The producer caller forwards nothing. The signer caller declares the release
-                # environment and forwards exactly the fifteen secrets the sign steps read; those
+                # The producer and dispatcher forward nothing. The signer caller declares no
+                # environment and forwards exactly the named secrets the sign steps read; those
                 # are the only allowed forms, and `inherit` is never one of them.
-                if name == "nightly.yml":
+                if name in ("nightly.yml", "nightly-dispatch.yml"):
                     self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
                     self.assertNotIn("secrets.", executable)
                 else:
@@ -319,6 +326,7 @@ class NightlyEnabledCallers(unittest.TestCase):
         "nightly.yml": "github.repository == 'storytold/gridcraft' && github.ref == 'refs/heads/main' && "
                        "github.ref_type == 'branch' && (github.event_name == 'schedule' || "
                        "github.event_name == 'workflow_dispatch')",
+        "nightly-dispatch.yml": "github.repository == 'storytold/gridcraft' && github.event_name == 'workflow_run'",
         "nightly-sign.yml": "github.repository == 'storytold/gridcraft' && github.event_name == 'workflow_dispatch' && "
                             "github.ref == 'refs/heads/nightly-signer' && github.ref_type == 'branch'",
     }
@@ -337,7 +345,8 @@ class NightlyEnabledCallers(unittest.TestCase):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
         policy = json.loads(INSTALLED_POLICY.read_text())
         self.assertEqual(reviewed_manual_actors(source, policy), RELEASE_MANAGERS)
-        self.assertEqual(policy["automatic_signer_actors"], [], "no automatic signer without a schedule")
+        self.assertEqual(policy["automatic_signer_actors"], ["github-actions[bot]"],
+                         "automatic signer is limited to github-actions[bot]")
 
     def test_an_actor_outside_the_release_managers_is_refused(self):
         source = (ROOT / ".github/workflows/nightly.yml").read_text()
@@ -811,9 +820,14 @@ class NightlySignerBranchTrustClosure(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/" + SIGNER_BRANCH + "'", guard)
         self.assertNotIn("refs/heads/release", sign, "the signer no longer runs on the stable branch")
         self.assertEqual(re.findall(r"(?m)^      app-name: (\S+)$", sign), ["gridcraft"], "the shared signer needs the reviewed registry app")
-        # This app ships no completion dispatcher yet: that workflow forwards scheduled producers
-        # only, and no schedule is approved. Adding it is part of a reviewed cadence change.
-        self.assertFalse(DISPATCHER.exists(), "a completion dispatcher needs its own reviewed activation")
+        self.assertTrue(DISPATCHER.exists(), "scheduled nightly requires the completion dispatcher")
+        dispatcher = DISPATCHER.read_text()
+        producer_name = re.findall(r"(?m)^name: (.+)$", (ROOT / ".github/workflows/nightly.yml").read_text())[0]
+        self.assertIn(f"workflows: [{producer_name}]", dispatcher, "dispatcher must match the producer workflow name")
+        self.assertIn("refs/heads/" + SIGNER_BRANCH, dispatcher, "dispatcher must target the signer branch")
+        self.assertIn("https://api.github.com/repos/storytold/gridcraft/actions/workflows/nightly-sign.yml/dispatches",
+                      dispatcher, "dispatcher must target gridcraft nightly-sign.yml")
+        self.assertNotIn("false &&", dispatcher, "dispatcher must be enabled for scheduled runs")
         self.assertEqual(json.loads(INSTALLED_POLICY.read_text())["release_branch"], SIGNER_BRANCH)
         self.assertFalse((ROOT / "docs/nightly-signing-policy.example.json").exists(),
                          "a policy example must then name the signer branch")
