@@ -1,8 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=GridCraft
+Name[ru]=GridCraft
 GenericName=Spreadsheet
+GenericName[ru]=Электронная таблица
 Comment=Calculate, analyse and chart data in workbooks
+Comment[ru]=Вычисления, анализ данных и диаграммы в книгах
 Exec=gridcraft %F
 TryExec=gridcraft
 Icon=ai.storyteller.gridcraft
@@ -12,3 +15,4 @@ StartupWMClass=ai.storyteller.gridcraft
 Categories=Office;Spreadsheet;
 MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.ms-excel.sheet.binary.macroEnabled.12;application/vnd.oasis.opendocument.spreadsheet;text/csv;text/tab-separated-values;
 Keywords=spreadsheet;workbook;sheet;table;formula;chart;pivot;xlsx;xlsb;ods;csv;tsv;excel;
+Keywords[ru]=электронная таблица;книга;лист;таблица;формула;диаграмма;сводная таблица;xlsx;xlsb;ods;csv;tsv;excel;

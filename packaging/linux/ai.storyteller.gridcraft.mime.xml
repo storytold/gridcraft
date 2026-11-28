@@ -5,30 +5,36 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     <comment>Office Open XML workbook</comment>
+    <comment xml:lang="ru">Книга Office Open XML</comment>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.xlsx"/>
   </mime-type>
   <mime-type type="application/vnd.ms-excel.sheet.macroEnabled.12">
     <comment>Office Open XML macro-enabled workbook</comment>
+    <comment xml:lang="ru">Книга Office Open XML с поддержкой макросов</comment>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.xlsm"/>
   </mime-type>
   <mime-type type="application/vnd.ms-excel.sheet.binary.macroEnabled.12">
     <comment>Excel binary workbook</comment>
+    <comment xml:lang="ru">Двоичная книга Excel</comment>
     <glob pattern="*.xlsb"/>
   </mime-type>
   <mime-type type="application/vnd.oasis.opendocument.spreadsheet">
     <comment>OpenDocument spreadsheet</comment>
+    <comment xml:lang="ru">Электронная таблица OpenDocument</comment>
     <sub-class-of type="application/zip"/>
     <glob pattern="*.ods"/>
   </mime-type>
   <mime-type type="text/csv">
     <comment>CSV document</comment>
+    <comment xml:lang="ru">Документ CSV</comment>
     <sub-class-of type="text/plain"/>
     <glob pattern="*.csv"/>
   </mime-type>
   <mime-type type="text/tab-separated-values">
     <comment>TSV document</comment>
+    <comment xml:lang="ru">Документ TSV</comment>
     <sub-class-of type="text/plain"/>
     <glob pattern="*.tsv"/>
   </mime-type>
