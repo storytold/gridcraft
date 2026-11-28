@@ -125,24 +125,25 @@ fn product(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(v.iter().product())
 }
 
-/// SUMPRODUCT: non-numeric entries of arrays and multi-cell ranges count as 0, but a scalar
-/// argument holding text (a literal or a single-cell reference) is `#VALUE!` (observed:
-/// `SUMPRODUCT(G1330:G1330,I1330:I1330)` with G1330 = the text "4" is `#VALUE!`).
+/// SUMPRODUCT: a non-numeric entry counts as 0, wherever it comes from — an array, a range or a
+/// scalar argument (a text literal or a single-cell reference) — and arguments must have the
+/// same size. Observed in Excel 365: `SUMPRODUCT("4",2)`, `SUMPRODUCT(A1,A2)` and
+/// `SUMPRODUCT(A1:A1,A2:A2)` with A1 = the text "4" are all 0, while `SUMPRODUCT(A1:A1,B1:B3)`
+/// is `#VALUE!`.
 fn sumproduct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let arrays: Vec<_> = a.iter().map(|x| (as_array(&x.value), !matches!(x.value, Value::Array(_)))).collect();
-    let Some((first, _)) = arrays.first() else { return Err(CellError::Value) };
+    let arrays: Vec<_> = a.iter().map(|x| as_array(&x.value)).collect();
+    let Some(first) = arrays.first() else { return Err(CellError::Value) };
     let (rows, cols) = (first.rows, first.cols);
-    if arrays.iter().any(|(x, _)| x.rows != rows || x.cols != cols) {
+    if arrays.iter().any(|x| x.rows != rows || x.cols != cols) {
         return Err(CellError::Value);
     }
     let mut total = 0.0;
     for i in 0..rows.saturating_mul(cols) {
         let mut p = 1.0;
-        for (arr, scalar) in &arrays {
+        for arr in &arrays {
             match arr.data.get(i) {
                 Some(Value::Number(n)) => p *= n,
                 Some(Value::Error(e)) => return Err(*e),
-                Some(Value::Text(_)) if *scalar => return Err(CellError::Value),
                 _ => p = 0.0,
             }
         }
