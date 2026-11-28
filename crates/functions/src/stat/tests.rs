@@ -348,6 +348,12 @@ fn percentiles() {
     close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(7.0)]), 0.7);
     close(ev("PERCENTRANK.EXC", vec![e9.clone(), n(5.43)]), 0.381);
     close(ev("PERCENTRANK.EXC", vec![e9, n(5.43), n(1.0)]), 0.3);
+    // One number ranks 1, as in native Excel; logicals and text in an array are not numbers (#4013).
+    close(ev("PERCENTRANK.EXC", vec![c(&[1.0]), n(1.0)]), 1.0);
+    close(ev("PERCENTRANK.EXC", vec![av(arr(vec![vec![Value::Bool(true), Value::Bool(false), nv(2.0)]])), n(2.0)]), 1.0);
+    close(ev("PERCENTRANK.EXC", vec![c(&[1.0, 2.0]), n(1.0)]), 0.333);
+    close(ev("PERCENTRANK.EXC", vec![c(&[1.0, 2.0]), n(2.0)]), 0.666);
+    close(ev("PERCENTRANK.INC", vec![c(&[1.0]), n(1.0)]), 1.0);
     let t = c(&[1.0, 2.0, 3.0]);
     // Excel 16: significance 309 and up is #DIV/0!, 308 still works.
     for name in ["PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC"] {
