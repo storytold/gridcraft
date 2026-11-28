@@ -569,10 +569,13 @@ fn aggregate_impl(function_num: u32, values: &[Value], k: Option<&Value>) -> R<V
     let code = if (101..=111).contains(&function_num) { function_num - 100 } else { function_num };
     let mut xs = Vec::new();
     let mut nonempty = 0usize;
+    // COUNT and COUNTA count an error instead of failing on it, as COUNT and COUNTA do: COUNT
+    // passes over it and COUNTA counts it as a nonempty cell (#4271).
+    let counting = matches!(code, 2 | 3);
     let mut push = |v: &Value| -> R<()> {
         match v {
             Value::Number(n) => xs.push(*n),
-            Value::Error(e) => return Err(*e),
+            Value::Error(e) if !counting => return Err(*e),
             _ => {}
         }
         if !v.is_empty() {
