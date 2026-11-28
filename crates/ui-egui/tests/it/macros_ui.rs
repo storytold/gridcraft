@@ -338,7 +338,9 @@ fn a_question_is_answered_in_the_workbook_that_asked_it() {
     h.state_mut().dialog = None;
     h.state_mut().session.new_workbook();
     save(&mut h, json!({"name": "Tidy", "steps": []}));
-    h.get_by_label("Delete").click();
+    // The new workbook's window shows Home, whose ribbon has a Delete of its own: the question's
+    // is drawn last.
+    h.get_all_by_label("Delete").last().unwrap().click();
     h.run_steps(3);
     assert_eq!(h.state().session.active().unwrap().wb.macros.len(), 1, "the other workbook's macro is kept");
     assert!(h.state().macros.question.is_none());
@@ -348,7 +350,7 @@ fn a_question_is_answered_in_the_workbook_that_asked_it() {
     h.run_steps(2);
     h.state_mut().open_dialog("macros", json!({"name": "Tidy"}));
     h.run_steps(2);
-    h.get_by_label("Delete").click();
+    h.get_all_by_label("Delete").last().unwrap().click();
     h.run_steps(2);
     h.get_all_by_label("Delete").last().unwrap().click();
     h.run_steps(3);
