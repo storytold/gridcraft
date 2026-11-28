@@ -141,3 +141,30 @@ fn each_window_scrolls_on_its_own_and_a_closed_windows_positions_are_dropped() {
     assert_eq!(first_scrolled_row(&h), 50, "the first window kept its own position");
     assert!(h.state().views.keys().all(|(w, _)| *w == first), "nothing is kept for the closed window: {:?}", h.state().views.keys());
 }
+
+/// A sheet saved scrolled below a million hidden rows: the grid asks for its view every frame,
+/// and that no longer works out the saved position again each time, walking every hidden row
+/// above it (#3632).
+#[test]
+#[allow(clippy::disallowed_methods)] // tests run only off wasm, where the clock exists
+fn the_view_of_a_sheet_scrolled_below_a_million_hidden_rows_is_quick_to_get() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for r in 1..1_048_000 {
+        sh.rows.entry(r).or_default().hidden = true;
+    }
+    sh.view_top_left = CellRef::new(1_048_010, 0);
+    let want = sh.row_top(1_048_010) as f32;
+    let mut session = Session::new();
+    session.add_document(DocState::new(wb, None, "Book1".into(), gridcraft_engine::Trust::Local));
+    let mut app = crate::common::app(session);
+    assert_eq!(app.view_mut().unwrap().scroll.y, want, "the sheet opens at its saved position");
+    app.view_mut().unwrap().scroll.y = want + 5.0;
+    let start = std::time::Instant::now();
+    for _ in 0..2000 {
+        assert_eq!(app.view_mut().unwrap().scroll.y, want + 5.0, "the view keeps where it was scrolled");
+    }
+    // Walking the hidden rows took milliseconds a call; now it is a map lookup.
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(1), "2000 views took {took:?}");
+}
