@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-03 · **Change:** minor (GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -12,13 +12,9 @@ Excel's worksheet functions, category by category, against GridCraft's function 
   them), plus 14 text functions the page lists under combined entries (FIND/FINDB, LEFT/LEFTB,
   LEN/LENB, MID/MIDB, REPLACE/REPLACEB, RIGHT/RIGHTB, SEARCH/SEARCHB), BETA.INV, and COPILOT and
   PY (Microsoft 365 functions not on that page when fetched).
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (503):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (502):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
-- **Ours (505):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
+- **Ours (514):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
   evaluator's special forms in `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE,
-  OFFSET, INDIRECT, INDEX, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
+  OFFSET, INDIRECT, INDEX, GETPIVOTDATA, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
   MAKEARRAY…), excluding the test-only `ADD2`. Every one is an Excel name.
 - **Not on Microsoft's list:** USDOLLAR and ECMA.CEILING, legacy functions Excel still evaluates (like DOLLAR),
   are in our library as Compatibility functions for files that use them. They are not counted above.
@@ -29,7 +25,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 
 ## Coverage
 
-**Measured: 513 / 523 by name (98.1%); 504 / 523 working (96.4%).**
+**Measured: 514 / 523 by name (98.3%); 505 / 523 working (96.6%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
@@ -38,7 +34,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
-| Lookup and reference | 40 | 36 | 36 | 90% | GETPIVOTDATA, IMAGE, RTD, TRIMRANGE |
+| Lookup and reference | 40 | 38 | 38 | 95% | IMAGE, RTD |
 | Compatibility | 40 | 40 | 40 | 100% | — |
 | Date and time | 25 | 25 | 25 | 100% | — |
 | Information | 22 | 21 | 21 | 95% | STOCKHISTORY |
@@ -48,10 +44,10 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
 | Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **505** | **496** | **94.8%** | 18 missing, 9 stubs |
+| **Total** | **523** | **514** | **505** | **96.6%** | 9 missing, 9 stubs |
 
-By the Excel version that introduced them (working / total): before 2010 346 / 360, 2010
-56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
+By the Excel version that introduced them (working / total): before 2010 349 / 360, 2010
+56 / 56, 2013 49 / 51, 2016 5 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 7 / 11.
 Dynamic-array and LAMBDA-era functions (FILTER, SORT, UNIQUE, XLOOKUP, VSTACK, TAKE, GROUPBY,
 PIVOTBY, REGEXTEST…) are all present.
 
@@ -66,7 +62,7 @@ This improves series preparation; it does not change the model-fitting or season
 |---|---|---|---|
 | FORECAST.ETS family (4) | yes | 4–6 h | AAA exponential smoothing with seasonality detection; needed for Forecast Sheet too |
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
-| GETPIVOTDATA | yes | 2–3 h | Needs the pivot engine's result cache; also the "Generate GetPivotData" option |
+| Generate GetPivotData | yes | 1–2 h | GETPIVOTDATA works; clicking a PivotTable value while typing a formula doesn't insert it yet |
 | IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
 | CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
@@ -115,7 +111,10 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+XIRR, YIELD) are the highest-risk for last-digit differences. RATE follows Excel's own iteration, reconstructed from observation (secant from the guess and the guess ± 0.001, at most 200 steps,
+stop within 1e-7 by step and value, a looser 1e-4 check after 200 steps), so it returns the same
+iterate as Excel where convergence is slow (about -100% for `RATE(n,0,-pv,0)`) and `#NUM!` where
+Excel's solver gives up (very large rates); roots at 0% differ only by rounding noise (under 1e-7). XIRR follows Excel's own solver, reconstructed from observation: a sign-only search that brackets the root from the guess (doubling, halving towards 0, or stepping halfway to -100%) and bisects until half the bracket is under 1e-8 x (|rate| + 0.5) and XNPV is under 2e-8 x the first value, so its answer is the same midpoint as Excel's, about 1e-8 from the exact root, bit for bit in 888 of 910 synthetic cases with an answer (97.7% agreement on 1,283 cases including `#NUM!`). A 0 or blank first flow gives the tiny value Excel gives (the guess halved until the step is under the tolerance: about 2.98e-9 for the default guess, `#NUM!` for a negative guess). Known differences: flows with several sign changes where Excel returns about 3e-9 (a halving that reached 0), or `#NUM!` for two roots close to the guess. IRR uses Newton on the discount factor 1/(1+rate), at most 100 steps, stopping at a step under 1e-8; Excel's last digits differ by about 1e-12 (its exact iteration is not reconstructed) and a few far-from-guess cases differ in `#NUM!` (93.5% agreement on 708 cases, from 88%).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -128,14 +127,21 @@ inputs, so large finite middle values do not become `#NUM!` merely because their
 Sorting, argument coercion and error propagation are unchanged; this is a numerical correction
 under the documented median rule, not an extreme-value comparison against desktop Excel.
 
-Work to close (16–26 h in total): the in-scope missing functions (10–16 h with the table above),
+Work to close (15–25 h in total): the in-scope missing functions (10–16 h with the table above),
 an oracle corpus of Excel-computed results per function (owner runs Excel on generated
 workbooks; results checked in as data, not Excel files) and fixing what it finds (6–10 h).
+
+GCD and LCM validate the sign of the original argument before truncating it. Negative
+fractions such as `-0.5` return `#NUM!`, including inside ranges and beside a zero argument.
+Positive fractional inputs still truncate, and signed zero remains valid. Covered by
+`gcd_and_lcm_reject_negative_fractions_before_truncation`; function counts and estimates are unchanged.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
+| 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; a tiny step with a large residual continues iterating |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
@@ -167,16 +173,22 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 | 2026-10-19 | minor | Long flat operator chains (#916): 4,096 operands (Excel's 8,192-character limit) no longer overflow the stack when entered, filled, adjusted or saved; chains past 64 operands are no longer saved as dynamic-array formulas; Spanish entry no longer refuses chains past 256 operands |
 | 2026-10-17 | minor | 15-significant-digit comparison moved from missing to done (#57), and the resolved caveats on the 3-D reference, dynamic-array and legacy-array rows cleared (#140, #133, #139, #156) |
 | 2026-10-16 | minor | FORECAST.ETS gap interpolation uses a forward-only known-point scan instead of rescanning each gap for every missing value; numerical behavior and missing-point limits are preserved (#1042) |
+| 2026-10-15 | minor | XIRR follows Excel's bisection (answers bit for bit, about 1e-8 from the exact root; dates before the first allowed; guess <= -1 is `#NUM!`); IRR uses Newton on the discount factor (`IRR` of -100, 19 zeros, 1E-5 is `#NUM!` like Excel; guess <= -1 is `#VALUE!`) |
+| 2026-10-20 | minor | XIRR counts a blank cash-flow cell as 0 and ignores a blank date next to a blank or 0 flow, instead of returning `#VALUE!`; XNPV now returns the `#NUM!` Excel gives for a blank or text value or a blank date after the first row, and `#VALUE!` for a blank value or date in the first row (observed on synthetic workbooks); XIRR with a 0 or blank first flow returns Excel's tiny value (about 2.98e-9), and a first nonzero flow with a blank date reads the date as day 0 |
 | 2026-10-15 | minor | Iterative calculation: Maximum Iterations and Maximum Change are set in File › Options › Formulas (dropped "no Options dialog yet") |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
+| 2026-10-14 | minor | SORT, SORTBY and Data > Sort (including the AutoFilter and table sorts) order numbers exactly, as Excel 365 does: 0.3 sorts before `=0.1+0.2` (0.30000000000000004) ascending and after it descending, in either input order. UNIQUE, RANK / RANK.EQ / RANK.AVG, LARGE, SMALL and MODE were already exact, also as observed; `=` and COUNTIF keep comparing at 15 significant digits |
 | 2026-10-14 | minor | MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP and LOOKUP compare numbers exactly in every match and search mode, as Excel 365 does: `MATCH(0.1+0.2,{0.3},0)` is `#N/A` and 0.3 sorts below 0.30000000000000004 in approximate and binary search. `=`, SWITCH and the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS…) keep comparing at 15 significant digits, also as observed |
 | 2026-10-14 | minor | Analysis ToolPak value arguments (EOMONTH, WORKDAY, YEARFRAC, COUPDAYS, DISC, BIN2DEC, IM* and the rest, observed in Excel 365) give `#VALUE!` for a multi-cell reference instead of lifting it |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-14 | minor | Set precision as displayed: results, spills and typed or reformatted numbers are stored as their format shows them when the option is on (#1343) |
+| 2026-10-14 | minor | Number-to-text (`&`, CONCAT, TEXTJOIN, VALUETOTEXT, the IM functions' complex text, and also formula printing, pivot and chart labels) rounds to 15 significant digits before choosing decimal or scientific, so `=(1E15-0.5)&""` is `1E+15`, not `1000000000000000`; and below 1 it switches to scientific when the decimal would be longer than 21 characters (sign not counted), as Excel caches IMCSCH/IMEXP/IMTAN results: `1.28233995888454E-06`, so `9.99999999999999E-09` (was `0.00000001`), but `0.0000692361330972509`. Only 15-digit positive mantissas are Excel-verified; the limit for shorter mantissas and for negatives is inferred |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
+| 2026-10-14 | minor | RATE follows Excel's iteration (secant, 200 steps, 1e-7 by step and value): `RATE(5,0,-100,0)` is -0.999999409145182 like Excel instead of `#NUM!`, `RATE(4,0,-0.0001,100)` is `#NUM!` like Excel instead of 30.62 |
 | 2026-10-13 | minor | Legacy formulas from files (no dynamic-array metadata) evaluate with implicit intersection: cells differing from Excel's cached values 68,964 → 49,866 across 4,224 test-corpus workbooks (none gets more) |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
+| 2026-10-12 | minor | GETPIVOTDATA added: 514 / 523 by name, 505 working |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |

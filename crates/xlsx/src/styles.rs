@@ -61,6 +61,22 @@ fn bool_prop(e: &El, name: &str) -> bool {
     e.child(name).is_some_and(|c| c.flag("val", true))
 }
 
+/// A font's `outline` as the shared SpreadsheetML font (`craft-xlsx`) reads it: `None` when the
+/// element is absent, `Some(false)` when it says `val="0"` (stated off, which a differential
+/// format keeps), `Some(true)` when on.
+fn shared_outline(e: &El) -> Option<bool> {
+    craft_xlsx::Font::read(&crate::chart::to_craft_el(e)).outline
+}
+
+/// The shared SpreadsheetML font's `outline` element for `outline`, written as it writes it:
+/// `<outline/>`, `<outline val="0"/>`, or nothing.
+fn push_shared_outline(s: &mut String, outline: Option<bool>) {
+    let font = craft_xlsx::Font { outline, ..Default::default() }.to_el("font", false);
+    for child in font.elements() {
+        child.write_xml(s);
+    }
+}
+
 const DEFAULT_FONT_FAMILY: u8 = 2;
 const MAX_FONT_FAMILY: u8 = 14;
 
@@ -79,6 +95,7 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
     f.bold = bool_prop(e, "b");
     f.italic = bool_prop(e, "i");
     f.strike = bool_prop(e, "strike");
+    f.outline = shared_outline(e) == Some(true);
     if let Some(u) = e.child("u") {
         f.underline = match u.attr("val").unwrap_or("single") {
             "double" => Underline::Double,
@@ -275,6 +292,7 @@ fn read_alignment(a: &El) -> Alignment {
             Some(2) => Some(ReadingOrder::RightToLeft),
             _ => None,
         },
+        padding: [None; 4],
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -414,6 +432,7 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
         st.bold = e.child("b").is_some() && !f.bold;
         st.italic = e.child("i").is_some() && !f.italic;
         st.strike = e.child("strike").is_some() && !f.strike;
+        st.outline = shared_outline(e) == Some(false);
         st.underline = e.child("u").is_some() && f.underline == Underline::None;
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -444,6 +463,14 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
     s
 }
 
+/// An inline Excel 2010 `x14:dxf` differential format, resolving `numFmtId` against `cx.num_fmts`.
+pub fn read_x14_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Style {
+    let shared: HashMap<u32, NumFmt> =
+        x.child("numFmt").and_then(|n| n.attr_u32("numFmtId")).and_then(|id| fmts.get(&id).map(|c| (id, NumFmt::new(c)))).into_iter().collect();
+    let mut inline_fmts = HashMap::new();
+    read_dxf(x, palette, &shared, &mut inline_fmts)
+}
+
 // ---------------------------------------------------------------- writing
 
 pub fn color_attrs(c: &Color) -> String {
@@ -472,6 +499,9 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
             let _ = write!(s, "<{tag} val=\"0\"/>");
         }
     }
+    // Excel's order puts outline after strike (condense and extend aren't modelled).
+    let outline = if f.outline { Some(true) } else { stated.outline.then_some(false) };
+    push_shared_outline(&mut s, outline);
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
@@ -566,7 +596,9 @@ fn border_xml(b: &Borders) -> String {
 }
 
 fn alignment_xml(a: &Alignment) -> Option<String> {
-    if *a == Alignment::default() {
+    // SpreadsheetML has no cell padding: it is not written, and a style that differs from the
+    // default only by padding writes no `<alignment>`.
+    if (Alignment { padding: [None; 4], ..*a }) == Alignment::default() {
         return None;
     }
     let mut s = String::from("<alignment");
@@ -639,14 +671,16 @@ fn intern<T: Clone + Eq + std::hash::Hash>(list: &mut Vec<T>, map: &mut HashMap<
     i
 }
 
-/// Number format ids assigned while writing.
-struct NumFmts {
+/// Number format ids assigned while writing. Worksheets that carry inline differential formats
+/// (`x14:dxf`) assign ids first, through [`crate::write::Out`]; `styles.xml` lists them all.
+#[derive(Default)]
+pub struct NumFmts {
     custom: Vec<(u32, String)>,
     map: HashMap<String, u32>,
 }
 
 impl NumFmts {
-    fn id(&mut self, code: &str) -> u32 {
+    pub fn id(&mut self, code: &str) -> u32 {
         if let Some(id) = builtin_id(code) {
             return id;
         }
@@ -662,10 +696,10 @@ impl NumFmts {
 
 /// `styles.xml` for the workbook: one cell format per model style, in `StyleId` order (so a
 /// cell's `s` attribute is its style id), plus the given differential formats.
-/// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); the
-/// returned map gives the id of every custom format written.
-pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (String, HashMap<String, u32>) {
-    let mut nf = NumFmts { custom: vec![], map: HashMap::new() };
+/// `extra_fmts` are number formats used outside cell styles (PivotTable value fields); `nf`
+/// holds the ids worksheets already assigned. The returned map gives the id of every custom
+/// format written.
+pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String], mut nf: NumFmts) -> (String, HashMap<String, u32>) {
     let mut fonts: Vec<Font> = vec![];
     let mut font_map = HashMap::new();
     let mut fills: Vec<Fill> = vec![Fill::default(), Fill { pattern: PatternType::Gray125, fg: Color::Auto, bg: Color::Auto }];
@@ -745,44 +779,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
 
     let mut dx = String::new();
     for d in dxfs {
-        dx.push_str("<dxf>");
-        let def = Style::default();
-        let st = &d.dxf_stated;
-        if d.font.bold
-            || d.font.italic
-            || d.font.strike
-            || d.font.underline != Underline::None
-            || d.font.color != Color::Auto
-            || d.font.vert != VertAlign::Baseline
-            || d.font.size != def.font.size
-            || d.font.name != def.font.name
-            || st.bold
-            || st.italic
-            || st.strike
-            || st.underline
-            || st.size
-            || st.name
-            || st.scheme.is_some()
-        {
-            dx.push_str(&font_xml(&d.font, Some(st), false));
-        }
-        if d.num_fmt != def.num_fmt {
-            let id = nf.id(d.num_fmt.as_str());
-            let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
-        }
-        if d.fill != def.fill {
-            dx.push_str(&fill_xml(&d.fill, true));
-        }
-        if let Some(a) = alignment_xml(&d.align) {
-            dx.push_str(&a);
-        }
-        if d.borders != def.borders {
-            dx.push_str(&border_xml(&d.borders));
-        }
-        if st.protection || d.protection != def.protection {
-            let _ = write!(dx, "<protection locked=\"{}\" hidden=\"{}\"/>", d.protection.locked as u8, d.protection.hidden as u8);
-        }
-        dx.push_str("</dxf>");
+        dx.push_str(&dxf_xml("dxf", d, &mut nf));
     }
     for f in extra_fmts {
         nf.id(f);
@@ -818,6 +815,50 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
     let _ = write!(s, "<dxfs count=\"{}\">{dx}</dxfs>", dxfs.len());
     s.push_str("<tableStyles count=\"0\" defaultTableStyle=\"TableStyleMedium2\" defaultPivotStyle=\"PivotStyleLight16\"/></styleSheet>");
     (s, nf.map)
+}
+
+/// A differential format element named `tag` (`dxf`, or `x14:dxf` inline in a worksheet rule).
+pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
+    let mut dx = format!("<{tag}>");
+    let def = Style::default();
+    if d.font.bold
+        || d.font.italic
+        || d.font.strike
+        || d.font.outline
+        || d.font.underline != Underline::None
+        || d.font.color != Color::Auto
+        || d.font.vert != VertAlign::Baseline
+        || d.font.size != def.font.size
+        || d.font.name != def.font.name
+        || d.dxf_stated.bold
+        || d.dxf_stated.italic
+        || d.dxf_stated.strike
+        || d.dxf_stated.outline
+        || d.dxf_stated.underline
+        || d.dxf_stated.size
+        || d.dxf_stated.name
+        || d.dxf_stated.scheme.is_some()
+    {
+        dx.push_str(&font_xml(&d.font, Some(&d.dxf_stated), false));
+    }
+    if d.num_fmt != def.num_fmt {
+        let id = nf.id(d.num_fmt.as_str());
+        let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
+    }
+    if d.fill != def.fill {
+        dx.push_str(&fill_xml(&d.fill, true));
+    }
+    if let Some(a) = alignment_xml(&d.align) {
+        dx.push_str(&a);
+    }
+    if d.borders != def.borders {
+        dx.push_str(&border_xml(&d.borders));
+    }
+    if d.dxf_stated.protection || d.protection != def.protection {
+        let _ = write!(dx, "<protection locked=\"{}\" hidden=\"{}\"/>", d.protection.locked as u8, d.protection.hidden as u8);
+    }
+    let _ = write!(dx, "</{tag}>");
+    dx
 }
 
 /// Index of a differential format, adding it when new.
@@ -856,7 +897,7 @@ mod tests {
             let mut wb = Workbook::new();
             wb.styles.intern(styles.xfs[1].clone());
             wb.cell_styles = styles.named.clone();
-            let (xml, _) = write_styles(&wb, &styles.dxfs, &[]);
+            let (xml, _) = write_styles(&wb, &styles.dxfs, &[], NumFmts::default());
             let root = crate::xml::parse(xml.as_bytes()).unwrap();
             for section in ["dxfs", "cellXfs", "cellStyleXfs"] {
                 let orders: Vec<_> = root
