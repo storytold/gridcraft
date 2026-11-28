@@ -5,6 +5,36 @@ use serde_json::json;
 
 const ICON: &[u8] = include_bytes!("../../../../assets/wingman/artcraft-ai-256.png");
 
+fn visual_approval(ctx: &Context, app: &SheetApp, target: &super::Target, arguments: &str) -> Result<String, String> {
+    if !target.matches(app) {
+        return Err("The workbook target changed. Send a new request.".into());
+    }
+    // Do not repeatedly scan a worksheet by title while the physical user is deciding.
+    // Keep at most one short label/error, never an image or workbook, in the UI cache.
+    let slot = egui::Id::unique("gridcraft.wingman.visual_approval_label");
+    let key = slot.with((
+        target.window,
+        target.doc,
+        target.revision,
+        target.sheet,
+        target.object,
+        target.selection.active,
+        target.selection.current(),
+        target.selection.ranges.len(),
+        arguments,
+    ));
+    type Cached = (egui::Id, Result<String, String>);
+    if let Some((_, label)) = ctx.data(|d| d.get_temp::<Cached>(slot)).filter(|(k, _)| *k == key) {
+        return label;
+    }
+    let label = serde_json::from_str(arguments)
+        .map_err(|_| "Invalid visual inspection arguments.".to_string())
+        .and_then(|args| super::workbook::resolve_visual(app, &args).map(|r| r.description))
+        .map_err(|s| s.chars().take(192).map(|c| if c.is_control() { '�' } else { c }).collect::<String>());
+    ctx.data_mut(|d| d.insert_temp(slot, (key, label.clone())));
+    label
+}
+
 #[derive(Default)]
 pub(super) struct RibbonGuide {
     section: String,
@@ -72,6 +102,26 @@ impl RibbonGuide {
             });
         });
     }
+}
+
+fn context_picker(ui: &mut Ui, l: Language, agent: &mut provider::Agent) {
+    let label = ui.label(l.tr("Context limit"));
+    let auto = format!("{} · {}", l.tr(if agent.known_context().is_some() { "Automatic" } else { "Local estimate" }), agent.default_context());
+    egui::ComboBox::from_id_salt("wingman_context_limit")
+        .width(ui.available_width().min(170.0))
+        .truncate()
+        .selected_text(agent.context_choice.map_or_else(|| auto.clone(), |n| n.to_string()))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut agent.context_choice, None, auto);
+            for n in [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152] {
+                if agent.allows_context_choice(n) {
+                    ui.selectable_value(&mut agent.context_choice, Some(n), n.to_string());
+                }
+            }
+        })
+        .response
+        .labelled_by(label.id)
+        .on_hover_text(l.tr("Token budget for conversation and reply. This changes when Wingman compacts history, not the model server's capacity. Set context_window in wingman.json for a persistent limit."));
 }
 
 fn icon(ctx: &Context) -> Option<egui::TextureHandle> {
@@ -157,6 +207,7 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut Ui) {
         .frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(8))
         .show(ui, |ui| {
             super::history::shortcuts(app, ui, &state.composer);
+            state.transcript_shortcuts(app, ui);
             state.draw(app, ui);
         });
     state.dock_rect = Some(panel.response.rect);
@@ -211,23 +262,29 @@ impl PanelState {
             return;
         }
         ui.separator();
+        let display_focus = self.transcript_controls(ui, l);
+        let composing = self.turn.is_none();
         let h = ui.available_height();
         egui::Panel::bottom("wingman_input").frame(egui::Frame::NONE).max_size((h * 0.65).max(120.0)).show(ui, |ui| {
             self.input(app, ui, l);
         });
+        if composing && self.turn.is_some() {
+            // The composer disappears while waiting, but the transcript shortcuts stay available.
+            ui.memory_mut(|m| m.request_focus(display_focus));
+        }
         ScrollArea::vertical().id_salt("wingman_transcript").stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_max_width(ui.available_width());
             if self.thread.log.is_empty() {
                 ui.label(l.tr("What would you like to do with this workbook?"));
                 ui.weak(l.tr("Type @ to attach cells or / for panel commands."));
             }
-            for (i, line) in self.thread.log.iter().enumerate() {
+            for (i, line) in self.thread.log.iter_mut().enumerate() {
+                if line.speaker == "Thinking" && !self.show_thinking {
+                    continue;
+                }
                 ui.push_id(i, |ui| {
-                    if matches!(line.speaker, "Workbook read" | "Applied edit" | "Tool refused" | "External tool") {
-                        let tool = line.text.lines().next().unwrap_or_default();
-                        ui.collapsing(format!("{} · {}", l.tr(line.speaker), tool), |ui| {
-                            ui.monospace(&line.text);
-                        });
+                    if let Some(detail) = &mut line.detail {
+                        detail.show(ui, l, l.tr(line.speaker), &line.text, self.expand_tools);
                     } else {
                         ui.horizontal(|ui| {
                             ui.strong(l.tr(line.speaker));
@@ -248,10 +305,15 @@ impl PanelState {
                     ui.separator();
                 });
             }
-            if let Some(t) = &self.turn
-                && !t.partial.is_empty()
-            {
-                message(ui, l, &t.partial, false);
+            if let Some(t) = &self.turn {
+                let (thinking, answer) = super::transcript::assistant_parts(&t.partial_thinking, &t.partial, false);
+                if self.show_thinking && !thinking.is_empty() {
+                    ui.strong(l.tr("Thinking"));
+                    message(ui, l, thinking, false);
+                }
+                if !answer.is_empty() {
+                    message(ui, l, answer, false);
+                }
             }
         });
     }
@@ -319,14 +381,22 @@ impl PanelState {
                             ui.weak(l.tr("Chat only")).on_hover_text(l.tr("Text only · explicitly attached context is available"));
                         }
                     };
-                    if ui.available_width() >= 310.0 {
+                    if ui.available_width() >= 495.0 {
+                        ui.columns(3, |col| {
+                            access(&mut col[0]);
+                            a.thinking.picker(&mut col[1], l);
+                            context_picker(&mut col[2], l, a);
+                        });
+                    } else if ui.available_width() >= 310.0 {
                         ui.columns(2, |col| {
                             access(&mut col[0]);
                             a.thinking.picker(&mut col[1], l);
                         });
+                        context_picker(ui, l, a);
                     } else {
                         access(ui);
                         a.thinking.picker(ui, l);
+                        context_picker(ui, l, a);
                     }
                     if supports_tools {
                         self.change_mode(mode);
@@ -387,28 +457,31 @@ impl PanelState {
                 .on_hover_text(l.tr("Finite limits reserve the last round for an answer. Unlimited runs until the model finishes or you stop it."));
         };
         let may_change_approval = physical && self.mode.writes();
-        let approvals = |ui: &mut Ui, approval: &mut Approval| {
-            let label = ui.label(l.tr("Approval"));
-            let mut choice = *approval;
-            ui.add_enabled_ui(may_change_approval, |ui| {
-                egui::ComboBox::from_id_salt("wingman_approval")
-                    .width(ui.available_width().min(170.0))
-                    .truncate()
-                    .selected_text(l.tr(choice.label()))
-                    .show_ui(ui, |ui| {
-                        for value in [Approval::Ask, Approval::AlwaysAllow] {
-                            ui.selectable_value(&mut choice, value, l.tr(value.label()));
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id)
-                    .on_hover_text(l.tr("Always allow skips confirmations for edits and connected MCP tools in this thread and access mode."))
-                    .on_disabled_hover_text(l.tr("Approval applies to writes and connected external tools."));
-            });
-            if may_change_approval {
-                *approval = choice;
-            }
-        };
+        let approvals =
+            |ui: &mut Ui, approval: &mut Approval| {
+                let label = ui.label(l.tr("Approval"));
+                let mut choice = *approval;
+                ui.add_enabled_ui(may_change_approval, |ui| {
+                    egui::ComboBox::from_id_salt("wingman_approval")
+                        .width(ui.available_width().min(170.0))
+                        .truncate()
+                        .selected_text(l.tr(choice.label()))
+                        .show_ui(ui, |ui| {
+                            for value in [Approval::Ask, Approval::AlwaysAllow] {
+                                ui.selectable_value(&mut choice, value, l.tr(value.label()));
+                            }
+                        })
+                        .response
+                        .labelled_by(label.id)
+                        .on_hover_text(l.tr(
+                            "Always allow skips confirmations for edits, visual inspections and connected MCP tools in this thread and access mode.",
+                        ))
+                        .on_disabled_hover_text(l.tr("In read-only mode, visual inspections ask before sending workbook pixels."));
+                });
+                if may_change_approval {
+                    *approval = choice;
+                }
+            };
         if ui.available_width() >= 275.0 {
             ui.columns(2, |cols| {
                 rounds(&mut cols[0], &mut self.tool_rounds);
@@ -433,12 +506,36 @@ impl PanelState {
                 .filter(|t| t.external.is_none() && t.approval == Approval::Ask)
                 .and_then(|t| t.queue.front().filter(|c| self.requires_consent(t, c)).map(|c| (c, t.offered.get(&c.name))));
             if let Some((call, external)) = waiting {
-                status(ui, l.tr(if external.is_some() { "Review external tool call" } else { "Review workbook edit" }));
+                let visual = call.name == "inspect_visual" && external.is_none();
+                status(
+                    ui,
+                    l.tr(if visual {
+                        "Review visual inspection"
+                    } else if external.is_some() {
+                        "Review external tool call"
+                    } else {
+                        "Review workbook edit"
+                    }),
+                );
+                let mut can_send = !app.synthetic_pending;
+                if visual && let Some(t) = &self.turn {
+                    ui.weak(format!("{}: {} / {}", l.tr("Send workbook pixels to the configured model"), t.agent.provider, t.agent.model));
+                    match visual_approval(&ctx, app, &t.target, &call.arguments) {
+                        Ok(description) => {
+                            status(ui, &format!("{}: {description}", l.tr("Image to send")));
+                        }
+                        Err(reason) => {
+                            status(ui, &format!("{}: {reason}", l.tr("Cannot send this image")));
+                            can_send = false;
+                        }
+                    }
+                }
                 if let Some(e) = external {
                     ui.strong(e.label());
                     ui.weak(l.tr("These arguments go to this server. External actions cannot be undone by GridCraft."));
                 }
-                if let Some(d) = app.session.active()
+                if !visual
+                    && let Some(d) = app.session.active()
                     && let Some(s) = d.wb.active()
                 {
                     ui.weak(format!("{}: {} · {}!{}", l.tr("Current selection"), d.display_title(), s.name, d.selection.current().a1()));
@@ -458,9 +555,15 @@ impl PanelState {
                         ui.monospace(call.preview());
                     }
                 });
-                let label = if external.is_some() { "Allow call" } else { "Apply edit" };
+                let label = if visual {
+                    "Send image"
+                } else if external.is_some() {
+                    "Allow call"
+                } else {
+                    "Apply edit"
+                };
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!app.synthetic_pending, Button::new(l.tr(label))).clicked() {
+                    if ui.add_enabled(can_send, Button::new(l.tr(label))).clicked() {
                         self.decision(app, true, &ctx);
                     }
                     if ui.button(l.tr("Deny")).clicked() {

@@ -53,7 +53,7 @@ pub(super) fn shortcuts(app: &mut SheetApp, ui: &Ui, composer: &super::composer:
     if !ui.input(|i| i.key_pressed(Key::Z) || i.key_pressed(Key::Y)) {
         return;
     }
-    let Some(mut id) = ctx.memory(|m| m.focused()) else { return };
+    let Some(id) = ctx.memory(|m| m.focused()) else { return };
     let sent = id == super::composer::Composer::id()
         && composer.workbook_owns_undo()
         && !ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_) | egui::Event::Text(_) | egui::Event::Ime(_))));
@@ -67,34 +67,40 @@ pub(super) fn shortcuts(app: &mut SheetApp, ui: &Ui, composer: &super::composer:
     {
         return;
     }
-    // Only claim keys on controls in this dock. A composer, cell, macro text editor, another
-    // pane, or the grid keeps its own keyboard handling. Parent IDs do not depend on position.
+    if !dock_owns_focus(ui, id) {
+        return;
+    }
+    let cmd = ctx.input_mut(|i| {
+        if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y) {
+            Some("edit.redo")
+        } else if i.consume_key(Modifiers::COMMAND, Key::Z) {
+            Some("edit.undo")
+        } else {
+            None
+        }
+    });
+    if let Some(cmd) = cmd {
+        match super::script_editor::history(app, cmd, true) {
+            Some(Err(e)) => app.alert(e),
+            Some(Ok(_)) => {}
+            None => app.run_or_alert(cmd, json!({})),
+        }
+    }
+}
+
+// Follow widget ownership, not pointer location: the sheet and adjacent panes keep their shortcuts.
+pub(super) fn dock_owns_focus(ui: &Ui, mut id: egui::Id) -> bool {
     for _ in 0..64 {
         if id == ui.unique_id() {
-            let cmd = ctx.input_mut(|i| {
-                if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y) {
-                    Some("edit.redo")
-                } else if i.consume_key(Modifiers::COMMAND, Key::Z) {
-                    Some("edit.undo")
-                } else {
-                    None
-                }
-            });
-            if let Some(cmd) = cmd {
-                match super::script_editor::history(app, cmd, true) {
-                    Some(Err(e)) => app.alert(e),
-                    Some(Ok(_)) => {}
-                    None => app.run_or_alert(cmd, json!({})),
-                }
-            }
-            break;
+            return true;
         }
-        let Some(widget) = ctx.widget_rect_last_pass(id) else { break };
+        let Some(widget) = ui.ctx().widget_rect_last_pass(id) else { break };
         if widget.parent_id == id {
             break;
         }
         id = widget.parent_id;
     }
+    false
 }
 
 #[cfg(test)]

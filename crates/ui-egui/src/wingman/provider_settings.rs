@@ -20,6 +20,7 @@ const EXAMPLE: &str = r#"{
       "Local": {
         "api_url": "http://127.0.0.1:8000/v1",
         "auto_discover": true,
+        "context_window": null,
         "available_models": []
       }
     }
@@ -137,9 +138,13 @@ struct Provider {
 struct Model {
     name: String,
     display_name: Option<String>,
+    #[serde(alias = "context_window")]
     max_tokens: Option<u32>,
     max_output_tokens: Option<u32>,
+    snap_tool_results: bool,
     supports_tools: Option<bool>,
+    #[serde(alias = "image")]
+    supports_images: Option<bool>,
     supports_thinking: Option<bool>,
     reasoning_effort: Option<Levels>,
     reasoning_effort_levels: Option<Levels>,
@@ -149,6 +154,8 @@ struct Model {
 #[serde(default)]
 struct Caps {
     tools: Option<bool>,
+    #[serde(alias = "vision", alias = "images")]
+    image: Option<bool>,
     chat_completions: Option<bool>,
     parallel_tool_calls: bool,
     max_tokens_parameter: bool,
@@ -164,7 +171,11 @@ pub(in super::super) struct Agent {
     pub is_loopback: bool,
     pub credential_identity: [u8; 32],
     pub supports_tools: bool,
+    pub supports_images: bool,
     pub max_tokens: Option<u32>,
+    pub snap_tool_results: bool,
+    pub(super) reported_context: Option<u32>,
+    pub(in super::super) context_choice: Option<u32>,
     pub default_profile: Option<String>,
     pub instructions: String,
     pub(super) protocol: Protocol,
@@ -189,12 +200,26 @@ impl Agent {
         self.thinking.supports_reasoning_history() && (self.reasoning_history || self.protocol == Protocol::Ollama)
     }
 
-    /// Only a history-sizing hint: the model server owns tokenization. Never truncate the
-    /// current user message or silently change the model's configured generation limits.
-    pub(in super::super) fn history_budget(&self) -> Option<usize> {
-        let context = self.max_tokens.or((self.protocol == Protocol::Ollama).then_some(4096))?;
-        let output = self.max_output_tokens.unwrap_or(context / 4);
-        Some((context.saturating_sub(output) as usize).saturating_mul(3))
+    pub(in super::super) fn known_context(&self) -> Option<u32> {
+        // num_ctx on the native request is an actual window, even without discovery metadata.
+        self.max_tokens.or((self.protocol == Protocol::Ollama).then_some(4096)).into_iter().chain(self.reported_context).min()
+    }
+
+    pub(in super::super) fn default_context(&self) -> u32 {
+        self.known_context().unwrap_or_else(|| 32768.max(self.max_output_tokens.unwrap_or(0).saturating_mul(2)))
+    }
+
+    pub(in super::super) fn context_tokens(&self) -> u32 {
+        self.context_choice.map_or_else(|| self.default_context(), |n| n.min(self.known_context().unwrap_or(u32::MAX)))
+    }
+
+    pub(in super::super) fn input_token_budget(&self) -> usize {
+        let context = self.context_tokens();
+        context.saturating_sub(self.max_output_tokens.unwrap_or(context / 4)) as usize
+    }
+
+    pub(in super::super) fn allows_context_choice(&self, n: u32) -> bool {
+        n > self.max_output_tokens.unwrap_or(0) && self.known_context().is_none_or(|cap| n <= cap)
     }
 }
 
@@ -349,7 +374,11 @@ impl Host {
             is_loopback,
             credential_identity,
             supports_tools: true,
+            supports_images: false,
             max_tokens: cfg.context_window,
+            snap_tool_results: false,
+            reported_context: None,
+            context_choice: None,
             default_profile: None,
             instructions: String::new(),
             protocol,
@@ -377,7 +406,15 @@ impl Host {
         a.model.clone_from(&m.name);
         a.max_tokens = m.max_tokens.or(a.max_tokens);
         a.supports_tools = m.supports_tools.or(m.capabilities.tools).unwrap_or(true);
+        a.supports_images = m.supports_images.or(m.capabilities.image).unwrap_or(false);
         a.max_output_tokens = m.max_output_tokens;
+        a.snap_tool_results = m.snap_tool_results;
+        if a.input_token_budget() == 0 {
+            return Err(format!(
+                "For {}, max_output_tokens must leave room for input; lower it or configure the actual model context window.",
+                m.name
+            ));
+        }
         a.thinking = Thinking::configured(a.protocol, m.supports_thinking, m.reasoning_effort.as_ref(), m.reasoning_effort_levels.as_ref())
             .map_err(|e| format!("{} / {}: {e}", a.provider, a.model))?;
         a.parallel = m.capabilities.parallel_tool_calls;
@@ -507,6 +544,28 @@ mod tests {
         assert_ne!(a.1, super::auth_snapshot(&[("X-Tenant".into(), "other".into())].into(), Some("account-a".into())).unwrap().1);
     }
     use serde_json::json;
+
+    #[test]
+    fn context_choice_reserves_output_and_cannot_expand_the_served_window() {
+        let parse = |model| {
+            build_catalog(
+                serde_json::from_value(json!({"language_models":{"openai_compatible":{"desk":{
+                    "api_url":"http://localhost:8000/v1","available_models":[model]
+                }}}}))
+                .unwrap(),
+            )
+        };
+        let mut catalog = parse(json!({"name":"local","context_window":8192,"max_output_tokens":1024})).unwrap();
+        let a = &mut catalog.declared[0];
+        a.reported_context = Some(6000);
+        assert!(a.allows_context_choice(4096));
+        assert!(!a.allows_context_choice(8192) && !a.allows_context_choice(1024));
+        a.context_choice = Some(4096);
+        assert_eq!(a.input_token_budget(), 4096 - 1024);
+        a.reported_context = Some(3000);
+        assert_eq!(a.input_token_budget(), 3000 - 1024);
+        assert!(parse(json!({"name":"local","max_tokens":2048,"max_output_tokens":2048})).is_err());
+    }
 
     #[test]
     fn external_agent_settings_are_not_discoverable_models_or_mcp_servers() {

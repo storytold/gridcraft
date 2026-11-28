@@ -50,7 +50,8 @@ pub(in crate::wingman) fn tab(name: &str) -> Option<&'static str> {
         "freeze_panes" | "unfreeze_panes" => "View",
         "create_pivot" => "Insert",
         "set_pivot_layout" => "PivotTable Design",
-        "change_tab" | "apply_edits" | "workbook_info" | "find_commands" | "grep" | "inspect_cell" | "read_range" | "select_range" => "Workbook",
+        "change_tab" | "apply_edits" | "workbook_info" | "find_commands" | "grep" | "inspect_cell" | "read_range" | "select_range"
+        | "inspect_visual" => "Workbook",
         "set_cell" | "set_values" | "format_range" | "set_borders" | "inspect_format" | "number_format" | "merge_cells" | "unmerge_cells"
         | "set_fill" | "set_ink" | "fill_down" | "fill_right" | "drag_fill" | "clear_contents" | "transfer_range" | "size_rows" | "size_columns"
         | "data_bars" | "add_sheet" | "rename_sheet" => "Home",

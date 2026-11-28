@@ -37,6 +37,22 @@ Use your server's model ID in all three places. Multiple servers, models and nam
 
 The settings follow the [local model](https://zed.dev/docs/ai/use-a-local-model) and [OpenAI-compatible provider](https://zed.dev/docs/ai/llm-providers) conventions. Supported provider keys include `ollama`, `lmstudio`, `llama.cpp`, `openai` and named `openai_compatible` entries. Ollama uses its native chat API; the others use Chat Completions. For a server with a bearer key, set the provider's `api_key_env` to the **name** of an environment variable. Use HTTPS for authenticated remote servers. A remote endpoint receives the context you send. Reload after changing credentials; conversations are partitioned by the configured agent, model, destination and credential identity. A workbook model needs function calling for tools; a text-only model can still discuss explicitly attached cells.
 
+### Context limit
+
+**Context limit** sets the token budget for this model in the panel. Automatic uses the configured window, capped by any smaller window reported by **Find models**. An endpoint that reports no limit and has no configured window shows **Local estimate**, not a claim about model capacity. The budget reserves room for the reply. Changing it affects conversation compaction, not server settings. For a permanent choice, set the provider's `context_window` or the model's `max_tokens` in `available_models`; `max_output_tokens` is a separate reply limit.
+
+Wingman summarizes earlier exchanges when the estimated request needs more room. The same model receives a separate text-only request, without tools. Its handoff and recent complete exchanges are used for the next answer; the current request stays intact. The panel keeps a separate in-memory scrollback of up to 160 entries, trimming older entries above 512 KiB. A rejected context gets one smaller retry. Use `/compact` to summarize early. Stopping a summary or losing the connection leaves the original context in place.
+
+While composing, **Ctrl+O** expands or collapses tool receipts, including summary details. **Ctrl+T** shows or hides thinking returned by the provider. Both change the display only; neither changes reasoning effort or repeats an action.
+
+For a vision-capable model, set `"snap_tool_results": true` in its `available_models` entry to compact long command, function and chart-recommendation lists. Wingman compares the original receipt, a compact table and an image of the descriptions. It sends an image only when that beats both text forms by the estimated token cost. Identifiers, arguments and cursors stay as text; cell values and formulas stay verbatim. This option defaults off.
+
+### Inspect a picture or chart
+
+For a model that accepts both images and tools, set `"capabilities": { "tools": true, "image": true }` in its `available_models` entry and reload. Model discovery alone does not enable image sharing. Select an embedded picture, a single cell containing a picture, or a chart and ask Wingman to inspect it. You can also ask it to find a chart by title: it can list charts and choose one by ID without changing your selection.
+
+**Send image** approves the named preview for the configured model, including a retry of that request. With **Always allow** in a write-enabled mode, that preview can be sent without another prompt. Only the picture or rendered chart is attached—not a desktop screenshot, a file path, or the workbook. Chart previews support bounded cell references and constant arrays; for calculated or indirect sources, use `inspect_chart` to read the definition instead. The chat keeps the inspection receipt, not the pixels; ask for another inspection if the model needs to look again.
+
 ### Thinking modes
 
 **Find models → choose a model → Thinking** works without editing JSON. Thinking sits beside **Access**, or directly below it when the dock is narrow. Leave **Server default** selected to send no override. Model discovery identifies the model; it does not prove which reasoning levels the server implements.

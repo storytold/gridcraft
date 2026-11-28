@@ -16,4 +16,4 @@ mod transport;
 pub use settings::set_config_dir;
 pub(super) use settings::{Agent, load, mcp_servers, open_config};
 pub(super) use stream::ToolCall;
-pub(super) use transport::{Discovery, Event, Job, discover, start};
+pub(super) use transport::{Discovery, Event, Job, discover, start, summarize};

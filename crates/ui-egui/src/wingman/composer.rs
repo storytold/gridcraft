@@ -16,7 +16,7 @@ use gridcraft_engine::model::Visibility;
 mod references;
 pub(super) use references::{mentions, read_target};
 
-const COMMANDS: &[&str] = &["/help", "/new", "/clear", "/mode", "/settings"];
+const COMMANDS: &[&str] = &["/help", "/new", "/clear", "/compact", "/mode", "/settings"];
 const MODE_COMMANDS: &[&str] = &["/mode chat", "/mode read", "/mode write", "/mode mcp"];
 
 fn hint(name: &str) -> &'static str {
@@ -33,6 +33,7 @@ fn hint(name: &str) -> &'static str {
         "@macro" => "Current native macro editor draft",
         "/new" => "Start a new conversation",
         "/clear" => "Clear this conversation",
+        "/compact" => "Summarize earlier exchanges without clearing the transcript",
         "/help" => "List commands and references",
         "/mode" => "Choose a permission mode",
         "/mode chat" => "Chat with no tools",

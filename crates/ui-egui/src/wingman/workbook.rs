@@ -85,6 +85,13 @@ pub(super) fn comment_transfer_params() -> Json {
 
 const TOOLS: &[Tool] = &[
     tool!(
+        "inspect_visual",
+        "Send a picture or a native rendered chart to the vision model. Omit arguments for the selected floating picture/chart or single in-cell picture. Or choose a chart on a visible sheet by numeric chart ID or exact chartTitle; use list_objects kind charts to find it. One visual per request. Never reads files or captures the screen.",
+        None,
+        [],
+        ["chart", "chartTitle", "sheet"]
+    ),
+    tool!(
         "profile_range",
         "Count stored/cached types per column (including blanks, formula errors and numeric-looking text), with example cell addresses and row pagination. Does not recalculate or change data.",
         None,
@@ -354,6 +361,17 @@ fn lookup(name: &str) -> Result<&'static Tool, String> {
     tools().find(|t| t.name == name).ok_or_else(|| format!("Unknown Wingman tool: {name}"))
 }
 
+pub(super) fn resolve_visual(app: &SheetApp, args: &Json) -> Result<super::vision::Resolved, String> {
+    validate(&lookup("inspect_visual")?.params(), args, "args")?;
+    let doc = app.session.active().ok_or("No open workbook.")?;
+    let sh = context::sheet(doc, args)?;
+    super::vision::resolve(app, doc, sh, args)
+}
+
+pub(super) fn inspect_visual(app: &SheetApp, args: &Json, ctx: &egui::Context) -> Result<super::vision::Pending, String> {
+    super::vision::start(resolve_visual(app, args)?, ctx)
+}
+
 fn string(max: usize) -> Json {
     json!({"type":"string","maxLength":max})
 }
@@ -366,6 +384,7 @@ fn field(k: &str) -> Json {
     let boolean = || json!({"type":"boolean"});
     match k {
         "tab" => json!({"type":"string","enum":ribbon::SECTIONS}),
+        "chartTitle" => string(255),
         "section" | "group" => string(120),
         "actions" => {
             json!({"type":"array","minItems":1,"maxItems":16,"items":object(json!({"tool":string(64),"args":{"type":"object"}}), &["tool","args"])})

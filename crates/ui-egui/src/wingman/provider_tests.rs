@@ -30,8 +30,25 @@ fn event(delta: Value, finish: Value) -> String {
 }
 
 #[test]
+fn context_recovery_recognizes_streamed_errors_without_echoing_the_prompt() {
+    let expected = super::super::compact::OVERFLOW;
+    let sse = br#"data: {"error":{"code":"context_length_exceeded","message":"private prompt"}}
+
+"#;
+    let native = br#"{"error":"input exceeds the available context size: private prompt"}
+"#;
+    assert_eq!(receive(sse, false).err().as_deref(), Some(expected));
+    assert_eq!(receive(native, true).err().as_deref(), Some(expected));
+    assert_eq!(receive(b"{\"error\":\"unsupported image: private prompt\"}\n", true).err().as_deref(), Some("Ollama reported a completion error."));
+}
+
+#[test]
 fn empty_answers_recover_but_truncated_calls_and_refusals_do_not() {
     for finish in ["length", "stop"] {
+        for content in ["<think>draft</think>\n", "<think>unfinished"] {
+            let tagged = event(json!({"content":content}), json!(finish));
+            assert!(matches!(completed(tagged.as_bytes(), Frames::Sse, false), Ok(Completion::MissingFinal)));
+        }
         let reasoning = event(json!({"reasoning_content":"draft","content":"  "}), json!(finish));
         assert!(matches!(completed(reasoning.as_bytes(), Frames::Sse, false), Ok(Completion::MissingFinal)));
         let native = json!({"message":{"thinking":"draft"},"done":true,"done_reason":finish}).to_string();

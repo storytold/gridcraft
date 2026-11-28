@@ -8,9 +8,30 @@ const ARG_LIMIT: usize = 256 * 1024;
 // A byte limit on raw SSE frames alone still permits a single enormous egui label.
 const TEXT_LIMIT: usize = 512 * 1024;
 
+// Apply the same recovery policy to HTTP error bodies and errors inside a successful stream.
+// Never echo the provider's text: even an error can contain the original prompt.
+pub(super) fn context_overflow(error: &Value) -> bool {
+    if error["code"] == "context_length_exceeded" || error["type"] == "context_length_exceeded" {
+        return true;
+    }
+    let Some(msg) = error["message"].as_str().or_else(|| error.as_str()) else { return false };
+    let msg = msg[..msg.floor_char_boundary(msg.len().min(4096))].to_ascii_lowercase();
+    ["maximum context length", "exceeds the context window", "exceeds the available context size"].iter().any(|s| msg.contains(s))
+}
+
+fn check_error(frame: &Value, fallback: &'static str) -> Result<(), String> {
+    let Some(err) = frame.get("error").filter(|e| !e.is_null()) else { return Ok(()) };
+    Err(if context_overflow(err) { super::super::compact::OVERFLOW } else { fallback }.into())
+}
+
 pub(super) enum Completion {
     Answer(Reply),
     MissingFinal,
+}
+
+pub(super) enum Delta<'a> {
+    Text(&'a str),
+    Thinking(&'a str),
 }
 
 pub(in super::super) struct Reply {
@@ -72,10 +93,8 @@ pub(super) struct Assembly {
     refusal: bool,
 }
 impl Assembly {
-    pub(super) fn completion(&mut self, v: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
-        if v.get("error").is_some_and(|e| !e.is_null()) {
-            return Err("The provider reported a completion error.".into());
-        }
+    pub(super) fn completion(&mut self, v: &Value, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
+        check_error(v, "The provider reported a completion error.")?;
         let choices = v["choices"].as_array().ok_or("Provider reply has no choices.")?;
         // Some servers include a final, empty usage frame after the last choice.
         let Some(choice) = choices.iter().find(|c| c["index"].as_u64().unwrap_or(0) == 0) else {
@@ -108,10 +127,8 @@ impl Assembly {
         Ok(())
     }
 
-    pub(super) fn ollama(&mut self, v: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
-        if v.get("error").is_some_and(|e| !e.is_null()) {
-            return Err("Ollama reported a completion error.".into());
-        }
+    pub(super) fn ollama(&mut self, v: &Value, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
+        check_error(v, "Ollama reported a completion error.")?;
         if let Some(m) = v.get("message").filter(|m| !m.is_null()) {
             self.text(m, notify)?;
             if !m["tool_calls"].is_null() {
@@ -135,7 +152,7 @@ impl Assembly {
         Ok(())
     }
 
-    fn text(&mut self, message: &Value, notify: &impl Fn(&str)) -> Result<(), String> {
+    fn text(&mut self, message: &Value, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
         if !message.is_object() {
             return Err("Invalid assistant message.".into());
         }
@@ -144,7 +161,7 @@ impl Assembly {
                 return Err("Assistant reply exceeds 512 KiB. Ask for a smaller result.".into());
             }
             self.content.push_str(s);
-            notify(s);
+            notify(Delta::Text(s));
             Ok(())
         };
         match &message["content"] {
@@ -173,6 +190,7 @@ impl Assembly {
                 return Err("Assistant reasoning exceeds 512 KiB.".into());
             }
             self.reasoning.push_str(s);
+            notify(Delta::Thinking(s));
         }
         Ok(())
     }
@@ -217,7 +235,8 @@ impl Assembly {
         }
         // A clean end (or a thinking model's output limit) can contain reasoning but
         // neither an answer nor an action. Only this case permits a text-only follow-up.
-        if self.calls.is_empty() && self.content.trim().is_empty() && matches!(self.finish.as_deref(), None | Some("stop" | "length")) {
+        let (_, answer) = super::super::transcript::assistant_parts(&self.reasoning, &self.content, true);
+        if self.calls.is_empty() && answer.trim().is_empty() && matches!(self.finish.as_deref(), None | Some("stop" | "length")) {
             return Ok(Completion::MissingFinal);
         }
         if self.finish.as_deref().is_some_and(|r| !matches!(r, "stop" | "tool_calls")) {
@@ -269,7 +288,7 @@ impl Lines {
     pub(super) fn new(frames: Frames, native: bool) -> Self {
         Self { frames, native, skip_lf: false, pending: Vec::new(), data: Vec::new(), done: false }
     }
-    pub(super) fn push(&mut self, chunk: &[u8], a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+    pub(super) fn push(&mut self, chunk: &[u8], a: &mut Assembly, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
         let sse = self.frames == Frames::Sse;
         for segment in chunk.split_inclusive(|&b| b == b'\n' || (sse && b == b'\r')) {
             if self.done {
@@ -290,7 +309,7 @@ impl Lines {
         }
         Ok(())
     }
-    fn line(&mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+    fn line(&mut self, a: &mut Assembly, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
         let line = std::mem::take(&mut self.pending);
         if self.frames == Frames::JsonLines {
             if !line.trim_ascii().is_empty() {
@@ -309,7 +328,7 @@ impl Lines {
         }
         Ok(())
     }
-    fn dispatch(&mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<(), String> {
+    fn dispatch(&mut self, a: &mut Assembly, notify: &impl Fn(Delta<'_>)) -> Result<(), String> {
         if self.data.is_empty() {
             return Ok(());
         }
@@ -329,7 +348,7 @@ impl Lines {
         }
         Ok(())
     }
-    pub(super) fn end(mut self, a: &mut Assembly, notify: &impl Fn(&str)) -> Result<bool, String> {
+    pub(super) fn end(mut self, a: &mut Assembly, notify: &impl Fn(Delta<'_>)) -> Result<bool, String> {
         // JSON lines may end at EOF. SSE requires the blank line, including for [DONE]:
         // a disconnect must discard both pending line bytes and an unfinished data event.
         if self.frames == Frames::JsonLines && !self.pending.is_empty() {

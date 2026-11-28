@@ -1,12 +1,17 @@
 //! A native, workbook-scoped assistant. The editor interaction reference is the
 //! [Zed agent panel](https://zed.dev/docs/ai/agent-panel); the tools operate on GridCraft documents.
 mod chat;
+mod compact;
 mod composer;
 mod history;
 mod mcp;
 mod panel;
+mod pixels;
 mod provider;
 pub(crate) mod script_editor;
+mod snap;
+mod transcript;
+mod vision;
 mod workbook;
 
 pub(crate) use panel::{ribbon_tile, show};
@@ -91,6 +96,7 @@ impl From<&Agent> for AgentKey {
 
 #[derive(Default)]
 struct Thread {
+    summary: String,
     title: String,
     owner: Option<AgentKey>,
     // Only protocol-complete exchanges are replayed, including receipts saved when a turn stops.
@@ -101,12 +107,29 @@ struct Thread {
 struct Line {
     speaker: &'static str,
     text: String,
+    detail: Option<ToolDetail>,
+}
+
+struct ToolDetail {
+    text: String,
+    expanded: Option<bool>,
 }
 
 impl Thread {
     fn line(&mut self, speaker: &'static str, text: impl Into<String>) {
-        self.log.push_back(Line { speaker, text: text.into() });
-        while self.log.len() > 160 || (self.log.len() > 1 && self.log.iter().map(|l| l.text.len()).sum::<usize>() > 512 * 1024) {
+        self.record(Line { speaker, text: text.into(), detail: None });
+    }
+
+    fn tool(&mut self, speaker: &'static str, caption: impl Into<String>, details: String) {
+        self.record(Line { speaker, text: caption.into(), detail: Some(ToolDetail { text: details, expanded: None }) });
+    }
+
+    fn record(&mut self, line: Line) {
+        self.log.push_back(line);
+        while self.log.len() > 160
+            || (self.log.len() > 1
+                && self.log.iter().map(|l| l.text.len() + l.detail.as_ref().map_or(0, |d| d.text.len())).sum::<usize>() > 512 * 1024)
+        {
             self.log.pop_front();
         }
     }
@@ -120,12 +143,14 @@ struct Target {
     sheet: u64,
     revision: u64,
     selection: gridcraft_engine::Selection,
+    object: Option<gridcraft_engine::model::ObjRef>,
 }
 
 impl Target {
     fn matches(&self, app: &SheetApp) -> bool {
         self.editor == script_editor::owner(app)
             && app.session.active_window() == Some(self.window)
+            && self.object == app.selected_object
             && app.session.active().is_some_and(|d| {
                 self.doc == d.uid
                     && self.revision == d.revision
@@ -143,11 +168,17 @@ impl Target {
             sheet: d.wb.active()?.uid.get(),
             revision: d.revision,
             selection: d.selection.clone(),
+            object: app.selected_object,
         })
     }
 }
 
 struct Turn {
+    maintenance: Option<compact::Work>,
+    manual_compact: bool,
+    overflow_retry: bool,
+    prompt_overhead: usize,
+    snap_cache: std::sync::Arc<std::sync::Mutex<snap::Cache>>,
     agent: Agent,
     target: Target,
     rounds: usize,
@@ -159,10 +190,13 @@ struct Turn {
     wire: Vec<Value>,
     job: Option<Job>,
     partial: String,
+    partial_thinking: String,
     // Each accepted call is queued, dispatched externally, or already has a receipt in wire.
     queue: VecDeque<ToolCall>,
     external: Option<mcp::Pending>,
     search: Option<chat::SearchBatch>,
+    visual_job: Option<vision::Pending>,
+    visual: Option<vision::Attachment>,
     offered: mcp::Offered,
 }
 
@@ -184,6 +218,8 @@ pub(crate) struct PanelState {
     turn: Option<Turn>,
     composer: Composer,
     guide: panel::RibbonGuide,
+    expand_tools: bool,
+    show_thinking: bool,
     mcp: mcp::Hub,
 }
 
@@ -231,6 +267,7 @@ impl PanelState {
     }
 
     fn recover(&mut self, t: Turn, reason: &str) {
+        self.note.clear();
         let external = t.external.map(|mut p| {
             let outcome = p.poll();
             interrupted_external(&p.id, outcome)
@@ -238,9 +275,7 @@ impl PanelState {
         if let Some(wire) = interrupted_history(t.wire, external, t.queue, reason) {
             self.remember(wire);
         }
-        if !t.partial.is_empty() {
-            self.thread.line("Assistant (partial)", t.partial);
-        }
+        self.thread.assistant_line("Assistant (partial)", &t.partial_thinking, &t.partial, false);
     }
 
     fn fresh(&mut self) {

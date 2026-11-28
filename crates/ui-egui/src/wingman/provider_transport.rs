@@ -9,7 +9,7 @@ use reqwest::{Client, RequestBuilder, Response};
 use serde_json::{Value, json};
 
 use super::settings::{self, Agent, Host, Protocol};
-use super::stream::{Assembly, Completion, Frames, Lines, Reply, decode};
+use super::stream::{Assembly, Completion, Delta, Frames, Lines, Reply, decode};
 
 const REPLY_LIMIT: usize = 16 * 1024 * 1024;
 const CATALOG_LIMIT: usize = 2 * 1024 * 1024;
@@ -66,14 +66,16 @@ where
     Ok(Task { abort, rx, finished: false })
 }
 pub(in super::super) enum Event {
-    FindingFinal,
+    FindingFinal { thinking: String, content: String },
     Text(String),
+    Thinking(String),
     Done(Result<Reply, String>),
 }
 #[derive(Default)]
 struct Progress {
-    finding_final: bool,
+    finding_final: Option<(String, String)>,
     text: String,
+    thinking: String,
 }
 pub(in super::super) struct Job {
     task: Task<Reply>,
@@ -82,8 +84,11 @@ pub(in super::super) struct Job {
 impl Job {
     pub(in super::super) fn poll(&mut self) -> Option<Event> {
         let mut progress = self.progress.lock().ok()?;
-        if std::mem::take(&mut progress.finding_final) {
-            return Some(Event::FindingFinal);
+        if let Some((thinking, content)) = progress.finding_final.take() {
+            return Some(Event::FindingFinal { thinking, content });
+        }
+        if !progress.thinking.is_empty() {
+            return Some(Event::Thinking(std::mem::take(&mut progress.thinking)));
         }
         if !progress.text.is_empty() {
             return Some(Event::Text(std::mem::take(&mut progress.text)));
@@ -122,6 +127,13 @@ async fn send(req: RequestBuilder) -> Result<Response, String> {
     } else {
         // Response bodies may echo prompts, headers, or keys. Surface the status,
         // never the raw body (or a reqwest error containing its request URL).
+        if matches!(status.as_u16(), 400 | 413 | 422)
+            && let Ok(raw) = bytes(r, 16 * 1024).await
+            && let Ok(body) = serde_json::from_slice::<Value>(&raw)
+            && super::stream::context_overflow(&body["error"])
+        {
+            return Err(super::super::compact::OVERFLOW.into());
+        }
         Err(format!("Provider returned HTTP {} {}.", status.as_u16(), status.canonical_reason().unwrap_or("")))
     }
 }
@@ -147,6 +159,29 @@ async fn bytes(mut r: Response, limit: usize) -> Result<Vec<u8>, String> {
 fn native_history(messages: &mut [Value]) -> Result<(), String> {
     let mut names = HashMap::new();
     for m in messages {
+        if m["role"] == "user" && m["content"].is_array() {
+            let parts = std::mem::take(&mut m["content"]);
+            let mut text = Vec::new();
+            let mut images = Vec::new();
+            for part in parts.as_array().ok_or("Expected multimodal content.")? {
+                match part["type"].as_str() {
+                    Some("text") => text.push(part["text"].as_str().ok_or("Invalid visual caption.")?),
+                    Some("image_url") => {
+                        let url = part["image_url"]["url"].as_str().ok_or("Missing visual data.")?;
+                        let data = url
+                            .strip_prefix("data:image/png;base64,")
+                            .or_else(|| url.strip_prefix("data:image/jpeg;base64,"))
+                            .ok_or("Only local PNG and JPEG data can be sent as visual input.")?;
+                        images.push(data);
+                    }
+                    _ => return Err("Unsupported multimodal input.".into()),
+                }
+            }
+            m["content"] = text.join("\n").into();
+            if !images.is_empty() {
+                m["images"] = json!(images);
+            }
+        }
         if let Some(r) = m.as_object_mut().and_then(|o| o.remove("reasoning_content")) {
             m["thinking"] = r;
         }
@@ -182,6 +217,12 @@ pub(super) fn prepare_reasoning(messages: &mut [Value], choice: &Value, retain: 
     }
 }
 pub(super) fn payload(a: &Agent, mut messages: Vec<Value>, tools: Vec<Value>) -> Result<Value, String> {
+    if !a.supports_images && messages.iter().any(|m| m["content"].as_array().is_some_and(|parts| parts.iter().any(|p| p["type"] == "image_url"))) {
+        return Err("Image input is disabled for this model.".into());
+    }
+    if a.input_token_budget() == 0 {
+        return Err("The model's context limit leaves no room for input. Lower max_output_tokens in wingman.json and reload.".into());
+    }
     let thinking = a.thinking.wire(a.protocol);
     prepare_reasoning(&mut messages, &thinking, a.retain_reasoning());
     if a.protocol == Protocol::Ollama {
@@ -229,10 +270,28 @@ pub(super) fn final_only(body: &mut Value) -> Result<(), String> {
     Ok(())
 }
 
-async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn(&str), finding_final: impl Fn()) -> Result<Reply, String> {
+type Projection = Option<(Arc<Mutex<super::super::snap::Cache>>, usize)>;
+async fn chat(
+    a: Agent,
+    messages: Vec<Value>,
+    tools: Vec<Value>,
+    projection: Projection,
+    notify: impl Fn(Delta<'_>),
+    finding_final: impl Fn(),
+) -> Result<Reply, String> {
     let native = a.protocol == Protocol::Ollama;
     let url = format!("{}/{}", a.endpoint, if native { "api/chat" } else { "chat/completions" });
     let mut body = payload(&a, messages, tools)?;
+    if a.snap_tool_results
+        && a.supports_images
+        && let Some((cache, needed)) = projection
+    {
+        let mut locked = cache.lock().ok();
+        let saved = super::super::snap::project(&mut body, native, REQUEST_LIMIT, &a.model, locked.as_deref_mut());
+        if saved < needed {
+            return Err(super::super::compact::SNAP_INSUFFICIENT.into());
+        }
+    }
     let client = client(&a)?;
     let mut recovering = false;
     loop {
@@ -262,7 +321,7 @@ async fn chat(a: Agent, messages: Vec<Value>, tools: Vec<Value>, notify: impl Fn
     }
 }
 
-async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(&str)) -> Result<Completion, String> {
+async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn(Delta<'_>)) -> Result<Completion, String> {
     let media = r.headers().get("content-type").and_then(|h| h.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").trim();
     let frames = if media.eq_ignore_ascii_case("text/event-stream") {
         Some(Frames::Sse)
@@ -300,7 +359,7 @@ async fn receive(mut r: Response, native: bool, reasoning: bool, notify: impl Fn
     a.reply(done, reasoning)
 }
 
-pub(in super::super) fn start(a: &Agent, messages: Vec<Value>, tools: Vec<Value>, ctx: egui::Context) -> Result<Job, String> {
+pub(in super::super) fn start(a: &Agent, messages: Vec<Value>, tools: Vec<Value>, ctx: egui::Context, projection: Projection) -> Result<Job, String> {
     if !a.completions {
         return Err(format!("{} requires the Responses API. Select a Chat Completions model.", a.name));
     }
@@ -315,16 +374,19 @@ pub(in super::super) fn start(a: &Agent, messages: Vec<Value>, tools: Vec<Value>
         a,
         messages,
         tools,
+        projection,
         move |delta| {
             if let Ok(mut p) = pending.lock() {
-                p.text.push_str(delta);
+                match delta {
+                    Delta::Text(s) => p.text.push_str(s),
+                    Delta::Thinking(s) => p.thinking.push_str(s),
+                }
             }
             paint.request_repaint_of(viewport);
         },
         move || {
             if let Ok(mut p) = retry.lock() {
-                p.text.clear();
-                p.finding_final = true;
+                p.finding_final = Some((std::mem::take(&mut p.thinking), std::mem::take(&mut p.text)));
             }
             repaint.request_repaint_of(viewport);
         },
@@ -333,13 +395,19 @@ pub(in super::super) fn start(a: &Agent, messages: Vec<Value>, tools: Vec<Value>
 }
 
 type Listings = (Vec<Agent>, Vec<String>);
+
+pub(in super::super) fn summarize(a: &Agent, messages: Vec<Value>, limit: u32, ctx: egui::Context) -> Result<Job, String> {
+    let mut a = a.clone();
+    a.max_output_tokens = Some(a.max_output_tokens.unwrap_or(limit).min(limit));
+    start(&a, messages, Vec::new(), ctx, None)
+}
 pub(in super::super) struct Discovery(Task<Listings>);
 impl Discovery {
     pub(in super::super) fn poll(&mut self) -> Option<Result<Listings, String>> {
         self.0.poll()
     }
 }
-async fn list(h: &Host) -> Result<Vec<String>, String> {
+async fn list(h: &Host) -> Result<Vec<(String, Option<u32>)>, String> {
     let a = &h.template;
     let native = a.protocol == Protocol::Ollama;
     let req = client(a)?.get(format!("{}/{}", a.endpoint, if native { "api/tags" } else { "models" })).timeout(Duration::from_secs(10));
@@ -350,13 +418,14 @@ async fn list(h: &Host) -> Result<Vec<String>, String> {
     }
     Ok(models
         .iter()
-        .filter_map(|v| v[if native { "name" } else { "id" }].as_str())
-        .filter(|n| !n.is_empty() && n.len() <= 512)
-        .map(str::to_string)
+        .filter_map(|v| {
+            let id = v[if native { "name" } else { "id" }].as_str().filter(|n| !n.is_empty() && n.len() <= 512)?;
+            let limit = ["max_model_len", "context_length"].iter().filter_map(|&k| u32::try_from(v[k].as_u64()?).ok().filter(|&n| n > 0)).min();
+            Some((id.to_owned(), limit))
+        })
         .collect())
 }
-/// Configuration is the authority; discovery only adds new ids, never replaces
-/// declared capabilities, display names, credentials or the configured default.
+/// Discovery can cap a context budget; it never grants capabilities or changes credentials.
 pub(in super::super) fn discover(ctx: egui::Context) -> Result<Discovery, String> {
     let mut catalog = settings::catalog()?;
     Ok(Discovery(spawn(ctx, async move {
@@ -364,11 +433,17 @@ pub(in super::super) fn discover(ctx: egui::Context) -> Result<Discovery, String
         for h in catalog.hosts.iter().filter(|h| h.discover) {
             match list(h).await {
                 Ok(models) => {
-                    for id in models {
-                        if !catalog.declared.iter().any(|a| a.provider == h.template.provider && a.model == id) {
+                    for (id, limit) in models {
+                        let mut existing = catalog.declared.iter_mut().filter(|a| a.provider == h.template.provider && a.model == id).peekable();
+                        if existing.peek().is_some() {
+                            for agent in existing {
+                                agent.reported_context = limit;
+                            }
+                        } else {
                             let mut a = h.template.clone();
                             a.name.clone_from(&id);
                             a.model = id;
+                            a.reported_context = limit;
                             catalog.declared.push(a);
                         }
                     }
@@ -379,4 +454,24 @@ pub(in super::super) fn discover(ctx: egui::Context) -> Result<Discovery, String
         catalog.sort();
         Ok((catalog.declared, issues))
     })?))
+}
+
+#[cfg(test)]
+mod vision_tests {
+    use super::*;
+
+    #[test]
+    fn native_vision_keeps_tool_receipts_and_places_pixels_only_on_the_user_message() {
+        let mut messages = [
+            json!({"role":"assistant","tool_calls":[{"id":"c","function":{"name":"inspect_visual","arguments":"{}"}}]}),
+            json!({"role":"tool","tool_call_id":"c","content":"prepared"}),
+            json!({"role":"user","content":[{"type":"text","text":"The selected chart"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}),
+        ];
+        native_history(&mut messages).unwrap();
+        assert_eq!(messages[1], json!({"role":"tool","tool_name":"inspect_visual","content":"prepared"}));
+        assert_eq!(messages[2], json!({"role":"user","content":"The selected chart","images":["AA=="]}));
+        let mut linked = [json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"https://external.invalid/picture.png"}}]})];
+        assert!(native_history(&mut linked).is_err());
+    }
 }
