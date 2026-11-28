@@ -937,3 +937,25 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn single_replace_in_workbook_changes_only_the_active_cell() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B2", "values": [["pear"], ["pear"]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "pear"})).unwrap();
+    s.execute("selection.set", json!({"sheet": "Sheet1", "cell": "B2"})).unwrap();
+    let value = |s: &mut Session, sheet: &str, cell: &str| s.execute("cell.get", json!({"sheet": sheet, "cell": cell})).unwrap()["value"].clone();
+
+    let single = s.execute("edit.replace", json!({"what": "pear", "with": "kiwi", "within": "workbook", "all": false})).unwrap();
+    assert_eq!(single["replaced"], 1);
+    assert_eq!(value(&mut s, "Sheet1", "B2"), "kiwi");
+    assert_eq!(value(&mut s, "Sheet1", "B3"), "pear");
+    assert_eq!(value(&mut s, "Other", "B2"), "pear");
+
+    let all = s.execute("edit.replace", json!({"what": "pear", "with": "fig", "within": "workbook", "all": true})).unwrap();
+    assert_eq!(all["replaced"], 2);
+    assert_eq!(value(&mut s, "Sheet1", "B3"), "fig");
+    assert_eq!(value(&mut s, "Other", "B2"), "fig");
+}
