@@ -200,7 +200,7 @@ fn simplex_body(ev: &mut Evaluator, at: &At) -> Result<Body> {
         Err("nonlinear" | "error") if start != inp.solution => simplex_program(ev, m.goal, &inp.solution),
         other => other,
     };
-    let SimplexProgram { cf, c, rows, mut work } = built.map_err(|e| {
+    let SimplexProgram { cf, c, rows, mut work, .. } = built.map_err(|e| {
         if e == "budget" {
             out_of_evaluations()
         } else {
