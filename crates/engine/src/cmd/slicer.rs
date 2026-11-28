@@ -236,10 +236,10 @@ fn slicer_select_all(s: &mut Session, p: &Json) -> Result<Json> {
 fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (idx, id) = find_slicer(s, p)?;
     let sheet = s.doc()?.wb.active_sheet();
-    // Absolute column of the slicer, so its filter criterion can be removed too.
+    // A slicer without a selection has no criterion to remove from the sheet filter.
     let abs_col = s.doc().ok().and_then(|d| {
         let sh = d.wb.active()?;
-        let sl = sh.slicers.get(idx)?;
+        let sl = sh.slicers.get(idx).filter(|sl| sl.selected.is_some())?;
         let t = sh.tables.iter().find(|t| t.name.eq_ignore_ascii_case(&sl.table))?;
         let ci = t.column_index(&sl.column)?;
         Some(t.range.start.col + ci as u32)
@@ -249,9 +249,12 @@ fn slicer_delete(s: &mut Session, p: &Json) -> Result<Json> {
         sh.slicers.retain(|x| x.id != id);
         if let (Some(abs), Some(af)) = (abs_col, sh.autofilter.as_mut()) {
             let off = abs.saturating_sub(af.range.start.col);
+            let previous = af.criteria.len();
             af.criteria.retain(|(o, _)| *o != off);
+            if af.criteria.len() != previous {
+                super::data::apply_filter(&mut cx.wb, sheet);
+            }
         }
-        super::data::apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
         Ok(Json::Null)
     })
