@@ -157,8 +157,31 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     }
     book -= dep;
     let mut rest = book - salvage;
+    // The asset life fixes the schedule: periods 0 to `last`, then nothing.
+    // The small tolerance keeps a life such as 1/0.2 from rounding up a period.
+    let last = (life - 1e-9).ceil() - 1.0;
+    if period > last {
+        return num_val(0.0);
+    }
     let mut n = 1.0;
     while n <= period {
+        if n >= last - 1.0 {
+            // The rate grows to 50% in the period before the last and to 100% in the
+            // last, so those two charge the whole remaining value between them. A life
+            // of two years or less makes the first of them the last.
+            if n >= last {
+                return num_val(book);
+            }
+            let half = (book * 0.5).round();
+            if period == n {
+                return num_val(half);
+            }
+            // Depreciation stops once the cumulative amount is greater than cost less
+            // salvage, so when the charge above already took the book below salvage the
+            // last period charges nothing.
+            let tail = book - half;
+            return num_val(if tail < salvage { 0.0 } else { tail });
+        }
         dep = (r * book).round();
         rest -= dep;
         if rest < 0.0 {
