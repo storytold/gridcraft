@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod he;
 mod it;
 mod ja;
 mod ko;
@@ -46,6 +47,7 @@ pub enum Language {
     De,
     Cs,
     Fr,
+    He,
     Sr,
     Tr,
     Pl,
@@ -57,7 +59,7 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -69,6 +71,7 @@ impl Language {
         Self::De,
         Self::Cs,
         Self::Fr,
+        Self::He,
         Self::Sr,
         Self::Pl,
         Self::It,
@@ -81,7 +84,8 @@ impl Language {
 
     /// Every language in the order the switcher lists them: English first (the source language),
     /// then the rest by their own name with accents folded, so Čeština sits under C. Names in
-    /// other scripts follow the Latin ones in code point order: Cyrillic, then the CJK languages.
+    /// other scripts follow the Latin ones in code point order: Cyrillic, Hebrew, then the CJK
+    /// languages.
     pub fn for_picker() -> Vec<Self> {
         let mut rest: Vec<Self> = Self::ALL.into_iter().filter(|l| *l != Self::En).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));
@@ -102,6 +106,7 @@ impl Language {
             Self::De => "Deutsch",
             Self::Cs => "Čeština",
             Self::Fr => "Français",
+            Self::He => "עברית",
             Self::Sr => "Srpski",
             Self::Tr => "Türkçe",
             Self::Pl => "Polski",
@@ -127,6 +132,7 @@ impl Language {
             Self::De => "de",
             Self::Cs => "cs",
             Self::Fr => "fr",
+            Self::He => "he",
             Self::Sr => "sr",
             Self::Tr => "tr",
             Self::Pl => "pl",
@@ -136,6 +142,11 @@ impl Language {
             Self::Nl => "nl",
             Self::Ro => "ro",
         }
+    }
+
+    /// Whether the interface is laid out right-to-left in this language.
+    pub const fn is_rtl(self) -> bool {
+        matches!(self, Self::He)
     }
 
     pub fn parse(code: &str) -> Option<Self> {
@@ -161,6 +172,7 @@ impl Language {
             "de" => Some(Self::De),
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
+            "he" | "iw" => Some(Self::He),
             "sr" => Some(Self::Sr),
             "tr" => Some(Self::Tr),
             "pl" => Some(Self::Pl),
@@ -219,6 +231,7 @@ impl Language {
             Self::De => de::translate(text),
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
+            Self::He => he::translate(text),
             Self::Sr => sr::translate(text),
             Self::Tr => tr::translate(text),
             Self::Pl => pl::translate(text),
@@ -770,6 +783,11 @@ mod tests {
         assert_eq!(Language::from_tag("ro-RO"), Some(Language::Ro));
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
+        assert_eq!(Language::from_tag("he-IL"), Some(Language::He));
+        assert_eq!(Language::from_tag("iw_IL"), Some(Language::He));
+        assert_eq!(Language::parse("he"), Some(Language::He));
+        assert!(Language::He.is_rtl());
+        assert!(!Language::En.is_rtl());
     }
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {

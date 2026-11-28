@@ -164,7 +164,9 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
 /// committed the field is consumed so it doesn't also dismiss the message box in this frame.
 fn refuse(app: &mut SheetApp, ui: &mut Ui, text: &str) {
     ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
-    app.message = Some(("GridCraft".into(), app.ui.language.tr(text).into()));
+    // Keep the English source text like every other `app.message`: `widgets::message_box` translates
+    // it at draw time, so the dialog follows a live language switch.
+    app.message = Some(("GridCraft".into(), text.to_owned()));
 }
 
 /// Maximum Iterations as typed: a whole number from 1 to 32767, or `None` (Excel refuses others).

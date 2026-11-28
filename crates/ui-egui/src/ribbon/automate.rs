@@ -1,4 +1,4 @@
-use super::controls::{control_keytip, sep};
+use super::controls::{control_keytip, group_column, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
 use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
@@ -11,7 +11,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         app.open_dialog("macros", json!({}));
     }
     let recording = app.session.is_recording();
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         let (label, tip) =
             if recording { ("Stop Recording", "Stop recording and save the macro") } else { ("Record Macro", "Record your actions as a macro") };
         let r = small_button(ui, Icon::Record, label, tip, false);

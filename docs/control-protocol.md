@@ -131,7 +131,8 @@ the View ▸ Animations checkbox, saved with the other UI preferences and on by 
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
 `app.language.japanese` are shortcuts. `engine.commands` lists every code it takes (`en`, `es`,
-`zh`, `ja`, `ko`, `ru`, `pt`, `de`, `cs`, `fr`, `sr`), as does the error for an unknown one. Only
+`el`, `zh`, `ja`, `ko`, `ru`, `pt`, `de`, `cs`, `fr`, `he`, `sr`, `tr`, `pl`, `it`, `uk`, `vi`,
+`nl`, `ro`), as does the error for an unknown one. Only
 interface chrome is translated, never command ids or document text. The choice is saved in `ui.json`; with nothing saved the desktop app follows the
 system language.
 

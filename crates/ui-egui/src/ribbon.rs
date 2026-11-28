@@ -61,9 +61,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .frame(egui::Frame::NONE.fill(t.window).inner_margin(egui::Margin { left: 10, right: 10, top: 0, bottom: 6 }))
         .show(ui, |ui| {
             // Tabs row.
+            let rtl = app.ui.language.is_rtl();
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
-                ui.horizontal(|ui| {
+                let layout = if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+                ui.with_layout(layout, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
                     if app.chrome.file_tab {
@@ -127,22 +129,31 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
-                // One scroll state per tab: a tab opened after scrolling another starts at its
-                // left edge, and a tab keeps its own offset while others are used.
+                // One scroll state per (tab, direction): switching between LTR and RTL starts the
+                // incoming direction at its reading-start edge instead of inheriting the opposite
+                // direction's offset, and each tab keeps its own offset while others are used.
                 let tab = app.ui.ribbon_tab.clone();
+                let view_w = ui.available_width();
+                let row_id = ui.scope_id().with(("ribbon_row", tab.as_str(), rtl));
+                let width_id = ui.scope_id().with(("ribbon_rtl_width", tab.as_str(), app.ui.language.code(), ui.ctx().pixels_per_point().to_bits()));
+                let (from_right, last_over) = ui.data(|d| d.get_temp::<(f32, f32)>(row_id)).unwrap_or((0.0, 0.0));
+                let cached_w = if rtl { ui.data(|d| d.get_temp::<f32>(width_id)) } else { None };
                 let mut area = egui::ScrollArea::horizontal()
-                    .id_salt(("ribbon_scroll", tab.as_str()))
+                    .id_salt(("ribbon_scroll", tab.as_str(), rtl))
+                    .stick_to_right(rtl)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-                // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
-                // way to move it. An arrow click records the requested offset for the next frame.
-                // Expire it if this tab stops rendering, rather than replaying it much later.
-                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
+                // egui 0.37 keeps `ScrollArea`'s offset private; apply `scroll_offset` one-shot only
+                // when an arrow button is clicked or RTL overflow changes so native touch dragging stays active.
+                let mut applied_target = false;
+                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str(), rtl)))
                     && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
                 {
                     area = area.horizontal_scroll_offset(x);
+                    applied_target = true;
                 }
                 let scroll = area.show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    let body = |ui: &mut Ui| {
+                        controls::reset_column_seq(ui);
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -159,9 +170,49 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
-                    });
+                    };
+                    if rtl {
+                        if let Some(content_w) = cached_w {
+                            // Lay out groups right-to-left within the exact cached content width (`[origin.x, origin.x + row_w]`)
+                            // without feeding `right_to_left`'s `min_rect` back across frames.
+                            let row_w = content_w.max(view_w);
+                            let origin = ui.min_rect().min;
+                            let h = ui.available_size_before_wrap().y;
+                            let layout_rect = Rect::from_min_max(origin, pos2(origin.x + row_w, origin.y + h));
+                            ui.scope_builder(
+                                egui::UiBuilder::new().max_rect(layout_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
+                                body,
+                            );
+                        } else {
+                            // Measure the tab's natural width once in LTR on the first frame so the RTL layout
+                            // never uses a huge placeholder span or a per-frame width feedback loop.
+                            let measured = ui.horizontal(body).response.rect.width();
+                            ui.data_mut(|d| d.insert_temp(width_id, measured));
+                            ui.ctx().request_repaint();
+                        }
+                    } else {
+                        ui.horizontal(body);
+                    }
                 });
-                scroll_arrows(ui, &t, tab.as_str(), scroll);
+                if rtl {
+                    let over = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
+                    let (next_from_right, next_over) = if applied_target {
+                        ((over - scroll.state.clamped_offset().x).max(0.0), over)
+                    } else if (over - last_over).abs() > 0.5 {
+                        let kept = from_right.min(over);
+                        let target_x = (over - kept).max(0.0);
+                        if (scroll.state.clamped_offset().x - target_x).abs() > 0.5 {
+                            let frame = ui.ctx().cumulative_frame_nr();
+                            ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str(), rtl), (frame, target_x)));
+                        }
+                        ui.ctx().request_repaint();
+                        (kept, over)
+                    } else {
+                        ((last_over - scroll.state.clamped_offset().x).max(0.0), last_over)
+                    };
+                    ui.data_mut(|d| d.insert_temp(row_id, (next_from_right, next_over)));
+                }
+                scroll_arrows(ui, &t, tab.as_str(), rtl, row_id, scroll);
             });
         });
 }
@@ -188,8 +239,8 @@ impl RibbonOverflow {
     }
 
     /// Where an arrow click asks the next frame's `ScrollArea` to scroll to.
-    fn scroll_target_id(tab: &str) -> egui::Id {
-        egui::Id::unique(("ribbon_scroll_target", tab))
+    fn scroll_target_id(tab: &str, rtl: bool) -> egui::Id {
+        egui::Id::unique(("ribbon_scroll_target", tab, rtl))
     }
 
     /// Last frame's overflow.
@@ -205,7 +256,7 @@ impl RibbonOverflow {
 
 /// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
 /// trackpad input over the card still does too).
-fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, rtl: bool, row_id: egui::Id, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
     let inner = scroll.inner_rect;
     let max = (scroll.content_size.x - inner.width()).max(0.0);
     let overflow = RibbonOverflow {
@@ -241,8 +292,12 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, scroll: egui::scroll_area::
         }
     }
     if let Some(x) = target {
+        let x = x.clamp(0.0, max);
         let frame = ui.ctx().cumulative_frame_nr();
-        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x.clamp(0.0, max))));
+        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab, rtl), (frame, x)));
+        if rtl {
+            ui.data_mut(|d| d.insert_temp(row_id, ((max - x).max(0.0), max)));
+        }
         ui.ctx().request_repaint();
     }
 }
