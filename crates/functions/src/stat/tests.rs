@@ -772,6 +772,23 @@ fn t_inv_zero_probability_returns_div0() {
 }
 
 #[test]
+fn binom_inv_refuses_endpoint_probabilities_and_alphas() {
+    // Excel answers probability_s or alpha of exactly 0 or 1 with #NUM! (#4015, #4050).
+    for (p, alpha) in [(0.0, 0.5), (1.0, 0.5), (0.3, 0.0), (0.3, 1.0), (0.0, 0.0), (1.0, 1.0)] {
+        is_err(ev("BINOM.INV", vec![n(10.0), n(p), n(alpha)]), CellError::Num);
+    }
+    close(ev("BINOM.INV", vec![n(10.0), n(0.3), n(0.5)]), 3.0);
+    close(ev("BINOM.INV", vec![n(10.0), n(0.5), n(0.5)]), 5.0);
+    // Just inside the endpoints there is still an answer.
+    close(ev("BINOM.INV", vec![n(10.0), n(1e-12), n(0.5)]), 0.0);
+    close(ev("BINOM.INV", vec![n(10.0), n(1.0 - 1e-12), n(0.5)]), 10.0);
+    close(ev("BINOM.INV", vec![n(10.0), n(0.3), n(1e-12)]), 0.0);
+    close(ev("BINOM.INV", vec![n(10.0), n(0.3), n(1.0 - 1e-12)]), 10.0);
+    // An argument error still comes before the range check.
+    is_err(ev("BINOM.INV", vec![t("x"), n(0.0), n(0.5)]), CellError::Value);
+}
+
+#[test]
 fn binom_inv_huge_trials_returns() {
     // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
     let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
