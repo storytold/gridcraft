@@ -580,6 +580,63 @@ fn first_and_even_pages_print_their_own_headers() {
     assert!(contains(&pdf, "(Odd 1) Tj") && contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Cover) Tj"));
 }
 
+/// The footer page numbers of each printed page, in order.
+fn footer_numbers(s: &mut Session) -> Vec<String> {
+    let (pdf, pages) = pdf_of(s, json!({"sheets": "all"}));
+    let text = String::from_utf8_lossy(&pdf);
+    let streams: Vec<&str> = text.split("endstream").filter(|part| part.contains("stream\n")).collect();
+    assert_eq!(streams.len() as u64, pages);
+    streams
+        .iter()
+        .map(|page| {
+            let start = page.find("(PAGE ").unwrap_or_else(|| panic!("no footer: {page}")) + 1;
+            page[start..].split(") Tj").next().unwrap_or_default().to_string()
+        })
+        .collect()
+}
+
+/// Two sheets of two pages each, footer `PAGE &P END TOTAL &N END`, with the given First page
+/// numbers (`None` is Automatic).
+fn two_sheets_numbered(first: Option<u32>, second: Option<u32>) -> Session {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for (si, start) in [first, second].into_iter().enumerate() {
+        s.execute("sheet.activate", json!({"sheet": si})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["top"], ["bottom"]]})).unwrap();
+        s.execute("pageLayout.pageSetup", json!({"rowBreaks": [2], "footer": "&CPAGE &P END TOTAL &N END"})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(si).unwrap().print.first_page_number = start;
+    }
+    s
+}
+
+#[test]
+fn pdf_page_numbers_start_at_the_sheets_first_page_number() {
+    let pages = |n: [u32; 4]| n.map(|p| format!("PAGE {p} END TOTAL 4 END")).to_vec();
+    // Automatic numbers the workbook's pages 1 to 4.
+    assert_eq!(footer_numbers(&mut two_sheets_numbered(None, None)), pages([1, 2, 3, 4]));
+    // The second sheet carries on from the first sheet's start (Excel: 7, 8, 9, 10).
+    assert_eq!(footer_numbers(&mut two_sheets_numbered(Some(7), None)), pages([7, 8, 9, 10]));
+    // Only the second sheet restarts (Excel: 1, 2, 7, 8).
+    assert_eq!(footer_numbers(&mut two_sheets_numbered(None, Some(7))), pages([1, 2, 7, 8]));
+    // A start of 1 restarts the second sheet too.
+    assert_eq!(footer_numbers(&mut two_sheets_numbered(None, Some(1))), pages([1, 2, 1, 2]));
+    // Zero is a valid start.
+    assert_eq!(footer_numbers(&mut two_sheets_numbered(Some(0), None)), pages([0, 1, 2, 3]));
+}
+
+#[test]
+fn odd_and_even_pages_follow_the_printed_page_number() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [2, 3]})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&COdd &P", "evenHeader": "&CEven &P", "differentOddEven": true})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().print.first_page_number = Some(2);
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 3);
+    assert!(contains(&pdf, "(Even 2) Tj") && contains(&pdf, "(Odd 3) Tj") && contains(&pdf, "(Even 4) Tj"));
+    assert!(!contains(&pdf, "(Odd 2) Tj") && !contains(&pdf, "(Even 3) Tj"));
+}
+
 /// The y position of the first `(text) Tj` in a PDF (PDF space: larger is higher on the page).
 fn text_y(pdf: &[u8], text: &str) -> Option<f32> {
     let s = String::from_utf8_lossy(pdf);
