@@ -937,3 +937,27 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// Automation can do what Ctrl+A in the Find All list does (#4874): the cells Find All lists on
+/// one sheet go to `selection.set` as one list and each becomes its own area, on that sheet,
+/// with the active cell where asked.
+#[test]
+fn find_all_results_on_one_sheet_select_as_separate_areas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1:A2", "values": [["pear"], ["fig"]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B2:D4", "values": [["pear", "", ""], ["", "fig", ""], ["", "", "pear"]]})).unwrap();
+    s.execute("selection.set", json!({"sheet": 0})).unwrap();
+    let all = s.execute("edit.find", json!({"what": "pear", "all": true, "within": "workbook"})).unwrap();
+    let on_sheet2: Vec<&str> =
+        all["results"].as_array().unwrap().iter().filter(|r| r["sheet"] == "Sheet2").filter_map(|r| r["cell"].as_str()).collect();
+    assert!(on_sheet2.len() > 1 && on_sheet2.len() < all["results"].as_array().unwrap().len(), "{all}");
+    let first = on_sheet2[0];
+    s.execute("selection.set", json!({"sheet": "Sheet2", "range": on_sheet2.join(","), "active": first})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().map(|sh| sh.name.as_str()), Some("Sheet2"));
+    let areas: Vec<String> = d.selection.ranges.iter().map(|r| r.a1()).collect();
+    assert_eq!(areas, on_sheet2, "each found cell is its own area, nothing between them");
+    assert_eq!(d.selection.active.a1(), first, "the active cell is the one asked for, not the last area");
+}

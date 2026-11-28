@@ -86,44 +86,128 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                 p["with"] = json!(with);
                 p["all"] = json!(false);
                 let _ = app.run("edit.replace", p);
-                let _ = app.run("edit.find", base.clone());
+                if app.run("edit.find", base.clone()).is_ok() && within != "selection" {
+                    clear_picked(d);
+                }
             }
         }
         if ui.button("Find All").clicked() {
             let mut p = base.clone();
             p["all"] = json!(true);
             d.result = app.run("edit.find", p).ok();
+            clear_picked(d);
         }
-        if ui.button("Find Next").clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
-            if let Err(e) = app.run("edit.find", base.clone()) {
-                app.message = Some(("Find and Replace".into(), crate::clean_error(&e)));
+        // Enter on a focused result goes to that result (the row's own activation), not to the next hit.
+        let on_result = d.values.get("resultFocused").and_then(Json::as_bool).unwrap_or(false);
+        if ui.button("Find Next").clicked() || (!on_result && ui.input(|i| i.key_pressed(Key::Enter))) {
+            match app.run("edit.find", base.clone()) {
+                // Outside a selected range the selection moves to one cell: no listed result stays selected.
+                Ok(_) if within != "selection" => clear_picked(d),
+                Ok(_) => {}
+                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
             }
             app.grid.ensure_visible = true;
         }
     });
-    if let Some(r) = &d.result
-        && let Some(list) = r["results"].as_array()
-    {
+    let list = d.result.as_ref().and_then(|r| r["results"].as_array()).cloned();
+    if let Some(list) = list {
         ui.separator();
         ui.label(format!("{} cell(s) found", list.len()));
+        let picked: Vec<usize> = d
+            .values
+            .get("picked")
+            .and_then(Json::as_array)
+            .map(|a| a.iter().filter_map(Json::as_u64).map(|n| n as usize).collect())
+            .unwrap_or_default();
+        let anchor = d.values.get("anchor").and_then(Json::as_u64).map(|n| n as usize);
+        // Built once, so a frame with every result selected checks each row in constant time.
+        let picked_set: std::collections::HashSet<usize> = picked.iter().copied().collect();
+        // A selection belongs to one sheet: only the results on the sheet of the row acted on.
+        let on_sheet_of = |i: usize| {
+            let list = &list;
+            move |j: &usize| list.get(*j).map(|r| &r["sheet"]) == list.get(i).map(|r| &r["sheet"])
+        };
+        // The rows to select, the row acted on, and whether that row becomes the Shift+click anchor.
+        let mut pick: Option<(Vec<usize>, usize, bool)> = None;
+        let mut any_focused = false;
         egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-            for item in list {
+            for (i, item) in list.iter().enumerate() {
                 let label = format!(
                     "{}  {}  {}",
                     item["sheet"].as_str().unwrap_or(""),
                     item["cell"].as_str().unwrap_or(""),
                     item["value"].as_str().unwrap_or("")
                 );
-                if ui.selectable_label(false, label).clicked() {
-                    if let Some(s) = item["sheet"].as_str() {
-                        let _ = app.run("sheet.activate", json!({"sheet": s}));
-                    }
-                    let _ = app.run("selection.set", json!({"cell": item["cell"]}));
-                    app.grid.ensure_visible = true;
+                let resp = ui.selectable_label(picked_set.contains(&i), label);
+                any_focused |= resp.has_focus();
+                // Ctrl+A (Cmd+A) in the list selects every result on the focused result's sheet, as in Excel.
+                if resp.has_focus() && ui.input_mut(|inp| inp.consume_key(Modifiers::COMMAND, Key::A)) {
+                    pick = Some(((0..list.len()).filter(on_sheet_of(i)).collect(), i, false));
+                }
+                if resp.clicked() {
+                    // Focus stays in the list, so Ctrl+A and the keyboard work after a click.
+                    resp.request_focus();
+                    let m = ui.input(|inp| inp.modifiers);
+                    let rows = if m.shift {
+                        // Shift+click: the run from the row clicked last.
+                        let a = anchor.unwrap_or(i);
+                        (a.min(i)..=a.max(i)).filter(on_sheet_of(i)).collect()
+                    } else if m.command {
+                        // Ctrl+click (Cmd+click) adds the row, or takes it out. The last selected
+                        // row stays: a sheet always has a selected cell, and the list shows it.
+                        let mut v: Vec<usize> = picked.iter().copied().filter(on_sheet_of(i)).filter(|&j| j != i).collect();
+                        if !picked_set.contains(&i) || v.is_empty() {
+                            v.push(i);
+                        }
+                        v
+                    } else {
+                        vec![i]
+                    };
+                    pick = Some((rows, i, !m.shift));
                 }
             }
         });
+        d.values.insert("resultFocused".into(), json!(any_focused));
+        if let Some((rows, focus, set_anchor)) = pick {
+            // The list shows only what the grid selected: a refused selection (a protected sheet
+            // that doesn't allow selecting the cell) keeps the old rows and says why.
+            match select_results(app, &list, &rows, focus) {
+                Ok(()) => {
+                    d.values.insert("picked".into(), json!(rows));
+                    if set_anchor {
+                        d.values.insert("anchor".into(), json!(focus));
+                    }
+                }
+                Err(e) => app.message = Some(("Find and Replace".into(), crate::clean_error(&e))),
+            }
+        }
+        // A live region, so a screen reader hears how many cells Ctrl+A or a Shift+click selected.
+        let n = d.values.get("picked").and_then(Json::as_array).map_or(0, Vec::len);
+        if n > 0 {
+            let status = ui.label(app.ui.language.tr_fill("{count} cell(s) selected", &[("count", &n.to_string())]));
+            ui.ctx().accesskit_node_builder(status.id, |node| node.set_live(egui::accesskit::Live::Polite));
+        }
     }
+}
+
+/// Forgets which Find All results are selected, after the grid selection moved elsewhere.
+fn clear_picked(d: &mut Dialog) {
+    d.values.remove("picked");
+    d.values.remove("anchor");
+}
+
+/// Selects the cells of the Find All results `rows`, all on one sheet, through `selection.set`,
+/// with the active cell on result `focus` when it is one of them.
+fn select_results(app: &mut SheetApp, list: &[Json], rows: &[usize], focus: usize) -> Result<(), String> {
+    let cells: Vec<&str> = rows.iter().filter_map(|&j| list.get(j)?["cell"].as_str()).collect();
+    let Some(&last) = cells.last() else { return Err("No cells to select.".into()) };
+    let active = if rows.contains(&focus) { list.get(focus).and_then(|r| r["cell"].as_str()).unwrap_or(last) } else { last };
+    if let Some(s) = list.get(focus).and_then(|r| r["sheet"].as_str()) {
+        app.run("sheet.activate", json!({"sheet": s}))?;
+    }
+    app.run("selection.set", json!({"range": cells.join(","), "active": active}))?;
+    app.grid.ensure_visible = true;
+    Ok(())
 }
 
 /// What the Go To dialog lists: the named ranges of every sheet, then the references gone to
