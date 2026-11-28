@@ -128,6 +128,12 @@ fn commands_and_functions() {
 }
 
 #[test]
+fn aligned_output_flattens_cell_line_breaks() {
+    let out = ok(&["run", "--cmd", r#"range.setValues={"range":"A1","values":[["a\rb\nc\td"]]}"#, "--print", "A1", "--quiet"]);
+    assert_eq!(out.trim(), "a b c d");
+}
+
+#[test]
 fn mcp_over_stdio() {
     let mut child = bin().arg("mcp").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     {
