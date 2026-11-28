@@ -609,6 +609,7 @@ fn paste_validations(
         }
     }
     let mut total = 0usize;
+    let mut copied_rule_bytes = 0u64;
     for dv in &src_sheet.validations {
         let parts: Vec<RangeRef> = dv.ranges.iter().filter_map(|r| r.intersection(&src)).collect();
         let Some(first) = RangeRef::top_left(&dv.ranges) else { continue };
@@ -619,8 +620,8 @@ fn paste_validations(
         if parts.contains(&src) {
             ranges.push(pasted);
         } else {
-            total = total.saturating_add(parts.len().saturating_mul(tiles_r as usize).saturating_mul(tiles_c as usize));
-            if total > MAX_PASTE_VALIDATION_RANGES {
+            let n = parts.len().saturating_mul(tiles_r as usize).saturating_mul(tiles_c as usize);
+            if n > MAX_PASTE_VALIDATION_RANGES - total {
                 return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
             }
             for tr in 0..tiles_r {
@@ -640,28 +641,62 @@ fn paste_validations(
         // The rows a filter hides keep what they have.
         let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
         let Some(anchor) = RangeRef::top_left(&ranges) else { continue };
-        let mut rule = dv.clone();
-        if !keep_references {
-            for f in rule.formulas_mut() {
-                *f = if transpose {
-                    // A clipped rule may start outside the copied cells. Find the source cell
-                    // corresponding to the new anchor before turning its relative references.
-                    let sc = CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
-                    super::super::data::transpose_rule_formula(f, first, sc, anchor)
-                } else {
-                    super::super::data::move_rule_formula(f, first, anchor)
-                };
-            }
+        let split = transpose
+            && !keep_references
+            && dv.formulas().iter().any(|f| {
+                f.contains('$')
+                    && gridcraft_formula::parse(f.trim_start_matches('=')).is_ok_and(|e| gridcraft_formula::adjust::has_mixed_transpose_refs(&e))
+            });
+        let n = if split { ranges.iter().map(RangeRef::count).sum::<u64>() } else { ranges.len() as u64 };
+        if n > (MAX_PASTE_VALIDATION_RANGES - total) as u64 {
+            return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
         }
-        rule.ranges = ranges;
-        rules.push(rule);
+        total += n as usize;
+        if skip_blanks && dest_rules {
+            if cleared.len().saturating_add(ranges.len()) > MAX_PASTE_VALIDATION_RANGES {
+                return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
+            }
+            cleared.extend_from_slice(&ranges);
+        }
+        let mut template = dv.clone();
+        template.ranges.clear();
+        let mut push = |anchor: CellRef, areas| {
+            let mut rule = template.clone();
+            if !keep_references {
+                for f in rule.formulas_mut() {
+                    *f = if transpose {
+                        let sc =
+                            CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
+                        super::super::data::transpose_rule_formula(f, first, sc, anchor)
+                    } else {
+                        super::super::data::move_rule_formula(f, first, anchor)
+                    };
+                }
+            }
+            rule.ranges = areas;
+            rules.push(rule);
+        };
+        if split {
+            // In a transposed rectangle a source row advances along destination columns.
+            // A shared mixed rule would instead advance its unpinned row down the sheet.
+            let strings = [&dv.f1, &dv.input_title, &dv.input_message, &dv.error_title, &dv.error_message];
+            let bytes = strings.iter().map(|s| s.len()).sum::<usize>() + dv.f2.as_ref().map_or(0, String::len) + std::mem::size_of_val(dv);
+            copied_rule_bytes = copied_rule_bytes.saturating_add(n.saturating_mul(bytes as u64));
+            if copied_rule_bytes > 32 * 1024 * 1024 {
+                return Err(EngineError::Other("The transposed validation rules are too large to paste at once.".into()));
+            }
+            for cell in ranges.iter().flat_map(RangeRef::iter) {
+                push(cell, vec![RangeRef::cell(cell)]);
+            }
+        } else {
+            push(anchor, ranges);
+        }
     }
     if cleared.len() > MAX_PASTE_VALIDATION_RANGES {
         return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
     }
     let sh = cx.sheet_mut(dest_sheet)?;
     if skip_blanks {
-        cleared.extend(rules.iter().flat_map(|r| r.ranges.iter().copied()));
         super::super::data::remove_validation_cells(&mut sh.validations, &cleared);
     } else {
         super::super::data::remove_validation_cells(&mut sh.validations, &without_rows(pasted, skip_rows));

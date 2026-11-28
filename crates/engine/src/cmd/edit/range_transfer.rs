@@ -391,9 +391,29 @@ mod tests {
         let mut s = setup();
         s.execute("data.validation", json!({"range":"A1:C2","type":"decimal","formula1":"=B1","formula2":"=$G2"})).unwrap();
         s.execute(TRANSFER, json!({"sheet":"Input","source":"B2:C2","at":"E2","operation":"transpose"})).unwrap();
-        let dest = RangeRef::parse("E2:E3").unwrap();
+        for (cell, expected) in [("E2", "E3"), ("E3", "E4")] {
+            let dest = RangeRef::parse(cell).unwrap();
+            let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|r| r.ranges.contains(&dest)).unwrap();
+            assert_eq!((rule.f1.as_str(), rule.f2.as_deref()), (expected, Some("$G3")));
+        }
+    }
+
+    #[test]
+    fn only_mixed_references_split_a_transposed_validation() {
+        let mut s = setup();
+        s.execute("data.validation", json!({"range":"A1:A2","type":"custom","formula1":"=$G2"})).unwrap();
+        s.execute(TRANSFER, json!({"sheet":"Input","source":"A1:A2","at":"D4","operation":"transpose"})).unwrap();
+        for (cell, expected) in [("D4", "$G2"), ("E4", "$G3")] {
+            let dest = RangeRef::parse(cell).unwrap();
+            let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|r| r.ranges.contains(&dest)).unwrap();
+            assert_eq!(rule.f1, expected);
+        }
+        s.execute("edit.undo", json!({})).unwrap();
+        s.execute("data.validation", json!({"range":"A1:A2","type":"custom","formula1":"=B1+$G$2"})).unwrap();
+        s.execute(TRANSFER, json!({"sheet":"Input","source":"A1:A2","at":"D4","operation":"transpose"})).unwrap();
+        let dest = RangeRef::parse("D4:E4").unwrap();
         let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|r| r.ranges.contains(&dest)).unwrap();
-        assert_eq!((rule.f1.as_str(), rule.f2.as_deref()), ("E3", Some("$G3")));
+        assert_eq!(rule.f1, "D5+$G$2");
     }
 
     #[test]

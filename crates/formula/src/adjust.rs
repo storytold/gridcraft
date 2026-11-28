@@ -111,11 +111,21 @@ fn transpose_ref(r: Reference, first: CellRef, src: CellRef, dest: CellRef) -> O
 
 /// Whether the formula has a relative (no `$`) row or column anywhere.
 pub fn has_relative_refs(e: &Expr) -> bool {
-    e.references().iter().any(|r| match r.kind {
+    e.references().into_iter().any(has_relative)
+}
+
+/// A pinned reference that still has a relative coordinate is not rotated by
+/// transpose, but its relative coordinate still varies with the *source* cell.
+pub fn has_mixed_transpose_refs(e: &Expr) -> bool {
+    e.references().into_iter().any(|r| has_absolute(r) && has_relative(r))
+}
+
+fn has_relative(r: &Reference) -> bool {
+    match r.kind {
         RefKind::Cell(a) => !a.row_abs || !a.col_abs,
         RefKind::Range(a, b) => !a.row_abs || !a.col_abs || !b.row_abs || !b.col_abs,
         RefKind::Rows(_, a0, _, a1) | RefKind::Cols(_, a0, _, a1) => !a0 || !a1,
-    })
+    }
 }
 
 fn shift_anchor(a: &Anchor, dr: i64, dc: i64) -> Option<Anchor> {
