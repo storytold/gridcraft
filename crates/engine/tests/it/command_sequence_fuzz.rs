@@ -18,6 +18,8 @@
 //!   (catches stale dependency graphs);
 //! - every few steps and at the end, an XLSX save and reload (with the recalculation opening does)
 //!   gives the same sheets, formulas and values;
+//! - after every step, the oldest undo snapshot (what undoing everything returns to) still holds
+//!   the starting sheets and cells, so the step that loses the start is the one reported;
 //! - at the end, undoing everything gives back the starting workbook and redoing everything the
 //!   final one (view state aside), and both keep the Watch Window list, which isn't an edit.
 //!
@@ -226,6 +228,10 @@ struct Harness {
     /// The workbook of the oldest undo step when the history was last looked at, to notice the
     /// history dropping it.
     oldest: Option<Arc<Workbook>>,
+    /// The workbook of every undo step when the history was last looked at, oldest first, to
+    /// tell an eviction (the oldest dropped, a step the history already held becoming the
+    /// base) from a replacement (a snapshot that was never in the history becoming the base).
+    history: Vec<Arc<Workbook>>,
 }
 
 /// Where redoing the `n` steps just undone ends. The first of them went onto the redo history
@@ -260,7 +266,7 @@ impl Harness {
         let mut s = Session::new();
         s.execute("file.new", json!({"sample": sample})).expect("sample opens");
         let floor = s.doc().expect("document").wb.clone();
-        Harness { s, floor, oldest: None }
+        Harness { s, floor, oldest: None, history: Vec::new() }
     }
 
     fn wb(&self) -> Arc<Workbook> {
@@ -287,6 +293,7 @@ impl Harness {
             return Err(fail(i, "not undoable", format!("non-undoable `{id}` changed cell content: {diff}")));
         }
         self.check_state(i)?;
+        self.check_history_base(i, id)?;
         if (i + 1).is_multiple_of(ROUNDTRIP_EVERY) {
             guarded(i, "xlsx roundtrip", || roundtrip_diff(&after))?;
         }
@@ -304,6 +311,24 @@ impl Harness {
         }
         let wb = d.wb.clone();
         guarded(i, "recalc", || recalc_diff(&wb))
+    }
+
+    /// Undo history is a stack of whole-workbook snapshots, so undoing everything ends on the
+    /// oldest snapshot (or on the live workbook when there is no history). That snapshot must hold
+    /// the episode's starting sheets and cells after every step. Checked here, a step that drops
+    /// or replaces the start is named as it happens (#3400); the end-of-episode check can only
+    /// report the difference it left.
+    fn check_history_base(&self, i: usize, id: &str) -> Result<(), Failure> {
+        let d = self.s.doc().expect("document");
+        let oldest: &Workbook = d.undo.first().map_or(&*d.wb, |e| &*e.wb);
+        match content_diff(&self.floor, oldest) {
+            Some(diff) => Err(fail(
+                i,
+                "undo",
+                format!("after `{id}`, undoing everything ({} steps) would no longer give back the starting workbook: {diff}", d.undo.len()),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Undo everything, compare with the start, redo everything, compare with the end, then save
@@ -347,6 +372,7 @@ impl Harness {
         d.redo.clear();
         self.floor = d.wb.clone();
         self.oldest = None;
+        self.history = Vec::new();
         Ok(())
     }
 
@@ -354,13 +380,19 @@ impl Harness {
     /// history emptying in between. From then on undoing everything stops at the new oldest entry,
     /// including after an `edit.undo` in the sequence has already used up what is left.
     fn track_history(&mut self) {
-        let oldest = self.s.doc().expect("document").undo.first().map(|e| e.wb.clone());
-        if let (Some(was), Some(now)) = (&self.oldest, &oldest)
+        let history: Vec<Arc<Workbook>> = self.s.doc().expect("document").undo.iter().map(|e| e.wb.clone()).collect();
+        // Only an eviction advances the floor: the new oldest is a step the history already
+        // held behind the dropped one. Any other identity change leaves the floor where it
+        // was, so check_history_base reports the step that replaced the base instead of
+        // comparing the replacement with itself.
+        if let (Some(was), Some(now)) = (&self.oldest, history.first())
             && !Arc::ptr_eq(was, now)
+            && self.history.get(1..).unwrap_or(&[]).iter().any(|wb| Arc::ptr_eq(wb, now))
         {
             self.floor = now.clone();
         }
-        self.oldest = oldest;
+        self.oldest = history.first().cloned();
+        self.history = history;
     }
 
     fn finish(&mut self, steps: usize) -> Result<(), Failure> {
@@ -1175,6 +1207,43 @@ fn view_mode_switch_is_not_an_undo_difference() {
     }
 }
 
+/// #3400: sheet copies, moves and renames mixed with a column delete and partial undo/redo. Each
+/// step's undo snapshot must keep the starting workbook reachable: after undoing everything the
+/// sheets are `["Budget"]` again and Budget!C4 holds "Budget" (the column delete shifts "Actual"
+/// into it). The replay checks the oldest snapshot after every step, then undo-all and redo-all.
+#[test]
+fn sheet_copies_moves_and_renames_undo_back_to_the_start() {
+    let steps: Vec<Step> = [
+        ("sheet.rename", json!({"sheet": 0, "name": "Data"})),
+        ("sheet.move", json!({"sheet": "Data", "to": 0, "copy": true})),
+        ("sheet.activate", json!({"sheet": "Data"})),
+        ("home.deleteColumns", json!({"cols": "C:C"})),
+        ("sheet.move", json!({"sheet": "Data", "to": 0})),
+        ("edit.undo", json!({"steps": 2})),
+        ("sheet.rename", json!({"sheet": "Data (2)", "name": "Sheet9"})),
+        ("sheet.move", json!({"sheet": "Sheet9", "to": 2, "copy": true})),
+        ("cell.set", json!({"sheet": "Sheet9 (2)", "cell": "C4", "input": "copy"})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("home.deleteSheet", json!({"sheet": "Data"})),
+        ("sheet.move", json!({"sheet": 1, "to": 0})),
+        ("home.insertSheet", json!({"name": "Summary", "before": 0})),
+        ("sheet.rename", json!({"sheet": "Sheet9", "name": "Budget"})),
+        ("edit.undo", json!({"steps": 3})),
+        ("edit.redo", json!({"steps": 1})),
+    ]
+    .into_iter()
+    .map(|(id, p)| (id.to_string(), p))
+    .collect();
+    let failure = replay("budget", &steps);
+    assert!(failure.is_none(), "{failure:?}");
+    // The start the replay compares against: one sheet, with the header row as built.
+    let h = Harness::new("budget");
+    let names: Vec<&str> = h.floor.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Budget"]);
+    assert_eq!(h.floor.sheets[0].value(CellRef::new(3, 2)), Value::from("Budget"));
+}
+
 /// Review of #2332: once the undo history has dropped its oldest steps, an `edit.undo` in the
 /// sequence can use up everything it kept before the episode ends. Undoing everything then has
 /// nothing left to do, and the workbook is the state before the oldest step kept, not the
@@ -1195,6 +1264,23 @@ fn a_trimmed_history_undone_in_the_sequence_stops_at_its_oldest_step() {
     if let Err(f) = h.end_episode(0) {
         panic!("{f:?}");
     }
+}
+
+/// Review on #3490: `track_history` must not follow a *replaced* history base. Advancing
+/// `floor` to a snapshot that was never in the history makes `check_history_base` compare
+/// the replacement with itself, so the step that replaced the start would pass unnamed.
+/// Only an eviction — the previous oldest dropped, a kept step becoming the base — may
+/// advance `floor`.
+#[test]
+fn a_replaced_history_base_is_reported_not_followed() {
+    let mut h = Harness::new("sales");
+    h.s.execute("cell.set", json!({"cell": "Z1", "input": "1"})).expect("cell.set");
+    h.track_history();
+    // Replace the oldest snapshot with the live workbook, which differs from the start.
+    let live = h.wb();
+    h.s.active_mut().expect("document").undo[0].wb = live;
+    h.track_history();
+    assert!(h.check_history_base(0, "cell.set").is_err(), "a replaced history base must be reported, not adopted as the new floor");
 }
 
 /// Review of #2332: the redo history is bounded too, so undoing `n` steps may leave fewer than
