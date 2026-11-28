@@ -130,13 +130,13 @@ the MSI, and zips a portable build.
   numeric `X.Y.Z`; same-version upgrades let release candidates replace each other.
 - **Desktop shortcut:** full installer UI offers an unchecked checkbox on a new installation.
   Unattended installs can use `msiexec /i gridcraft.msi /qn DESKTOPSHORTCUT=1` to opt in
-  (or `DESKTOPSHORTCUT=0` to opt out). The choice is stored per machine and reused on upgrades;
+  (or `DESKTOPSHORTCUT=0` to opt out). The choice is stored in the selected installation context and reused on upgrades;
   repair retains the installed component choice, and uninstall removes the managed shortcut.
   The Start Menu shortcut is always installed. Run
   the Packaging lint workflow’s Windows job to build small fixture installers and check
   installation, repair, upgrade, opt-out and cleanup, including removal by SYSTEM after
   installation by the runner account. The shortcut marker uses `HKMU`, which resolves to
-  `HKLM` for this per-machine package; it leaves no installing-user registry marker. Unlike
+  `HKCU` for a per-user installation or `HKLM` for a per-machine installation. Unlike
   a literal `HKLM` key path, MSI registry root -1 also meets ICE43's shortcut rule without
   suppressing validation ([WiX registry roots](https://docs.firegiant.com/wix/schema/wxs/registryvalue/),
   [ICE43](https://learn.microsoft.com/windows/win32/msi/ice43)). Its
