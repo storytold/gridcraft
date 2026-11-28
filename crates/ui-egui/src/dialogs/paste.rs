@@ -1,5 +1,13 @@
 use super::{Dialog, Field, Json, Key, SheetApp, Stroke, json, theme, vec2};
 
+pub(super) fn can_keep_references(d: &Dialog) -> bool {
+    d.values.get("link").and_then(Json::as_bool) != Some(true)
+        && matches!(
+            d.values.get("what").and_then(Json::as_str).unwrap_or("all"),
+            "all" | "allExceptBorders" | "formulas" | "formulasAndNumberFormats" | "validation"
+        )
+}
+
 /// Paste Special as Excel lays it out: Paste and Operation each in two columns of options, Skip
 /// blanks and Transpose side by side, and Paste Link as a button that pastes at once. The options
 /// come from the dialog's `fields`, so the letter shortcuts and the control channel see the same.
@@ -53,6 +61,19 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             }
             ui.end_row();
         });
+        let cut_move = app.session.clipboard.as_ref().is_some_and(|clip| clip.cut && app.session.active().is_some_and(|doc| doc.uid == clip.doc_uid));
+        let enabled = can_keep_references(d) && !cut_move;
+        if !enabled {
+            d.values.remove("keepReferences");
+        }
+        let mut keep = d.values.get("keepReferences").and_then(Json::as_bool).unwrap_or(false);
+        if ui
+            .add_enabled(enabled, egui::Checkbox::new(&mut keep, lang.tr("Keep formula references unchanged")))
+            .on_hover_text(lang.tr("Copy cell and validation formulas exactly, even when transposing."))
+            .changed()
+        {
+            d.set_value("keepReferences", json!(keep));
+        }
     });
     ui.add_space(8.0);
     ui.separator();
@@ -61,7 +82,7 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
         if ui.button(lang.tr("Paste Link")).on_hover_text(lang.tr("Paste formulas that refer to the copied cells")).clicked() || link_now {
             d.values.insert("what".into(), json!("all"));
             d.values.insert("operation".into(), json!("none"));
-            d.values.insert("link".into(), json!(true));
+            d.set_value("link", json!(true));
             *confirm = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -143,7 +164,7 @@ pub(super) fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
         }
         match mnemonic_action(key).map(|(_, action)| action) {
             Some(Mnemonic::Set(field, value)) => {
-                d.values.insert(field.into(), json!(value));
+                d.set_value(field, json!(value));
             }
             Some(Mnemonic::Toggle(field)) => {
                 let on = d.values.get(field).and_then(Json::as_bool).unwrap_or(false);

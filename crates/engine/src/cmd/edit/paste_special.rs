@@ -34,6 +34,15 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
     let skip_blanks = bool_param(p, "skipBlanks").unwrap_or(false);
     let transpose = bool_param(p, "transpose").unwrap_or(false);
     let link = bool_param(p, "link").unwrap_or(false);
+    let keep_references = match p.get("keepReferences") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| bad("edit.pasteSpecial", "keepReferences must be true or false."))?,
+    };
+    if keep_references
+        && (link || !matches!(what, What::All | What::AllExceptBorders | What::Formulas | What::FormulasAndNumberFormats | What::Validation))
+    {
+        return Err(bad("edit.pasteSpecial", "Keep references requires a copy of formulas or validation rules, not values, formatting or links."));
+    }
     if link && !clip.areas.is_empty() {
         return Err(EngineError::Other("This action won't work on multiple selections.".into()));
     }
@@ -94,7 +103,7 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
     // cut stays pending.
     let cut_move = clip.cut && same_doc;
     if cut_move {
-        let plain = what == What::All && !link && !skip_blanks && !transpose && op == "none";
+        let plain = what == What::All && !link && !skip_blanks && !transpose && !keep_references && op == "none";
         if !plain {
             return Err(EngineError::Other("Cut cells can only be pasted with Paste. To use Paste Special, copy them instead.".into()));
         }
@@ -116,6 +125,9 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
     }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
+    if keep_references && what != What::Validation && src_sheet.cells.legacy_array_intersects(src) {
+        return Err(bad("edit.pasteSpecial", "Cannot copy a legacy array with unchanged references."));
+    }
     // The source sheet's name now: a cut whose sheet was renamed after it moves its cells,
     // rules and the references to them on the sheet as it is named, not as the clipboard saw it.
     let src_sheet_name = match s.doc()?.wb.sheet(clip.sheet) {
@@ -245,6 +257,9 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
                     let mut new = old.clone();
                     let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                         let f = cell.formula.as_ref()?;
+                        if keep_references {
+                            return Some(f.clone());
+                        }
                         let e = f.expr()?;
                         if cut_move {
                             // A moved formula still reads cells on its original sheet. Qualify
@@ -427,7 +442,7 @@ pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard,
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         // A cut takes its rules along itself (`move_cut_rules`, below).
         if !link && !cut_move && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, keep_references, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -503,6 +518,7 @@ const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 #[derive(Clone, Copy)]
 struct PasteMode<'a> {
     transpose: bool,
+    keep_references: bool,
     skip_blanks: bool,
     skip_rows: &'a std::collections::BTreeSet<u32>,
 }
@@ -535,7 +551,7 @@ fn paste_validations(
     pasted: RangeRef,
     mode: PasteMode<'_>,
 ) -> Result<()> {
-    let PasteMode { transpose, skip_blanks, skip_rows } = mode;
+    let PasteMode { transpose, keep_references, skip_blanks, skip_rows } = mode;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
@@ -625,15 +641,17 @@ fn paste_validations(
         let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
         let Some(anchor) = RangeRef::top_left(&ranges) else { continue };
         let mut rule = dv.clone();
-        for f in rule.formulas_mut() {
-            *f = if transpose {
-                // A clipped rule may start outside the copied cells. Find the source cell
-                // corresponding to the new anchor before turning its relative references.
-                let sc = CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
-                super::super::data::transpose_rule_formula(f, first, sc, anchor)
-            } else {
-                super::super::data::move_rule_formula(f, first, anchor)
-            };
+        if !keep_references {
+            for f in rule.formulas_mut() {
+                *f = if transpose {
+                    // A clipped rule may start outside the copied cells. Find the source cell
+                    // corresponding to the new anchor before turning its relative references.
+                    let sc = CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
+                    super::super::data::transpose_rule_formula(f, first, sc, anchor)
+                } else {
+                    super::super::data::move_rule_formula(f, first, anchor)
+                };
+            }
         }
         rule.ranges = ranges;
         rules.push(rule);

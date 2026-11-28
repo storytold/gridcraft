@@ -193,7 +193,9 @@ pub(super) fn transfer(s: &mut Session, p: &Json) -> Result<Json> {
             "A native cell copy does not carry conditional-format rules. Move the block or choose a source without those rules.",
         ));
     }
-    if from.cells.iter_range(v.src).any(|(_, c)| c.formula.as_ref().is_some_and(|f| f.with_expr(|_| ()).is_none())) {
+    // Literal copies carry the stored formula text; only rewriting a reference needs a parsed tree.
+    let verbatim = !cut && p.get("keepReferences").and_then(Json::as_bool) == Some(true);
+    if !verbatim && from.cells.iter_range(v.src).any(|(_, c)| c.formula.as_ref().is_some_and(|f| f.with_expr(|_| ()).is_none())) {
         return Err(bad(TRANSFER, "An unsupported source formula cannot be relocated without loss."));
     }
     if cut {
@@ -219,7 +221,11 @@ pub(super) fn transfer(s: &mut Session, p: &Json) -> Result<Json> {
         areas: vec![],
         trust: d.trust,
     };
-    let result = paste_snapshot(s, &json!({"what":"all","at":v.at.a1(),"sheet":v.to,"transpose":transpose}), &clip, v.overwrite.then_some(dest));
+    let mut paste = json!({"what":"all","at":v.at.a1(),"sheet":v.to,"transpose":transpose});
+    if let Some(keep) = p.get("keepReferences") {
+        paste["keepReferences"] = keep.clone();
+    }
+    let result = paste_snapshot(s, &paste, &clip, v.overwrite.then_some(dest));
     s.doc_mut()?.selection = selection;
     result?;
     Ok(receipt)
@@ -388,6 +394,28 @@ mod tests {
         let dest = RangeRef::parse("E2:E3").unwrap();
         let rule = s.doc().unwrap().wb.sheets[0].validations.iter().find(|r| r.ranges.contains(&dest)).unwrap();
         assert_eq!((rule.f1.as_str(), rule.f2.as_deref()), ("E3", Some("$G3")));
+    }
+
+    #[test]
+    fn verbatim_copy_changes_placement_but_not_cell_or_validation_references() {
+        for (operation, pasted) in [("copy", "D4:E4"), ("transpose", "D4:D5")] {
+            let mut s = setup();
+            s.execute("cell.set", json!({"cell":"B2","input":"=A1*$G$2"})).unwrap();
+            s.execute("data.validation", json!({"range":"B2:C2","type":"decimal","formula1":"=A1","formula2":"=$G2"})).unwrap();
+            let formula = get(&mut s, "Input", "B2")["formula"].clone();
+            s.execute(TRANSFER, json!({"sheet":"Input","source":"B2:C2","at":"D4","operation":operation,"keepReferences":true})).unwrap();
+            assert_eq!(get(&mut s, "Input", "D4")["formula"], formula);
+            let dest = RangeRef::parse(pasted).unwrap();
+            let rules = &s.doc().unwrap().wb.sheets[0].validations;
+            let copied = rules.iter().find(|r| r.ranges.contains(&dest)).unwrap();
+            assert_eq!((copied.f1.as_str(), copied.f2.as_deref()), ("A1", Some("$G2")));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(get(&mut s, "Input", "D4")["formula"].is_null());
+            assert_eq!(s.doc().unwrap().wb.sheets[0].validations.len(), 1);
+            let before = s.doc().unwrap().wb.clone();
+            assert!(s.execute(TRANSFER, json!({"sheet":"Input","source":"B2:C2","at":"D4","operation":"move","keepReferences":true})).is_err());
+            assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+        }
     }
 
     #[test]

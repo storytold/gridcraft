@@ -114,10 +114,10 @@ const TOOLS: &[Tool] = &[
     ),
     tool!(
         "transfer_range",
-        "Copy, cut/move, or transpose a worksheet block to at. Whole columns or rows trim to their occupied span. Other cells are not overwritten unless overwrite is requested.",
+        "Copy, move, or transpose a worksheet block to at. Copies normally adjust relative references; use keepReferences to copy cell and validation formulas verbatim, even when transposing. Whole columns or rows trim to their occupied span. Overwrite must be explicit.",
         Some("range.transfer"),
         ["sheet", "source", "at"],
-        ["destinationSheet", "operation", "overwrite"]
+        ["destinationSheet", "operation", "overwrite", "keepReferences"]
     ),
     tool!(
         "reshape_delimited",
@@ -374,7 +374,7 @@ fn field(k: &str) -> Json {
         "layout" => json!({"type":"string","enum":["rows","columns","row"]}),
         "source" | "target" => string(42),
         "delimiter" => string(8),
-        "overwrite" => boolean(),
+        "overwrite" | "keepReferences" => boolean(),
         "fillMode" => {
             json!({"type":"string","enum":["copy","series","formats","values","extend","days","weekdays","months","years","linearTrend","growthTrend"]})
         }

@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Transfer Cell Block",
             [],
             None,
-            "{sheet, source, at, destinationSheet?, operation?: copy|move|transpose, overwrite?: false} → {source, destination}",
+            "{sheet, source, at, destinationSheet?, operation?: copy|move|transpose, keepReferences?: false (copy/transpose only), overwrite?: false} → {source, destination}",
             has_doc,
             range_transfer::transfer
         ),
@@ -127,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "Paste Special…",
                 ["Home", "Clipboard"],
                 Some("Ctrl+Alt+V"),
-                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, keepReferences?, link?}",
                 has_clipboard,
                 paste_special
             )
