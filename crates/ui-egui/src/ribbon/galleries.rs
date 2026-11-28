@@ -118,9 +118,12 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
         ("Number Format", &["Comma", "Comma [0]", "Currency", "Currency [0]", "Percent"]),
     ];
     for (g, names) in groups {
-        ui.label(egui::RichText::new(*g).strong());
+        ui.label(egui::RichText::new(app.ui.language.tr(g)).strong());
         egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
+                // The built-in style keeps its English name: it is stored in the workbook and sent
+                // by `home.cellStyle`, so only the painted label is translated.
+                let label = app.ui.language.tr(n);
                 let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
                 let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
                 let fill = st
@@ -144,7 +147,7 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                 ui.painter().text(
                     r.left_center() + vec2(4.0, 0.0),
                     Align2::LEFT_CENTER,
-                    *n,
+                    label,
                     egui::FontId::new((st.font.size).clamp(10.0, 15.0), fam),
                     col,
                 );
@@ -160,5 +163,48 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cell_style_gallery;
+    use crate::SheetApp;
+    use crate::i18n::Language;
+
+    /// Every text a frame painted, at any depth.
+    fn painted_text(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => {
+                for s in shapes {
+                    painted_text(s, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The gallery paints its group headings and style names through the interface language, while
+    /// the English built-in names stay what `home.cellStyle` receives.
+    #[test]
+    fn gallery_labels_are_translated() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("app.language.set", serde_json::json!({"language": "ja"})).unwrap();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| cell_style_gallery(&mut app, ui));
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            painted_text(&clipped.shape, &mut texts);
+        }
+        for english in ["Good, Bad and Neutral", "Heading 1"] {
+            let translated = Language::Ja.tr(english);
+            assert_ne!(translated, english, "the Japanese catalog translates {english:?}");
+            assert!(texts.iter().any(|t| t == translated), "the gallery paints {translated:?}; painted: {texts:?}");
+            assert!(!texts.iter().any(|t| t == english), "the gallery no longer paints {english:?}");
+        }
     }
 }
