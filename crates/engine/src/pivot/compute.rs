@@ -4,7 +4,8 @@ use super::output::{
 };
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup,
-    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook,
+    datetime_from_serial, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -547,10 +548,61 @@ fn data_columns(specs: &[ColSpec], has_column_fields: bool, on_rows: bool, value
     Ok(columns)
 }
 
+/// Collects the lowercased literal `item_label` strings present in `src.rows` for column `col`.
+fn column_label_set(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup, fmt: &str) -> HashSet<String> {
+    src.rows.iter().map(|rec| item_label(wb, rec.get(col).unwrap_or(&Value::Empty), group, fmt).to_ascii_lowercase()).collect()
+}
+
+/// Resolves a date filter or collapsed item label against `src`'s formatted labels for that column.
+///
+/// Exact literal matches in `existing` always win (preserving locale-specific formats like
+/// `dd/mm/yyyy` and numeric-looking date formats like `yyyy`). Otherwise, only unambiguous
+/// representations are converted: strict ISO 8601 date/datetime/time strings, and (for
+/// date-formatted columns) finite serial numbers.
+fn resolve_filter_label(wb: &Workbook, raw: &str, group: PivotDateGroup, fmt: &str, existing: &HashSet<String>) -> String {
+    if group != PivotDateGroup::None || existing.contains(&raw.to_ascii_lowercase()) {
+        return raw.to_string();
+    }
+    let trimmed = raw.trim();
+    let is_date = crate::display::parsed(fmt).is_date();
+    if let Some((n, _)) = gridcraft_core::date::parse_strict_iso_datetime(trimmed, wb.date_system) {
+        let label = item_label(wb, &Value::Number(n), group, fmt);
+        if is_date || existing.contains(&label.to_ascii_lowercase()) {
+            return label;
+        }
+    }
+    let year_caption =
+        matches!((fmt.trim().to_ascii_lowercase().as_str(), trimmed.len()), ("yy", 2) | ("yyyy", 4)) && trimmed.bytes().all(|b| b.is_ascii_digit());
+    if is_date
+        && !year_caption
+        && let Ok(n) = trimmed.parse::<f64>()
+        && n.is_finite()
+        && datetime_from_serial(wb.date_system, n).is_some()
+    {
+        return item_label(wb, &Value::Number(n), group, fmt);
+    }
+    raw.to_string()
+}
+
+fn resolve_axis_field(wb: &Workbook, src: &Source, col: usize, field: &PivotField, fmt: &str) -> PivotField {
+    if field.collapsed_items.is_empty() || field.date_group != PivotDateGroup::None {
+        return field.clone();
+    }
+    let existing = column_label_set(wb, src, col, field.date_group, fmt);
+    let mut resolved = field.clone();
+    resolved.collapsed_items = field.collapsed_items.iter().map(|item| resolve_filter_label(wb, item, field.date_group, fmt, &existing)).collect();
+    resolved
+}
+
 pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut probe: Option<&mut Probe>) -> Result<Output, String> {
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
-    let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
-    let cols: Vec<(usize, &PivotField)> = pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
+    let field_fmt = |c: usize, f: &PivotField| f.number_format.clone().unwrap_or_else(|| fmt_of(c));
+    let resolved_rows: Vec<(usize, PivotField)> =
+        pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, resolve_axis_field(wb, src, c, f, &field_fmt(c, f))))).collect();
+    let resolved_cols: Vec<(usize, PivotField)> =
+        pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, resolve_axis_field(wb, src, c, f, &field_fmt(c, f))))).collect();
+    let rows: Vec<(usize, &PivotField)> = resolved_rows.iter().map(|(c, f)| (*c, f)).collect();
+    let cols: Vec<(usize, &PivotField)> = resolved_cols.iter().map(|(c, f)| (*c, f)).collect();
     // Value fields: a source column, or a calculated field evaluated on sums (see `pivot_calc`).
     let calc = CalcSet::new(pt, &src.headers);
     let vals: Vec<(ValSrc, &PivotValue)> = pt
@@ -581,9 +633,23 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
 
     // ---- aggregate
     let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
-    let filter_sets: Vec<Option<HashSet<String>>> =
-        filters.iter().map(|(_, field, _, _)| field.selected.as_ref().map(|s| s.iter().map(|v| v.to_ascii_lowercase()).collect())).collect();
-    let field_fmt = |c: usize, f: &PivotField| f.number_format.clone().unwrap_or_else(|| fmt_of(c));
+    let filter_existing: Vec<Option<HashSet<String>>> = filters
+        .iter()
+        .zip(&filter_fmts)
+        .map(|((col, field, group, _), fmt)| field.selected.is_some().then(|| column_label_set(wb, src, *col, *group, fmt)))
+        .collect();
+    let filter_sets: Vec<Option<HashSet<String>>> = filters
+        .iter()
+        .zip(&filter_fmts)
+        .zip(&filter_existing)
+        .map(|(((_, field, group, _), fmt), existing)| {
+            field.selected.as_ref().map(|s| {
+                let empty_set = HashSet::new();
+                let labels = existing.as_ref().unwrap_or(&empty_set);
+                s.iter().map(|v| resolve_filter_label(wb, v, *group, fmt, labels).to_ascii_lowercase()).collect()
+            })
+        })
+        .collect();
     let row_fmts: Vec<String> = rows.iter().map(|(c, f)| field_fmt(*c, f)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, f)| field_fmt(*c, f)).collect();
     let row_dates: Vec<Vec<bool>> = rows.iter().map(|(c, f)| date_flags(wb, src, *c, f.date_group)).collect();
@@ -727,12 +793,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let mut g = Grid { rows: vec![], kinds: vec![], width };
 
     // ---- report filters
-    for (c, f, _, _) in &shown_filters {
+    for (c, f, group, _) in &shown_filters {
         let r = g.push_row(RowKind::Filter)?;
         let name = src.headers.get(*c).cloned().unwrap_or_default();
+        let fmt = fmt_of(*c);
         let shown = match &f.selected {
             None => "(All)".to_string(),
-            Some(v) if v.len() == 1 => v.first().cloned().unwrap_or_default(),
+            Some(v) if v.len() == 1 => {
+                let existing = column_label_set(wb, src, *c, *group, &fmt);
+                v.first().map(|s| resolve_filter_label(wb, s, *group, &fmt, &existing)).unwrap_or_default()
+            }
             Some(_) => "(Multiple Items)".to_string(),
         };
         g.set(r, 0, Value::text(name), CellKind::Filter, 0, None);

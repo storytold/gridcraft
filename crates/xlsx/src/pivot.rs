@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use gridcraft_core::date::{datetime_from_serial, iso_ymd, serial_from_iso_ymd};
+use gridcraft_core::date::{datetime_from_serial, iso_ymd, parse_strict_iso_datetime, serial_from_iso_ymd};
 use gridcraft_core::{CellRef, DateSystem, RangeRef, Value, number_to_text};
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{
@@ -187,11 +187,27 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
     }
 }
 
-/// `2024-03-05T00:00:00` for a date serial; a time alone is on `1899-12-30` (see [`iso_ymd`]).
+/// `2024-03-05T00:00:00` (with fractional seconds when non-zero) for a date serial; a time alone
+/// is on `1899-12-30` (see [`iso_ymd`]).
 fn iso(sys: DateSystem, serial: f64) -> Option<String> {
     let d = datetime_from_serial(sys, serial)?;
     let (y, m, day) = iso_ymd(sys, d.year, d.month, d.day);
-    Some(format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}", d.hour, d.minute, d.second))
+    let total_secs = (serial - serial.floor()) * 86_400.0;
+    let rounded_100ns = (total_secs * 10_000_000.0).round() as u64;
+    let sub_100ns = rounded_100ns % 10_000_000;
+    if sub_100ns == 0 {
+        Some(format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}", d.hour, d.minute, d.second))
+    } else if sub_100ns.is_multiple_of(10_000) {
+        Some(format!("{y:04}-{m:02}-{day:02}T{:02}:{:02}:{:02}.{:03}", d.hour, d.minute, d.second, sub_100ns / 10_000))
+    } else {
+        // Sub-millisecond precision: use truncated whole seconds so e.g. `.5004` stays exact.
+        let secs = (rounded_100ns / 10_000_000).min(86_399);
+        let frac = format!("{sub_100ns:07}");
+        let frac = frac.trim_end_matches('0');
+        let d_day = datetime_from_serial(sys, serial.floor())?;
+        let (dy, dm, dday) = iso_ymd(sys, d_day.year, d_day.month, d_day.day);
+        Some(format!("{dy:04}-{dm:02}-{dday:02}T{:02}:{:02}:{:02}.{frac}", secs / 3600, (secs / 60) % 60, secs % 60))
+    }
 }
 
 /// `3/5/2024` for a date serial (group boundary captions).

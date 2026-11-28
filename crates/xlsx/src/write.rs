@@ -263,7 +263,7 @@ fn append_file_sharing(w: &mut String, wb: &Workbook) {
 }
 
 pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named_with(wb, kind, None, functions)
+    write_xlsx_named_with(wb, kind, None, crate::WriteOptions::from(functions))
 }
 
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
@@ -288,8 +288,6 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
     attrs
 }
 
-/// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
-/// PivotTable in Excel only when its link starts with the workbook in brackets.
 fn validate_xlsx_workbook(wb: &Workbook) -> Result<(), IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
@@ -300,7 +298,10 @@ fn validate_xlsx_workbook(wb: &Workbook) -> Result<(), IoError> {
     check_sheet_names(wb)
 }
 
-pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+/// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
+/// PivotTable in Excel only when its link starts with the workbook in brackets.
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, opts: crate::WriteOptions<'_>) -> Result<Vec<u8>, IoError> {
+    let functions = opts.functions;
     validate_xlsx_workbook(wb)?;
     let mut out = Out {
         parts: vec![],
@@ -358,7 +359,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     }
     let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &extra_fmts, std::mem::take(&mut out.num_fmts));
     let fmt_id = |code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied());
-    pivots.finish(wb, &mut out, &fmt_id);
+    pivots.finish(wb, &mut out, &fmt_id, opts.format_value);
     crate::passthrough::finish_style_ids(&mut out, &fmt_id);
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
@@ -669,5 +670,5 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
 /// Writes a workbook with a caller-supplied file name and the default function facts.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+    write_xlsx_named_with(wb, kind, book_name, crate::WriteOptions::default())
 }

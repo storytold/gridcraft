@@ -524,8 +524,14 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
                 None => named,
             };
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-            gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
-                .map_err(|e| EngineError::Other(e.to_string()))
+            let fmt_value = |v: &gridcraft_core::Value, fmt: &str, wb: &Workbook| crate::display::format(v, fmt, wb).text;
+            gridcraft_xlsx::write_xlsx_named_with(
+                named.as_ref().unwrap_or(wb),
+                gridcraft_xlsx::XlsxKind::from_path(path),
+                book,
+                gridcraft_xlsx::WriteOptions { functions: XLSX_FUNCTIONS, format_value: Some(&fmt_value) },
+            )
+            .map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))

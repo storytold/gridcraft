@@ -173,7 +173,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     // that thousands of equal headers don't take cubic time.
     let mut taken: HashSet<String> = HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    let mut formats = Vec::new();
+    let mut formats: Vec<Option<String>> = Vec::new();
     for c in r.start.col..=r.end.col {
         let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)).trim().to_string();
         if h.is_empty() {
@@ -189,12 +189,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
         next_suffix.insert(key, k);
         taken.insert(n.to_ascii_lowercase());
         headers.push(n);
-        let fmt = if r.end.row > r.start.row {
-            wb.styles.get(sh.style_id(CellRef::new(r.start.row + 1, c))).num_fmt.as_str().to_string()
-        } else {
-            "General".into()
-        };
-        formats.push(fmt);
+        formats.push(None);
     }
     let w = headers.len();
     let mut rows = Vec::new();
@@ -209,6 +204,11 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
             }
             for (i, v) in rec.iter().enumerate() {
                 if !v.is_empty() {
+                    if let Some(slot) = formats.get_mut(i)
+                        && slot.is_none()
+                    {
+                        *slot = Some(wb.styles.get(sh.style_id(CellRef::new(row, r.start.col + i as u32))).num_fmt.as_str().to_string());
+                    }
                     if let Some(a) = any.get_mut(i) {
                         *a = true;
                     }
@@ -223,6 +223,19 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
             rows.push(rec);
         }
     }
+    let formats: Vec<String> = formats
+        .into_iter()
+        .enumerate()
+        .map(|(i, fmt)| {
+            fmt.unwrap_or_else(|| {
+                if r.end.row > r.start.row {
+                    wb.styles.get(sh.style_id(CellRef::new(r.start.row + 1, r.start.col + i as u32))).num_fmt.as_str().to_string()
+                } else {
+                    "General".into()
+                }
+            })
+        })
+        .collect();
     for (n, a) in numeric.iter_mut().zip(any.iter()) {
         *n = *n && *a;
     }

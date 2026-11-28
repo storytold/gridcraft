@@ -75,6 +75,10 @@ struct CField {
     group: Option<Group>,
     /// A calculated field's formula (without `=`); such fields aren't database fields.
     formula: Option<String>,
+    /// Number format code from the first non-empty source cell (database fields only).
+    num_fmt: String,
+    /// Whether `num_fmt` is a date/time number format.
+    is_date: bool,
 }
 
 impl CField {
@@ -84,6 +88,17 @@ impl CField {
             Some(g) => g.items.clone(),
             None => self.items.iter().map(label).collect(),
         }
+    }
+
+    /// Whether an ungrouped numeric date column can serialize its shared/record values as `<d>`.
+    fn is_date_items(&self, sys: DateSystem) -> bool {
+        self.is_date
+            && self.group.is_none()
+            && self.stats.number
+            && !self.stats.strings()
+            && (sys == DateSystem::D1904 || self.stats.min >= 1.0)
+            && iso(sys, self.stats.min).is_some()
+            && iso(sys, self.stats.max).is_some()
     }
 }
 
@@ -202,11 +217,12 @@ impl PivotWriter {
         v
     }
 
-    /// Writes the PivotTable parts. `fmt_id` maps a number format code to its styles id.
-    pub fn finish(self, wb: &Workbook, out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+    /// Writes the PivotTable parts. `fmt_id` maps a number format code to its styles id;
+    /// `format_value` (when supplied by the engine) formats numeric items identically to the engine.
+    pub fn finish(self, wb: &Workbook, out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>, format_value: Option<crate::ValueFormatter<'_>>) {
         for p in self.pending {
             let Some(pt) = wb.sheet(p.sheet).and_then(|s| s.pivots.get(p.idx)) else { continue };
-            let xml = table_xml(pt, p.idx, p.cache_id, &p.cache, fmt_id);
+            let xml = table_xml(wb, pt, p.idx, p.cache_id, &p.cache, fmt_id, format_value);
             out.part(&p.part, Some(CT_PIVOT_TABLE), xml.into_bytes());
         }
     }
@@ -298,6 +314,8 @@ fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
             itemized: false,
             group: None,
             formula: None,
+            num_fmt: String::new(),
+            is_date: false,
         });
     }
     fields
@@ -370,8 +388,34 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
                 itemized: false,
                 group: Some(make(*by)),
                 formula: None,
+                num_fmt: String::new(),
+                is_date: false,
             });
             prev = new;
+        }
+    }
+}
+
+fn collect_field_stats(wb: &Workbook, sh: &gridcraft_model::Sheet, r: RangeRef, rows: &[u32], fields: &mut [CField]) {
+    for &row in rows {
+        for f in fields.iter_mut() {
+            let c = r.start.col + f.col.unwrap_or(0);
+            let v = sh.value(CellRef::new(row, c)).scalar();
+            if f.num_fmt.is_empty() && !v.is_empty() {
+                f.num_fmt = wb.styles.get(sh.style_id(CellRef::new(row, c))).num_fmt.as_str().to_string();
+                f.is_date = date_fmt_flags(&f.num_fmt).is_date;
+            }
+            f.stats.add(&v);
+        }
+    }
+    if r.end.row > r.start.row {
+        for f in fields.iter_mut() {
+            if f.num_fmt.is_empty()
+                && let Some(col) = f.col
+            {
+                f.num_fmt = wb.styles.get(sh.style_id(CellRef::new(r.start.row + 1, r.start.col + col))).num_fmt.as_str().to_string();
+                f.is_date = date_fmt_flags(&f.num_fmt).is_date;
+            }
         }
     }
 }
@@ -395,12 +439,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             }
         }
     }
-    for &row in &rows {
-        for f in fields.iter_mut() {
-            let c = r.start.col + f.col.unwrap_or(0);
-            f.stats.add(&sh.value(CellRef::new(row, c)).scalar());
-        }
-    }
+    collect_field_stats(wb, sh, r, &rows, &mut fields);
 
     // Which fields are on an axis, and how dates are grouped: per base column, the base field
     // takes the finest grouping and coarser ones become extra (non-database) fields chained
@@ -472,7 +511,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
                         None => s.push_str(&item_xml(&v, wb.date_system, false)),
                     }
                 } else {
-                    s.push_str(&item_xml(&v, wb.date_system, f.group.is_some()));
+                    s.push_str(&item_xml(&v, wb.date_system, f.group.is_some() || f.is_date_items(wb.date_system)));
                 }
             }
             s.push_str("</r>");
@@ -497,6 +536,8 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             itemized: false,
             group: None,
             formula: Some(f.to_string()),
+            num_fmt: String::new(),
+            is_date: false,
         });
     }
     Some(Cache { fields, axis_map, source_xml, records })
@@ -570,8 +611,9 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem, refresh_on_l
         s.push('>');
         let st = &f.stats;
         if f.col.is_some() {
+            let date_items = f.is_date_items(sys);
             s.push_str("<sharedItems");
-            if let Some(g) = &f.group {
+            if f.group.is_some() || date_items {
                 s.push_str(" containsSemiMixedTypes=\"0\" containsNonDate=\"0\" containsDate=\"1\" containsString=\"0\"");
                 if st.blank {
                     s.push_str(" containsBlank=\"1\"");
@@ -579,7 +621,6 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem, refresh_on_l
                 if let (Some(a), Some(b)) = (iso(sys, st.min), iso(sys, st.max)) {
                     let _ = write!(s, " minDate=\"{a}\" maxDate=\"{b}\"");
                 }
-                let _ = g;
             } else {
                 if !st.strings() && !st.blank {
                     s.push_str(" containsSemiMixedTypes=\"0\"");
@@ -607,7 +648,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem, refresh_on_l
             if f.itemized {
                 let _ = write!(s, " count=\"{}\">", f.items.len());
                 for v in &f.items {
-                    s.push_str(&item_xml(v, sys, false));
+                    s.push_str(&item_xml(v, sys, date_items));
                 }
                 s.push_str("</sharedItems>");
             } else {
@@ -658,7 +699,15 @@ struct PivotTableLayout<'a> {
     values: Vec<(usize, &'a PivotValue)>,
 }
 
-fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
+fn table_xml(
+    wb: &Workbook,
+    pt: &PivotTable,
+    idx: usize,
+    cache_id: u32,
+    c: &Cache,
+    fmt_id: &dyn Fn(&str) -> Option<u32>,
+    format_value: Option<crate::ValueFormatter<'_>>,
+) -> String {
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let column_fields: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
@@ -781,10 +830,22 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     s.push_str("/>");
 
-    write_pivot_fields(&mut s, pt, c, &layout, fmt_id);
+    let field_matches: HashMap<usize, Vec<bool>> = layout
+        .hidden_fields
+        .iter()
+        .filter_map(|(&i, filter)| {
+            let sel = filter.selected.as_ref()?;
+            let f = c.fields.get(i)?;
+            let labels = f.item_labels();
+            Some((i, resolve_field_matches(wb, f, &labels, sel, format_value)))
+        })
+        .collect();
+
+    let ctx = PivotFieldsCtx { wb, fmt_id, format_value };
+    write_pivot_fields(&mut s, &ctx, pt, c, &layout, &field_matches);
     axis_fields_xml(&mut s, "rowFields", &layout.row_fields, row_values);
     axis_fields_xml(&mut s, "colFields", &layout.column_fields, col_values);
-    write_page_fields(&mut s, c, &layout);
+    write_page_fields(&mut s, &layout, &field_matches);
     write_data_fields(&mut s, c, &layout, fmt_id);
     s.push_str("<pivotTableStyleInfo");
     if !pt.style.is_empty() {
@@ -815,8 +876,175 @@ fn axis_field<'a>(pt: &'a PivotTable, c: &Cache, i: usize) -> Option<&'a PivotFi
     pt.rows.iter().chain(pt.columns.iter()).nth(p)
 }
 
-fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+/// Inspects the first section of an Excel number format code (ignoring quoted text, escaped
+/// characters, and non-elapsed bracket tokens).
+#[derive(Clone, Copy, Debug, Default)]
+struct DateFmtFlags {
+    is_date: bool,
+    /// When the format displays only a year (`yy` or `yyyy`), its expected digit width (2 or 4).
+    year_width: Option<usize>,
+    has_time: bool,
+}
+
+fn date_fmt_flags(code: &str) -> DateFmtFlags {
+    let trimmed = code.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed.eq_ignore_ascii_case("checkbox") {
+        return DateFmtFlags::default();
+    }
+    let mut chars = trimmed.chars();
+    let (mut y_count, mut has_md, mut has_time) = (0usize, false, false);
+    while let Some(ch) = chars.next() {
+        match ch {
+            ';' => break,
+            '"' => while chars.next().is_some_and(|c| c != '"') {},
+            '\\' | '_' | '*' => {
+                let _ = chars.next();
+            }
+            '[' => {
+                let inner: String = chars.by_ref().take_while(|&c| c != ']').map(|c| c.to_ascii_lowercase()).collect();
+                if inner.starts_with(['<', '>', '=']) {
+                    return DateFmtFlags::default();
+                }
+                has_time |= matches!(inner.as_str(), "h" | "hh" | "m" | "mm" | "s" | "ss");
+            }
+            'y' | 'Y' => y_count += 1,
+            'm' | 'M' | 'd' | 'D' => has_md = true,
+            'h' | 'H' | 's' | 'S' => has_time = true,
+            _ => {}
+        }
+    }
+    let year_width = (y_count > 0 && !has_md && !has_time).then_some(if y_count <= 2 { 2 } else { 4 });
+    DateFmtFlags { is_date: y_count > 0 || has_md || has_time, year_width, has_time }
+}
+
+fn mark_matching_numbers(items: &[Value], matched: &mut [bool], pred: impl Fn(f64) -> bool) -> bool {
+    let mut hit = false;
+    for (item, slot) in items.iter().zip(matched.iter_mut()) {
+        if let Value::Number(n) = item
+            && pred(*n)
+        {
+            *slot = true;
+            hit = true;
+        }
+    }
+    hit
+}
+
+fn mark_matching_labels(haystack: &[String], needle: &str, matched: &mut [bool]) -> bool {
+    let mut hit = false;
+    for (label, slot) in haystack.iter().zip(matched.iter_mut()) {
+        if same(label, needle) {
+            *slot = true;
+            hit = true;
+        }
+    }
+    hit
+}
+
+/// Standalone `write_xlsx` matcher (when no engine `ValueFormatter` was supplied): exact literal
+/// match first, then strict ISO 8601 and serial matching for ungrouped items.
+fn match_without_formatter(f: &CField, labels: &[String], sel: &str, flags: DateFmtFlags, sys: DateSystem, matched: &mut [bool]) {
+    let mut literal = false;
+    for ((x, l), slot) in labels.iter().enumerate().zip(matched.iter_mut()) {
+        if !(f.is_date && f.group.is_none() && matches!(f.items.get(x), Some(Value::Number(_)))) && same(l, sel) {
+            *slot = true;
+            literal = true;
+        }
+    }
+    if literal || f.group.is_some() {
+        return;
+    }
+    let trimmed = sel.trim();
+    if let Some((target, date_only)) = parse_strict_iso_datetime(trimmed, sys) {
+        if f.is_date && date_only && !flags.has_time {
+            mark_matching_numbers(&f.items, matched, |n| (n.floor() - target).abs() < 1e-12);
+        } else if !mark_matching_numbers(&f.items, matched, |n| (n - target).abs() < 1e-12) && f.is_date && date_only {
+            mark_matching_numbers(&f.items, matched, |n| (n.floor() - target).abs() < 1e-12);
+        }
+        return;
+    }
+    if flags.year_width == Some(trimmed.len()) && trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        if let Ok(year) = trimmed.parse::<i32>() {
+            mark_matching_numbers(&f.items, matched, |n| {
+                datetime_from_serial(sys, n).is_some_and(|d| if trimmed.len() == 4 { d.year == year } else { d.year.rem_euclid(100) == year })
+            });
+        }
+        return;
+    }
+    if f.is_date
+        && let Ok(target) = trimmed.parse::<f64>()
+        && datetime_from_serial(sys, target).is_some()
+        && mark_matching_numbers(&f.items, matched, |n| n == target)
+    {
+        return;
+    }
+    mark_matching_labels(labels, sel, matched);
+}
+
+fn match_with_formatter(wb: &Workbook, f: &CField, labels: &[String], selected: &[String], fmt_fn: crate::ValueFormatter<'_>) -> Vec<bool> {
+    let mut matched = vec![false; labels.len()];
+    let sys = wb.date_system;
+    let fmt = if f.num_fmt.is_empty() { "General" } else { f.num_fmt.as_str() };
+    let display: Vec<String> =
+        f.items.iter().zip(labels).map(|(v, raw)| if matches!(v, Value::Number(_)) { fmt_fn(v, fmt, wb) } else { raw.clone() }).collect();
+    let flags = date_fmt_flags(fmt);
+    for sel in selected {
+        if mark_matching_labels(&display, sel, &mut matched) {
+            continue;
+        }
+        let trimmed = sel.trim();
+        if flags.year_width == Some(trimmed.len()) && trimmed.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let target_serial = parse_strict_iso_datetime(trimmed, sys).map(|(t, _)| t).or_else(|| {
+            f.is_date.then(|| trimmed.parse::<f64>().ok().filter(|&n| n.is_finite() && datetime_from_serial(sys, n).is_some())).flatten()
+        });
+        let hit = target_serial.is_some_and(|n| mark_matching_labels(&display, &fmt_fn(&Value::Number(n), fmt, wb), &mut matched));
+        if !hit {
+            // Preserve raw cache label matches (e.g. imported currency `<n v="12"/>` stored as `"12"`).
+            mark_matching_labels(labels, sel, &mut matched);
+        }
+    }
+    matched
+}
+
+/// Resolves `selected` labels against `f`'s cache items once per field.
+fn resolve_field_matches(
+    wb: &Workbook,
+    f: &CField,
+    labels: &[String],
+    selected: &[String],
+    format_value: Option<crate::ValueFormatter<'_>>,
+) -> Vec<bool> {
+    if let Some(fmt_fn) = format_value
+        && f.group.is_none()
+    {
+        return match_with_formatter(wb, f, labels, selected, fmt_fn);
+    }
+    let mut matched = vec![false; labels.len()];
+    let flags = date_fmt_flags(&f.num_fmt);
+    for sel in selected {
+        match_without_formatter(f, labels, sel, flags, wb.date_system, &mut matched);
+    }
+    matched
+}
+
+struct PivotFieldsCtx<'a> {
+    wb: &'a Workbook,
+    fmt_id: &'a dyn Fn(&str) -> Option<u32>,
+    format_value: Option<crate::ValueFormatter<'a>>,
+}
+
+fn write_pivot_fields(
+    s: &mut String,
+    ctx: &PivotFieldsCtx<'_>,
+    pt: &PivotTable,
+    c: &Cache,
+    layout: &PivotTableLayout<'_>,
+    field_matches: &HashMap<usize, Vec<bool>>,
+) {
     let vals = &layout.values;
+    let fmt_id = ctx.fmt_id;
     let _ = write!(s, "<pivotFields count=\"{}\">", c.fields.len());
     for (i, f) in c.fields.iter().enumerate() {
         s.push_str("<pivotField");
@@ -848,13 +1076,16 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
         } else if let Some(id) = axis_field(pt, c, i).and_then(|f| f.number_format.as_deref()).and_then(fmt_id) {
             let _ = write!(s, " numFmtId=\"{id}\"");
         }
-        let filter = layout.hidden_fields.get(&i).copied();
         let labels = f.item_labels();
         let is_page = axis == Some("axisPage");
         // Hidden items; never hide every item (a field needs one visible item).
-        let mut hide: Vec<bool> = match filter.and_then(|f| f.selected.as_ref()) {
-            Some(sel) if !(is_page && sel.len() == 1) => labels.iter().map(|l| !sel.iter().any(|x| same(x, l))).collect(),
-            _ => vec![false; labels.len()],
+        // A page field with exactly one matched cache item uses `<pageField item="x"/>` instead.
+        let mut hide: Vec<bool> = match field_matches.get(&i) {
+            Some(matched) => {
+                let count = matched.iter().filter(|&&m| m).count();
+                if is_page && count == 1 { vec![false; labels.len()] } else { matched.iter().map(|&m| !m).collect() }
+            }
+            None => vec![false; labels.len()],
         };
         if !hide.is_empty() && hide.iter().all(|h| *h) {
             hide.iter_mut().for_each(|h| *h = false);
@@ -883,6 +1114,8 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
         }
         if axis.is_some() {
             let collapsed: &[String] = af.map(|f| f.collapsed_items.as_slice()).unwrap_or(&[]);
+            let collapsed_mask =
+                if collapsed.is_empty() { vec![false; labels.len()] } else { resolve_field_matches(ctx.wb, f, &labels, collapsed, ctx.format_value) };
             let captions: &[(String, String)] = af.map(|f| f.item_captions.as_slice()).unwrap_or(&[]);
             // Items in display order: the manual order (unlisted items after), else cache order.
             let order = written_order(&labels, af);
@@ -898,7 +1131,7 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
                 if hide.get(x).copied().unwrap_or(false) {
                     s.push_str(" h=\"1\"");
                 }
-                if collapsed.iter().any(|cl| same(cl, l)) {
+                if collapsed_mask.get(x).copied().unwrap_or(false) {
                     s.push_str(" sd=\"0\"");
                 }
                 s.push_str("/>");
@@ -955,17 +1188,16 @@ fn write_auto_sort_scope(s: &mut String, pt: &PivotTable, c: &Cache, vals: &[(us
     s.push_str("</references></pivotArea></autoSortScope>");
 }
 
-fn write_page_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>) {
+fn write_page_fields(s: &mut String, layout: &PivotTableLayout<'_>, field_matches: &HashMap<usize, Vec<bool>>) {
     if layout.page_fields.is_empty() {
         return;
     }
     let _ = write!(s, "<pageFields count=\"{}\">", layout.page_fields.len());
-    for (i, filter) in &layout.page_fields {
+    for (i, _) in &layout.page_fields {
         let _ = write!(s, "<pageField fld=\"{i}\"");
-        if let Some(selected) = &filter.selected
-            && selected.len() == 1
-            && let Some(one) = selected.first()
-            && let Some(x) = c.fields.get(*i).and_then(|field| field.item_labels().iter().position(|label| same(label, one)))
+        if let Some(matched) = field_matches.get(i)
+            && matched.iter().filter(|&&m| m).count() == 1
+            && let Some(x) = matched.iter().position(|&m| m)
         {
             let _ = write!(s, " item=\"{x}\"");
         }

@@ -217,9 +217,27 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Resul
     write::write_xlsx_named(wb, kind, Some(book_name))
 }
 
-/// Writes a workbook with caller-supplied function facts and file name.
-pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: &str, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
-    write::write_xlsx_named_with(wb, kind, Some(book_name), functions)
+/// Display-formatter callback for PivotTable cache items (supplied by the engine via `gridcraft-numfmt`).
+pub type ValueFormatter<'a> = &'a dyn Fn(&gridcraft_core::Value, &str, &Workbook) -> String;
+
+/// Caller-supplied facts for [`write_xlsx_named_with`]: worksheet [`FunctionInfo`] and an
+/// optional cell display formatter (supplied by the engine via `gridcraft-numfmt`) so PivotTable
+/// filter and collapsed labels match cache items identically to the engine.
+#[derive(Clone, Copy, Default)]
+pub struct WriteOptions<'a> {
+    pub functions: FunctionInfo,
+    pub format_value: Option<ValueFormatter<'a>>,
+}
+
+impl<'a> From<FunctionInfo> for WriteOptions<'a> {
+    fn from(functions: FunctionInfo) -> Self {
+        Self { functions, format_value: None }
+    }
+}
+
+/// Writes a workbook with caller-supplied options (function facts and/or value formatter) and file name.
+pub fn write_xlsx_named_with<'a>(wb: &Workbook, kind: XlsxKind, book_name: &str, opts: impl Into<WriteOptions<'a>>) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named_with(wb, kind, Some(book_name), opts.into())
 }
 
 /// CSV import options.
