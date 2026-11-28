@@ -889,3 +889,37 @@ fn xls_duplicate_sheet_names_are_refused() {
     assert!(err.contains("already taken"), "{err}");
     assert!(crate::xls::read_xls_budgeted(&file("One", "Two"), Default::default(), Default::default()).is_ok());
 }
+
+#[test]
+fn xls_print_area_survives_a_comma_in_the_sheet_name() {
+    let name = "Quarter, East";
+    // Print_Area (built-in 6) on the only sheet: 'Quarter, East'!$A$1:$B$3.
+    let xf = |ifmt: u16| rec(0x00E0, &cat(&[&u16s(&[0, ifmt, 0]), &[0; 14]]));
+    let rgce = cat(&[&[0x3B], &0u16.to_le_bytes(), &u16s(&[0, 2, 0, 1])]);
+    let area = rec(0x0018, &cat(&[&u16s(&[0x0020]), &[0, 1], &u16s(&[rgce.len() as u16, 0, 1]), &[0; 4], &[0, 6], &rgce]));
+    let boundsheet = |pos: u32| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |pos: u32| {
+        cat(&[
+            &bof(0x0005),
+            &rec(0x0022, &u16s(&[0])),
+            &xf(0),
+            &boundsheet(pos),
+            // An internal SupBook and one sheet link, so the area's ixti 0 resolves.
+            &rec(0x01AE, &u16s(&[1, 0x0401])),
+            &rec(0x0017, &cat(&[&u16s(&[1]), &u16s(&[0, 0, 0])])),
+            &area,
+            &eof(),
+        ])
+    };
+    let sheet = cat(&[&bof(0x0010), &rec(0x0203, &cat(&[&cell(0, 0, 0), &1.0f64.to_le_bytes()])), &eof()]);
+    let pos = globals(0).len() as u32;
+    let file = compound("Workbook", &cat(&[&globals(pos), &sheet]));
+
+    let (wb, report) = read_xls(&file).expect("the BIFF8 fixture must parse");
+    assert_eq!(wb.sheets.len(), 1, "{report:?}");
+    assert_eq!(v(&wb, 0, "A1"), Value::Number(1.0), "the sheet parsed, so the next failure is the area");
+    assert_eq!(wb.sheets[0].name, name);
+    assert_eq!(wb.sheets[0].print.print_area, RangeRef::parse("A1:B3"));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].print.print_area, RangeRef::parse("A1:B3"));
+}

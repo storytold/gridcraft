@@ -2549,3 +2549,16 @@ fn issue_778_full_workbook_import_save_reopen_roundtrip() {
     let out_chart = read_part("xl/charts/chart1.xml");
     assert!(out_chart.contains("<c:numCache>") && out_chart.contains("<c:v>42.5</c:v>"), "{out_chart}");
 }
+
+#[test]
+fn quoted_sheet_name_keeps_its_print_area() {
+    let mut wb = Workbook::new();
+    let sh = Arc::make_mut(&mut wb.sheets[0]);
+    sh.name = "Quarter, East".into();
+    sh.print.print_area = Some(rr("A1:B3"));
+    sh.print.title_rows = Some((0, 0));
+    sh.print.title_cols = Some((0, 0));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].print.print_area, Some(rr("A1:B3")));
+    assert_eq!((back.sheets[0].print.title_rows, back.sheets[0].print.title_cols), (Some((0, 0)), Some((0, 0))));
+}
