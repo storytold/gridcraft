@@ -40,7 +40,11 @@ pub(super) fn fill_dir(s: &mut Session, p: &Json, dr: i64, dc: i64) -> Result<Js
 
 pub(super) fn auto_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    let src = str_param(p, "source").and_then(RangeRef::parse).map_or_else(|| target_range(s, p), Ok)?;
+    let src = match p.get("source") {
+        Some(Json::String(source)) => RangeRef::parse(source).ok_or_else(|| bad("edit.autoFill", format!("invalid `source` range: `{source}`")))?,
+        Some(_) => return Err(bad("edit.autoFill", "`source` must be a string")),
+        None => target_range(s, p)?,
+    };
     let Some(target) = str_param(p, "target").and_then(RangeRef::parse) else { return Err(bad("edit.autoFill", "missing `target`")) };
     let mode = match str_param(p, "mode").unwrap_or("series") {
         "copy" => crate::fill::FillMode::Copy,
