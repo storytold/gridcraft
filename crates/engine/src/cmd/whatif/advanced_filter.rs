@@ -97,6 +97,28 @@ fn absolute_a1(r: RangeRef) -> String {
     format!("{}:{}", cell(r.start), cell(r.end))
 }
 
+/// The range each recorded extract covers, by sheet, read before a structural edit so
+/// [`forget_moved_extracts`] can tell which ones the edit moved.
+pub(crate) fn extract_ranges(wb: &gridcraft_model::Workbook) -> Vec<(Option<usize>, Option<RangeRef>)> {
+    wb.names
+        .iter()
+        .filter(|n| n.name.eq_ignore_ascii_case(EXTRACT_NAME))
+        .map(|n| (n.scope, RangeRef::parse(gridcraft_core::split_sheet(&n.formula).1)))
+        .collect()
+}
+
+/// Drops each recorded extract whose range an insert, delete or move changed. Rows inserted inside
+/// it, or moved into it, were not written by that extract, so a later copy must not clear them; with
+/// the record gone it clears nothing extra. A sheet rename keeps the range, so the record stays.
+pub(crate) fn forget_moved_extracts(wb: &mut gridcraft_model::Workbook, before: &[(Option<usize>, Option<RangeRef>)]) {
+    if before.is_empty() {
+        return;
+    }
+    wb.names.retain(|n| {
+        !n.name.eq_ignore_ascii_case(EXTRACT_NAME) || before.contains(&(n.scope, RangeRef::parse(gridcraft_core::split_sheet(&n.formula).1)))
+    });
+}
+
 /// The previous extract on sheet `dsi` to clear before writing a new one at `dest`: only one that
 /// starts at `dest` and stays off the list and the criteria. Its size is not compared with the
 /// current list, since the list may have been made shorter or narrower since that extract was written.

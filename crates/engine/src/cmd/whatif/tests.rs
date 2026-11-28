@@ -418,6 +418,61 @@ fn advanced_filter_stale_clear_leaves_criteria_inside_the_recorded_range() {
 }
 
 #[test]
+fn advanced_filter_stale_clear_skips_an_extract_rows_were_inserted_into() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F3", "input": "Mine"})).unwrap();
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(n(&s, "G2"), 101.0);
+    assert_eq!(v(&s, "F3"), Value::from("Mine"), "a row typed into after an insert is not the extract's");
+}
+
+#[test]
+fn advanced_filter_stale_clear_skips_an_extract_rows_were_deleted_from() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("home.deleteRows", json!({"rows": "4:4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F4", "input": "Mine"})).unwrap();
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(v(&s, "F4"), Value::from("Mine"));
+}
+
+#[test]
+fn advanced_filter_stale_clear_stays_off_after_an_insert_then_a_delete() {
+    // The delete brings the recorded range back to its old size, but row 3 is still the inserted one.
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F3", "input": "Mine"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "5:5"})).unwrap();
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(v(&s, "F3"), Value::from("Mine"));
+}
+
+#[test]
+fn advanced_filter_stale_clear_survives_a_sheet_rename_and_an_insert_below() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "9:9"})).unwrap();
+    copy_list_to_f1(&mut s, "A1:B2");
+    for a in ["F3", "G3", "F4", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a row of the earlier extract");
+    }
+}
+
+#[test]
+fn advanced_filter_undoing_an_insert_brings_the_recorded_extract_back() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("home.insertRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(v(&s, "G4"), Value::Empty);
+}
+
+#[test]
 fn advanced_filter_stale_clear_keeps_cells_no_extract_wrote() {
     let mut s = stale_extract_fixture();
     extract_to_f1(&mut s);

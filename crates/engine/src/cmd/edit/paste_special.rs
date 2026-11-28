@@ -615,6 +615,7 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
             }
         }
     }
+    let extracts = crate::cmd::whatif::extract_ranges(wb);
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
@@ -622,6 +623,7 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
             n.formula = gridcraft_formula::print(&new);
         }
     }
+    crate::cmd::whatif::forget_moved_extracts(wb, &extracts);
     rewrite_cell_links(wb, |host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)));
     rewrite_python_refs(wb, &|host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)))
 }

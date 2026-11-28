@@ -23,6 +23,7 @@ mod scenarios;
 use advanced_filter::advanced_filter;
 #[cfg(test)]
 pub(crate) use advanced_filter::criterion_matches;
+pub(crate) use advanced_filter::{extract_ranges, forget_moved_extracts};
 use consolidate::consolidate;
 #[cfg(test)]
 pub(crate) use scenarios::{SCENARIO_NAME, load_scenarios};

@@ -334,7 +334,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-15 | minor | Advanced Filter: a shorter repeat of a copy-to extract clears the rows the earlier extract wrote below it, recorded as the sheet's `_xlnm.Extract` name so it holds across undo and XLSX; other cells stay as #1031 left them (#4178); no score change |
+| 2026-11-15 | minor | Advanced Filter: a shorter repeat of a copy-to extract clears the rows or columns the earlier extract wrote, recorded as the sheet's `_xlnm.Extract` name so it holds across undo and XLSX; an insert, delete or move that changes that range drops the record, so cells it brought in are never cleared; other cells stay as #1031 left them (#4178); no score change |
 | 2026-11-15 | minor | Performance: formula entry 465 → 420 ms and XLSX save 540 → 488 ms on the 100k-row benchmark (#2654); Sandbox refuses fcntl's asynchronous notification and notifying socket ioctls on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
