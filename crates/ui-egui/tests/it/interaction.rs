@@ -1812,3 +1812,27 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }
+
+#[test]
+fn deleting_the_last_name_selects_the_previous_name() {
+    let mut session = blank();
+    for name in ["Price", "Total"] {
+        session.execute("formulas.defineName", json!({"name": name, "refersTo": "=Sheet1!$A$1"})).unwrap();
+    }
+    let mut h = harness(session);
+    h.state_mut().open_dialog("nameManager", json!({}));
+    h.run_steps(4);
+    h.get_by_label("Total").click();
+    h.run_steps(2);
+    // The ribbon and dialog share the Delete label; the dialog action comes last.
+    h.get_all_by_label("Delete").last().expect("Delete name action").click();
+    h.run_steps(4);
+    let names: Vec<_> = h.state().session.active().unwrap().wb.names.iter().map(|name| name.name.clone()).collect();
+    assert_eq!(names, ["Price"]);
+    assert_eq!(h.state().dialog.as_ref().unwrap().list_index, 0);
+    h.get_by_label("Edit…").click();
+    h.run_steps(3);
+    let dialog = h.state().dialog.as_ref().unwrap();
+    assert_eq!(dialog.title, "Edit Name");
+    assert_eq!(dialog.values.get("name"), Some(&json!("Price")));
+}
