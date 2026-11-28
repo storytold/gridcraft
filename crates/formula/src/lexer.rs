@@ -118,19 +118,40 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    let error = CellError::ALL
+    let mut found = CellError::ALL
         .iter()
         .copied()
         .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
-        .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
-    let end = i + error.as_str().chars().count();
+        .map(|error| (error, error.as_str().chars().count()));
+    // The language's own spelling (`#NV`, `#Н/Д`); the longer match wins.
+    if let Some((error, len)) = locale.error_prefix(rest)
+        && found.is_none_or(|(_, english)| len > english)
+    {
+        found = Some((error, len));
+    }
+    let (error, len) = found.ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
+    let end = i + len;
     emit(src, chars, out, Tok::Error(error), start, end);
     Ok(end)
 }
 
-fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn structured_ref(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let mut depth = 0;
     let mut j = i;
     loop {
@@ -151,7 +172,8 @@ fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, ou
             Some(_) => j += 1,
         }
     }
-    let inner = src.get(byte_pos(src, chars, i + 1)..byte_pos(src, chars, j.saturating_sub(1))).unwrap_or("").to_string();
+    let inner = src.get(byte_pos(src, chars, i + 1)..byte_pos(src, chars, j.saturating_sub(1))).unwrap_or("");
+    let inner = if locale == crate::FormulaLocale::En { inner.to_string() } else { locale.struct_to_canonical(inner) };
     emit(src, chars, out, Tok::Struct(inner), start, j);
     Ok(j)
 }
@@ -293,10 +315,10 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             '#' => {
-                i = error_literal(src, &chars, i, start, &mut out)?;
+                i = error_literal(src, &chars, locale, i, start, &mut out)?;
             }
             '[' => {
-                i = structured_ref(src, &chars, i, start, &mut out)?;
+                i = structured_ref(src, &chars, locale, i, start, &mut out)?;
             }
             '.' if ch(i + 1) == Some(':') => {
                 // Trim reference `A1.:E10` / `A1.:.E10` (the word before stopped at the dot).
