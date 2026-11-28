@@ -211,6 +211,20 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// The fields name their columns by header value (`Region`, also while Show Formulas is on).
+    /// A PivotTable saved by an older GridCraft has no such entry: it named a column by its header
+    /// as the cell showed it then (`="Region"`). The engine renames those fields once, as the
+    /// workbook opens or as soon as its source can be read, and sets this. Written only when set, so older versions still read the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names_from_values: bool,
+}
+
+impl PivotTable {
+    /// The row or column field on source column `name`: a page field on the same column is
+    /// shown by it (not above the report) and takes its date grouping.
+    pub fn axis_field(&self, name: &str) -> Option<&PivotField> {
+        self.rows.iter().chain(&self.columns).find(|f| f.source_col.eq_ignore_ascii_case(name))
+    }
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -391,6 +405,7 @@ impl Default for PivotTable {
             data_index: PivotLookup::default(),
             values_on_rows: false,
             values_position: None,
+            names_from_values: true,
         }
     }
 }

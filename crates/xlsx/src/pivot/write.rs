@@ -65,6 +65,9 @@ struct Group {
 
 struct CField {
     name: String,
+    /// A database field's header as its raw value (`2026` for one shown as `2026.0`), which a
+    /// field read from a file may name it by; empty for other fields.
+    raw: String,
     /// Column offset in the source (database fields only).
     col: Option<u32>,
     stats: Stats,
@@ -264,33 +267,46 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
     format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
 }
 
-fn header_text(v: &Value) -> String {
-    match v {
-        Value::Empty => String::new(),
-        v => label(v).trim().to_string(),
-    }
+/// The cache's database field a pivot field names: by its name, else by its header's raw value,
+/// as an older GridCraft named a formatted header in the files it wrote.
+fn db_field(fields: &[CField], name: &str) -> Option<usize> {
+    db_named(fields, name).or_else(|| db_raw(fields, name))
 }
 
-fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
+/// The database field named `name`.
+fn db_named(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && same(&f.name, name))
+}
+
+/// The database field whose header's raw value is `name`.
+fn db_raw(fields: &[CField], name: &str) -> Option<usize> {
+    fields.iter().position(|f| f.col.is_some() && !f.raw.is_empty() && same(&f.raw, name.trim()))
+}
+
+/// Whether two pivot fields' names are one database field: the same text, or names that find
+/// the same field (`2026` and `2026.0`).
+fn same_db_field(fields: &[CField], a: &str, b: &str) -> bool {
+    same(a, b) || db_field(fields, a).is_some_and(|i| db_field(fields, b) == Some(i))
+}
+
+/// The cache's fields: the source's columns, named as the engine names them
+/// ([`gridcraft_model::pivot_source::headers`]); an empty header, which the engine refuses, is
+/// written as `ColumnN`.
+fn cache_fields(wb: &Workbook, si: usize, r: RangeRef) -> Vec<CField> {
+    use gridcraft_model::pivot_source::{header_texts, unique_names};
+    let texts = header_texts(wb, si, r).unwrap_or_default();
+    let texts = texts.into_iter().enumerate().map(|(k, t)| if t.trim().is_empty() { format!("Column{}", k + 1) } else { t });
+    let names = unique_names(texts).unwrap_or_default();
+    let sh = wb.sheet(si);
     let mut fields: Vec<CField> = Vec::new();
-    // Lower-case names taken, and the next suffix for each header (linear for repeated headers).
-    let mut taken = std::collections::HashSet::new();
-    let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    for (k, c) in (r.start.col..=r.end.col).enumerate() {
-        let mut h = header_text(&sh.value(CellRef::new(r.start.row, c)).scalar());
-        if h.is_empty() {
-            h = format!("Column{}", k + 1);
-        }
-        let mut n = h.clone();
-        let mut i = next_suffix.get(&h.to_lowercase()).copied().unwrap_or(2);
-        while taken.contains(&n.to_lowercase()) {
-            n = format!("{h}{i}");
-            i += 1;
-        }
-        next_suffix.insert(h.to_lowercase(), i);
-        taken.insert(n.to_lowercase());
+    for (k, n) in names.into_iter().enumerate() {
+        let raw = match sh.map(|sh| sh.value(CellRef::new(r.start.row, r.start.col + k as u32)).scalar()) {
+            None | Some(Value::Empty) => String::new(),
+            Some(v) => label(&v).trim().to_string(),
+        };
         fields.push(CField {
             name: n,
+            raw,
             col: Some(k as u32),
             stats: Stats::default(),
             items: vec![],
@@ -304,7 +320,7 @@ fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
 }
 
 fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_system: DateSystem) {
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find = db_field;
     let groupable = |f: &CField| {
         let s = &f.stats;
         s.number
@@ -363,6 +379,7 @@ fn group_cache_fields(fields: &mut Vec<CField>, axis: &[&PivotField], date_syste
             }
             fields.push(CField {
                 name: n,
+                raw: String::new(),
                 col: None,
                 stats: Stats::default(),
                 items: vec![],
@@ -382,8 +399,8 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         return None;
     }
     let sh = wb.sheet(si)?;
-    let mut fields = cache_fields(sh, r);
-    let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let mut fields = cache_fields(wb, si, r);
+    let find = db_field;
 
     // Records (rows that aren't entirely blank), read once.
     let mut rows: Vec<u32> = Vec::new();
@@ -428,7 +445,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     }
     // Page fields (filters not on an axis) need items too.
     for f in &pt.filters {
-        let on_axis = axis.iter().any(|a| same(&a.source_col, &f.source_col));
+        let on_axis = axis.iter().any(|a| same_db_field(&fields, &a.source_col, &f.source_col));
         if !on_axis
             && let Some(i) = find(&fields, &f.source_col)
             && let Some(cf) = fields.get_mut(i)
@@ -490,6 +507,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         }
         fields.push(CField {
             name: cf.name.clone(),
+            raw: String::new(),
             col: None,
             stats: Stats::default(),
             items: vec![],
@@ -659,14 +677,17 @@ struct PivotTableLayout<'a> {
 }
 
 fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
-    let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
+    let find_db = |name: &str| db_field(&c.fields, name);
     let row_fields: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let column_fields: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
     // Filters: on an axis field → hidden items there; otherwise a page field.
     let mut hidden: HashMap<usize, &PivotFilter> = HashMap::new();
     let mut pages: Vec<(usize, &PivotFilter)> = Vec::new();
     for f in &pt.filters {
-        let axis_pos = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col));
+        let axes = || pt.rows.iter().chain(pt.columns.iter());
+        let axis_pos = axes()
+            .position(|a| same(&a.source_col, &f.source_col))
+            .or_else(|| axes().position(|a| same_db_field(&c.fields, &a.source_col, &f.source_col)));
         match axis_pos {
             Some(p) => {
                 if let Some(Some(i)) = c.axis_map.get(p) {
@@ -685,7 +706,15 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     }
     let find_calc = |name: &str| c.fields.iter().position(|f| f.formula.is_some() && same(&f.name, name));
     let values: Vec<(usize, &PivotValue)> =
-        pt.values.iter().filter_map(|v| find_db(&v.source_col).or_else(|| find_calc(&v.source_col)).map(|i| (i, v))).collect();
+        // As the engine reads a value: a column by its name, then a calculated field, and only
+        // then a column by its header's raw value.
+        pt.values
+            .iter()
+            .filter_map(|v| {
+                let n = &v.source_col;
+                db_named(&c.fields, n).or_else(|| find_calc(n)).or_else(|| db_raw(&c.fields, n)).map(|i| (i, v))
+            })
+            .collect();
     let layout = PivotTableLayout { row_fields, column_fields, hidden_fields: hidden, page_fields: pages, values };
 
     let compact = pt.layout == PivotLayout::Compact;

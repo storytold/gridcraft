@@ -123,7 +123,12 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 /// The text a cell shows (General up to the 11-character cell width; the grid narrows General
 /// further to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    if sheet.show_formulas
+    cell_text_with(wb, sheet, c, sheet.show_formulas)
+}
+
+/// [`cell_text`] with Show Formulas taken as `formulas`, whatever the sheet's setting is now.
+pub fn cell_text_with(wb: &Workbook, sheet: &Sheet, c: CellRef, formulas: bool) -> String {
+    if formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
@@ -140,7 +145,7 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// integer below 1e16 exactly). Excel writes the cell display.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    with_fill_space(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
+    format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system).plain()
 }
 
 /// A cell's value through its number format, General at the 11-character cell width.
@@ -153,21 +158,7 @@ fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// 11-character cell width). Print takes the code from the cell's effective look, which a
 /// conditional format can override.
 pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
-    with_fill_space(format(v, code, wb))
-}
-
-/// The formatted text with a single space where a `*x` repeat fill would expand.
-fn with_fill_space(f: Formatted) -> String {
-    match f.fill {
-        Some((_, pos)) => {
-            let mut t = f.text;
-            if pos <= t.len() && t.is_char_boundary(pos) {
-                t.insert(pos, ' ');
-            }
-            t
-        }
-        None => f.text,
-    }
+    format(v, code, wb).plain()
 }
 
 /// Tab-separated text of a range, as the system clipboard gets it.

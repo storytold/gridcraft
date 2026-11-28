@@ -1,10 +1,12 @@
-use super::items::{Acc, ByValue, FieldItems, build_tree, collect_siblings, date_flags, is_collapsed, item_label};
+use gridcraft_model::pivot_source::{ItemFormat, item_label};
+
+use super::items::{Acc, ByValue, FieldItems, build_tree, collect_siblings, date_flags, is_collapsed, item_format};
 use super::output::{
     AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
 };
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup,
-    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -16,7 +18,7 @@ pub const NOT_A_VALUE_CELL: &str = "select a value cell in a PivotTable";
 /// that cell holds no value (a label, a header, a blank). An error, for any cell, when the report
 /// on the sheet is no longer what the source computes: the cell's records would be another cell's.
 pub fn detail_records(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, row: u32, col: u32) -> Result<Option<(Source, Vec<usize>)>, String> {
-    let src = read_source(wb, &pt.source, pivot_sheet)?;
+    let src = super::read_source(wb, &pt.source, pivot_sheet)?;
     let mut probe = Probe { at: Some((row as usize, col as usize)), hit: None, paths: Some(Vec::new()), cells: None };
     let out = compute_from(wb, pt, &src, Some(&mut probe))?;
     // Checked first: in a stale report even a cell that computes as a label may show a value.
@@ -31,7 +33,7 @@ pub fn detail_records(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, row: u
 /// records: its value, subtotal and grand total cells, from one computation of the report. The
 /// same errors as [`detail_records`].
 pub fn detail_cells(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<HashSet<(u32, u32)>, String> {
-    let src = read_source(wb, &pt.source, pivot_sheet)?;
+    let src = super::read_source(wb, &pt.source, pivot_sheet)?;
     let mut probe = Probe { at: None, hit: None, paths: None, cells: Some(HashSet::new()) };
     let out = compute_from(wb, pt, &src, Some(&mut probe))?;
     check_current(wb, pt, pivot_sheet, &out)?;
@@ -78,11 +80,12 @@ struct AggregateInput<'a> {
     vals: &'a [(ValSrc, &'a PivotValue)],
     extra: &'a [usize],
     filters: &'a [(usize, &'a PivotFilter, PivotDateGroup, bool)],
-    filter_fmts: &'a [String],
+    /// Each filter's, row field's and column field's item format, parsed once for the report.
+    filter_fmts: &'a [ItemFormat],
     /// Each filter's selected labels, ASCII-lowercased, so a record's test is one probe.
     filter_sets: &'a [Option<HashSet<String>>],
-    row_fmts: &'a [String],
-    col_fmts: &'a [String],
+    row_fmts: &'a [ItemFormat],
+    col_fmts: &'a [ItemFormat],
     row_dates: &'a [Vec<bool>],
     col_dates: &'a [Vec<bool>],
     empty: bool,
@@ -111,7 +114,7 @@ fn aggregate_record(
 ) -> Result<(), String> {
     for (((c, _, group, _), fmt), selected) in input.filters.iter().zip(input.filter_fmts).zip(input.filter_sets) {
         if let Some(selected) = selected {
-            let label = item_label(input.wb, rec.get(*c).unwrap_or(&Value::Empty), *group, fmt);
+            let label = item_label(rec.get(*c).unwrap_or(&Value::Empty), *group, fmt, input.wb.date_system);
             if !selected.contains(&label.to_ascii_lowercase()) {
                 return Ok(());
             }
@@ -490,14 +493,12 @@ fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, con
 type ReportFilter<'a> = (usize, &'a PivotFilter, PivotDateGroup, bool);
 
 fn report_filters<'a>(pt: &'a PivotTable, src: &Source) -> (Vec<ReportFilter<'a>>, Vec<ReportFilter<'a>>) {
-    let axis_group =
-        |name: &str| pt.rows.iter().chain(pt.columns.iter()).find(|field| field.source_col.eq_ignore_ascii_case(name)).map(|field| field.date_group);
     let filters: Vec<_> = pt
         .filters
         .iter()
         .filter_map(|filter| {
             let column = src.col(&filter.source_col)?;
-            let group = axis_group(&filter.source_col);
+            let group = pt.axis_field(&filter.source_col).map(|field| field.date_group);
             Some((column, filter, group.unwrap_or_default(), group.is_none()))
         })
         .collect();
@@ -580,12 +581,14 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let row_levels = rows.len() + usize::from(on_rows);
 
     // ---- aggregate
-    let filter_fmts: Vec<String> = filters.iter().map(|f| fmt_of(f.0)).collect();
+    let filter_fmts: Vec<ItemFormat> = filters.iter().map(|f| item_format(&fmt_of(f.0))).collect();
     let filter_sets: Vec<Option<HashSet<String>>> =
         filters.iter().map(|(_, field, _, _)| field.selected.as_ref().map(|s| s.iter().map(|v| v.to_ascii_lowercase()).collect())).collect();
     let field_fmt = |c: usize, f: &PivotField| f.number_format.clone().unwrap_or_else(|| fmt_of(c));
     let row_fmts: Vec<String> = rows.iter().map(|(c, f)| field_fmt(*c, f)).collect();
     let col_fmts: Vec<String> = cols.iter().map(|(c, f)| field_fmt(*c, f)).collect();
+    let row_item_fmts: Vec<ItemFormat> = row_fmts.iter().map(|f| item_format(f)).collect();
+    let col_item_fmts: Vec<ItemFormat> = col_fmts.iter().map(|f| item_format(f)).collect();
     let row_dates: Vec<Vec<bool>> = rows.iter().map(|(c, f)| date_flags(wb, src, *c, f.date_group)).collect();
     let col_dates: Vec<Vec<bool>> = cols.iter().map(|(c, f)| date_flags(wb, src, *c, f.date_group)).collect();
     let aggregate = aggregate_source(
@@ -600,8 +603,8 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             filters: &filters,
             filter_fmts: &filter_fmts,
             filter_sets: &filter_sets,
-            row_fmts: &row_fmts,
-            col_fmts: &col_fmts,
+            row_fmts: &row_item_fmts,
+            col_fmts: &col_item_fmts,
             row_dates: &row_dates,
             col_dates: &col_dates,
             empty,

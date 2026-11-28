@@ -398,6 +398,37 @@ fn wall_clock() -> std::time::Duration {
     std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
 }
 
+/// What every recalculation ends with before its workbook is published (an edit, Calculate Now,
+/// opening a book). PivotTables an older GridCraft saved take today's field names once their
+/// source can be read, and `again` recalculates what reads a report renamed (given a cell of
+/// each). Last, each linked control takes its cell's final value.
+///
+/// That recalculation can reach another older PivotTable's headers: one whose source it made
+/// readable, or one renamed from values it has since changed, which is put back (and what
+/// read it is recalculated with the names it has again). So renaming
+/// repeats until a pass renames nothing, at most once more than there are PivotTables, which
+/// a chain of reports reading each other needs; a header that reads its own report could
+/// otherwise go on changing.
+pub(crate) fn finish_recalc(wb: &mut Workbook, mut again: impl FnMut(&mut Workbook, &[Key])) {
+    let mut passes = wb.sheets.iter().map(|sh| sh.pivots.len()).sum::<usize>() + 1;
+    loop {
+        let renamed = crate::pivot::migrate_staged(wb);
+        if renamed.is_empty() {
+            break;
+        }
+        again(wb, &crate::pivot::reports(&renamed));
+        passes -= 1;
+        if passes == 0 {
+            break;
+        }
+        let back = crate::pivot::undo_stale(wb, renamed);
+        if !back.is_empty() {
+            again(wb, &back);
+        }
+    }
+    controls::sync_linked_values(wb);
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
     // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
     // reads the wall clock without the (disallowed) `now`.
@@ -449,7 +480,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
-    controls::sync_linked_values(&mut wb);
+    finish_recalc(&mut wb, |wb, renamed| d.calc.cells_changed(wb, renamed));
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }

@@ -1009,6 +1009,8 @@ fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let mut wb = (*d.wb).clone();
     d.calc.recalc_all(&mut wb);
+    // Again in full: under manual calculation only that reaches what reads a renamed report.
+    crate::cmd::finish_recalc(&mut wb, |wb, _| d.calc.recalc_all(wb));
     d.wb = std::sync::Arc::new(wb);
     Ok(json!({"cells": d.calc.last_recalc_cells}))
 }

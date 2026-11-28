@@ -11,6 +11,7 @@ pub mod features;
 pub mod macros;
 pub mod paper;
 pub mod password;
+pub mod pivot_source;
 pub mod preserved;
 pub mod python;
 pub mod sheet;

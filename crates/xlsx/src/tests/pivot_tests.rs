@@ -138,6 +138,7 @@ fn workbook() -> Workbook {
         data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
+        names_from_values: true,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -201,6 +202,7 @@ fn workbook() -> Workbook {
         style: "PivotStyleDark3".into(),
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
+        names_from_values: true,
         ..PivotTable::default()
     };
     // Pivot 3: defaults, defined-name source, compact.
