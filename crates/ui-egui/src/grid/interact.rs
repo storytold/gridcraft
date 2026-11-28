@@ -4,7 +4,7 @@ use super::editor::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
 use super::menus::set_fill_tag;
-use super::selection::{add_mode_base, select_ranges};
+use super::selection::{SelectMode, add_mode_base, select_ranges};
 use super::tables::{is_filter_button, table_headings};
 use super::{
     CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, SelectionMode, Sheet, SheetApp, Stroke, Tokens,
@@ -380,10 +380,30 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
-        app.grid.header_drag_base = add_mode_base(app);
+        let active = CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c);
         note_selecting_press(app);
-        select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
-        app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
+        let already = mods.command && !mods.shift && sel.ranges.iter().any(|r| r.contains_range(&range));
+        if already && resp.drag_started() && !input.position.is_some_and(|cur| pointer_left_range(geo, sh, range, cur)) {
+            app.grid.drag = Drag::CtrlPending { clicked: range, active };
+            return;
+        }
+        app.grid.header_drag_base = header_drag_base_for(app, range, mods.command, mods.shift);
+        let mode = if !mods.command {
+            SelectMode::Replace
+        } else if mods.shift || (already && resp.drag_started()) {
+            SelectMode::Add
+        } else {
+            SelectMode::Toggle
+        };
+        if select_ranges(app, range, mode, active) {
+            let anchor = if mods.shift { sel.anchor.col } else { c };
+            app.grid.drag = Drag::Cols(anchor);
+            if resp.drag_started()
+                && let Some(cur) = input.position
+            {
+                extend_header_drag(app, geo, sh, active, anchor, true, cur);
+            }
+        }
     }
 }
 
@@ -403,10 +423,30 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
-        app.grid.header_drag_base = add_mode_base(app);
+        let active = CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0));
         note_selecting_press(app);
-        select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
-        app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
+        let already = mods.command && !mods.shift && sel.ranges.iter().any(|x| x.contains_range(&range));
+        if already && input.response.drag_started() && !input.position.is_some_and(|cur| pointer_left_range(geo, sh, range, cur)) {
+            app.grid.drag = Drag::CtrlPending { clicked: range, active };
+            return;
+        }
+        app.grid.header_drag_base = header_drag_base_for(app, range, mods.command, mods.shift);
+        let mode = if !mods.command {
+            SelectMode::Replace
+        } else if mods.shift || (already && input.response.drag_started()) {
+            SelectMode::Add
+        } else {
+            SelectMode::Toggle
+        };
+        if select_ranges(app, range, mode, active) {
+            let anchor = if mods.shift { sel.anchor.row } else { r };
+            app.grid.drag = Drag::Rows(anchor);
+            if input.response.drag_started()
+                && let Some(cur) = input.position
+            {
+                extend_header_drag(app, geo, sh, active, anchor, false, cur);
+            }
+        }
     }
 }
 
@@ -537,7 +577,9 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     if !ref_box_picks && handle_cell_double_click(app, input, c, now) {
         return;
     }
-    app.grid.last_click = Some((c, now));
+    // Modified clicks (Ctrl/Shift or Extend/Add mode) must not seed double-click history, or a
+    // plain click on the same cell within 450 ms would enter edit mode on whatever cell became active.
+    app.grid.last_click = (!mods.command && !mods.shift && !sel_mods.command && !sel_mods.shift).then_some((c, now));
     if sel_mods.shift {
         note_selecting_press(app);
         app.grid.header_drag_base = add_mode_base(app);
@@ -568,7 +610,16 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             follow_link(app, &h.target);
         } else {
             note_selecting_press(app);
-            select_ranges(app, RangeRef::cell(c), true, c);
+            let clicked = sh.merge_at(c).unwrap_or(RangeRef::cell(c));
+            let already = sel.ranges.iter().any(|r| r.contains_range(&clicked));
+            if already && resp.drag_started() && !pos.is_some_and(|cur| pointer_left_range(geo, sh, clicked, cur)) {
+                app.grid.drag = Drag::CtrlPending { clicked, active: c };
+                return;
+            }
+            let mode = if already && resp.drag_started() { SelectMode::Add } else { SelectMode::Toggle };
+            if !select_ranges(app, RangeRef::cell(c), mode, c) {
+                return;
+            }
         }
     } else {
         note_selecting_press(app);
@@ -607,11 +658,14 @@ fn note_selecting_press(app: &mut SheetApp) {
 }
 
 fn handle_cell_double_click(app: &mut SheetApp, input: &InteractionInput<'_>, c: CellRef, now: f64) -> bool {
-    let (sh, mods) = (input.sheet, input.modifiers);
+    let (sh, mods, sel_mods) = (input.sheet, input.modifiers, input.selection_modifiers);
     if let Some((last, at)) = app.grid.last_click
         && last == c
         && now - at < 450.0
         && !mods.shift
+        && !mods.command
+        && !sel_mods.shift
+        && !sel_mods.command
     {
         app.grid.last_click = None;
         // A PivotTable's value cell shows its source records on a new sheet (Excel's Show
@@ -749,18 +803,25 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 select_to_pointer(app, geo, sh, wb, p);
                 scroll_by(app, auto);
             }
+            Drag::CtrlPending { clicked, active } => {
+                if pointer_left_range(geo, sh, clicked, p) {
+                    begin_ctrl_pending_drag(app, geo, sh, wb, clicked, active, p);
+                    let delta = if clicked.is_full_cols() {
+                        vec2(auto.x, 0.0)
+                    } else if clicked.is_full_rows() {
+                        vec2(0.0, auto.y)
+                    } else {
+                        auto
+                    };
+                    scroll_by(app, delta);
+                }
+            }
             Drag::Rows(anchor) => {
-                let r = geo.row_at(sh, p.y);
-                let range = RangeRef::rows(anchor.min(r), anchor.max(r)).a1();
-                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
-                let _ = app.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
+                extend_header_drag(app, geo, sh, sel.active, anchor, false, p);
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
-                let c = geo.col_at(sh, p.x);
-                let range = RangeRef::cols(anchor.min(c), anchor.max(c)).a1();
-                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
-                let _ = app.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
+                extend_header_drag(app, geo, sh, sel.active, anchor, true, p);
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
@@ -832,8 +893,36 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 }
                 format_painter_apply(app);
             }
+            Drag::CtrlPending { clicked, active } => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                    && pointer_left_range(geo, sh, clicked, p)
+                {
+                    begin_ctrl_pending_drag(app, geo, sh, wb, clicked, active, p);
+                    app.grid.drag = Drag::None;
+                    app.grid.drag_select = false;
+                    format_painter_apply(app);
+                } else if !crate::framework::consume_escape(&ctx) {
+                    let _ = select_ranges(app, clicked, SelectMode::Toggle, active);
+                }
+            }
             // Whole rows or columns clicked or dragged over by their headers.
-            Drag::Rows(_) | Drag::Cols(_) => format_painter_apply(app),
+            Drag::Rows(anchor) => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    extend_header_drag(app, geo, sh, sel.active, anchor, false, p);
+                }
+                format_painter_apply(app);
+            }
+            Drag::Cols(anchor) => {
+                if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    extend_header_drag(app, geo, sh, sel.active, anchor, true, p);
+                }
+                format_painter_apply(app);
+            }
             // The release may be the first frame to report the pointer's last position.
             drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
                 if resp.drag_stopped()
@@ -1018,6 +1107,68 @@ fn point_header_to(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, dra
     ed.insert_ref(&reference);
     ed.point_cell = Some(pointer);
     ed.point_anchor = Some((wb.active_sheet(), opposite));
+}
+
+fn header_drag_base_for(app: &SheetApp, range: RangeRef, add: bool, shift: bool) -> Vec<String> {
+    let mut base = if add {
+        if app.grid.selection_mode == SelectionMode::Add {
+            add_mode_base(app)
+        } else {
+            app.session.active().map(|d| d.selection.ranges.iter().map(RangeRef::a1).collect()).unwrap_or_default()
+        }
+    } else {
+        Vec::new()
+    };
+    if add && !shift && base.last().is_some_and(|last| last == &range.a1()) {
+        base.pop();
+    }
+    base
+}
+
+fn extend_header_drag(app: &mut SheetApp, geo: &Geo, sh: &Sheet, active: CellRef, anchor: u32, cols: bool, p: Pos2) {
+    let range = if cols {
+        let c = geo.col_at(sh, p.x);
+        RangeRef::cols(anchor.min(c), anchor.max(c)).a1()
+    } else {
+        let r = geo.row_at(sh, p.y);
+        RangeRef::rows(anchor.min(r), anchor.max(r)).a1()
+    };
+    let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+    let _ = app.run("selection.set", json!({"range": ranges, "active": active.a1()}));
+}
+
+fn pointer_left_range(geo: &Geo, sh: &Sheet, clicked: RangeRef, p: Pos2) -> bool {
+    if clicked.is_full_cols() {
+        geo.col_at(sh, p.x) != clicked.start.col
+    } else if clicked.is_full_rows() {
+        geo.row_at(sh, p.y) != clicked.start.row
+    } else {
+        let cur = CellRef::new(
+            geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
+            geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
+        );
+        !clicked.contains(cur)
+    }
+}
+
+fn begin_ctrl_pending_drag(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, clicked: RangeRef, active: CellRef, p: Pos2) {
+    if clicked.is_full_cols() {
+        app.grid.header_drag_base = header_drag_base_for(app, clicked, true, false);
+        if select_ranges(app, clicked, SelectMode::Add, active) {
+            app.grid.drag = Drag::Cols(clicked.start.col);
+            extend_header_drag(app, geo, sh, active, clicked.start.col, true, p);
+        }
+    } else if clicked.is_full_rows() {
+        app.grid.header_drag_base = header_drag_base_for(app, clicked, true, false);
+        if select_ranges(app, clicked, SelectMode::Add, active) {
+            app.grid.drag = Drag::Rows(clicked.start.row);
+            extend_header_drag(app, geo, sh, active, clicked.start.row, false, p);
+        }
+    } else if select_ranges(app, clicked, SelectMode::Add, active) {
+        app.grid.drag = Drag::Select;
+        app.grid.drag_select = true;
+        select_to_pointer(app, geo, sh, wb, p);
+    }
 }
 
 fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p: Pos2) {

@@ -176,18 +176,270 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     }
 }
 
-/// The areas after a click: with `add` (Ctrl) the clicked area is added, or removed when it is already
-/// selected (unless it is the only one, so the selection never ends up empty).
-fn toggled_ranges(mut ranges: Vec<String>, clicked: String, add: bool) -> Vec<String> {
-    if !add {
-        return vec![clicked];
+/// `area` without `hole`: horizontal strips above and below `hole`, then what is left beside it.
+/// The pieces are disjoint and together with `area ∩ hole` partition `area`.
+fn subtract_range(area: RangeRef, hole: RangeRef) -> impl Iterator<Item = RangeRef> {
+    let mut parts = [None; 4];
+    let Some(cut) = area.intersection(&hole) else {
+        parts[0] = Some(area);
+        return parts.into_iter().flatten();
+    };
+    if cut.start.row > area.start.row {
+        parts[0] = Some(RangeRef::new(area.start, CellRef::new(cut.start.row - 1, area.end.col)));
     }
-    if ranges.len() > 1 && ranges.contains(&clicked) {
-        ranges.retain(|x| *x != clicked);
-    } else if !ranges.contains(&clicked) {
+    if cut.end.row < area.end.row {
+        parts[1] = Some(RangeRef::new(CellRef::new(cut.end.row + 1, area.start.col), area.end));
+    }
+    if cut.start.col > area.start.col {
+        parts[2] = Some(RangeRef::new(CellRef::new(cut.start.row, area.start.col), CellRef::new(cut.end.row, cut.start.col - 1)));
+    }
+    if cut.end.col < area.end.col {
+        parts[3] = Some(RangeRef::new(CellRef::new(cut.start.row, cut.end.col + 1), CellRef::new(cut.end.row, area.end.col)));
+    }
+    parts.into_iter().flatten()
+}
+
+fn merge_expanded(sheet: &Sheet, piece: RangeRef) -> RangeRef {
+    let mut sel = gridcraft_engine::Selection::range(piece);
+    sel.expand_merges(sheet);
+    sel.current()
+}
+
+fn piece_overflows(sheet: &Sheet, area: RangeRef, hole: RangeRef, piece: RangeRef) -> bool {
+    let expanded = merge_expanded(sheet, piece);
+    expanded.intersects(&hole) || !area.contains_range(&expanded)
+}
+
+/// Split any subtraction piece whose merge-expansion would pull `hole` back in or spill outside
+/// `area` by peeling off crossing merges until every remaining piece stays inside `area \ hole`
+/// after `Selection::expand_merges`.
+fn split_around_merges(sheet: &Sheet, area: RangeRef, hole: RangeRef, initial: Vec<RangeRef>) -> Vec<RangeRef> {
+    let mut work = initial;
+    let mut out: Vec<RangeRef> = Vec::new();
+    let mut budget = sheet.merges.len().saturating_mul(8).max(32);
+    while let Some(p) = work.pop() {
+        if budget > 0
+            && piece_overflows(sheet, area, hole, p)
+            && let Some(&m) = sheet.merges.iter().find(|m| m.intersects(&p) && !p.contains_range(m))
+        {
+            budget -= 1;
+            if !m.intersects(&hole) && area.contains_range(&m) && !out.contains(&m) {
+                out.push(m);
+            }
+            work.extend(subtract_range(p, m));
+        } else {
+            let expanded = merge_expanded(sheet, p);
+            if !expanded.intersects(&hole) && area.contains_range(&expanded) && !out.contains(&expanded) {
+                out.push(expanded);
+            }
+        }
+    }
+    out
+}
+
+fn subtract_for_sheet(sheet: Option<&Sheet>, area: RangeRef, hole: RangeRef) -> Vec<RangeRef> {
+    let horiz: Vec<RangeRef> = subtract_range(area, hole).collect();
+    if let Some(sh) = sheet
+        && !sh.merges.is_empty()
+        && horiz.iter().any(|p| piece_overflows(sh, area, hole, *p))
+    {
+        return split_around_merges(sh, area, hole, horiz);
+    }
+    horiz
+}
+
+/// How a selection press updates the active sheet's selected areas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SelectMode {
+    /// Replace the selection with `clicked`.
+    Replace,
+    /// Ctrl/Add-mode click: subtract `clicked` if already selected (unless sole), otherwise append.
+    Toggle,
+    /// Ctrl/Add-mode drag start: append `clicked` (unless already the last area) without deselecting.
+    Add,
+}
+
+/// The areas after a click or drag start and whether a drag may continue from `clicked`.
+fn toggled_ranges_for_sheet(sheet: Option<&Sheet>, mut ranges: Vec<RangeRef>, clicked: RangeRef, mode: SelectMode) -> (Vec<RangeRef>, bool) {
+    if mode == SelectMode::Replace {
+        return (vec![clicked], true);
+    }
+    if mode == SelectMode::Toggle && ranges.iter().any(|r| r.contains_range(&clicked)) {
+        let remaining: Vec<RangeRef> = ranges.iter().copied().flat_map(|r| subtract_for_sheet(sheet, r, clicked)).collect();
+        return (if remaining.is_empty() { ranges } else { remaining }, false);
+    }
+    if ranges.last() != Some(&clicked) {
         ranges.push(clicked);
     }
-    ranges
+    (ranges, true)
+}
+
+#[cfg(test)]
+fn toggled_ranges(ranges: Vec<RangeRef>, clicked: RangeRef, add: bool) -> (Vec<RangeRef>, bool) {
+    toggled_ranges_for_sheet(None, ranges, clicked, if add { SelectMode::Toggle } else { SelectMode::Replace })
+}
+
+fn style_selectable(
+    wb: &gridcraft_engine::model::Workbook,
+    p: &gridcraft_engine::model::SheetProtection,
+    style: gridcraft_engine::model::StyleId,
+) -> bool {
+    if wb.styles.get(style).protection.locked { p.select_locked } else { p.select_unlocked }
+}
+
+fn cell_selectable(wb: &gridcraft_engine::model::Workbook, sheet: &Sheet, c: CellRef) -> bool {
+    let Some(p) = sheet.protection.as_ref() else { return true };
+    style_selectable(wb, p, sheet.style_id(c))
+}
+
+/// First index in `lo..=hi` not present in the sorted iterator `covered`.
+fn first_gap(lo: u32, hi: u32, covered: impl Iterator<Item = u32>) -> Option<u32> {
+    let mut cur = lo;
+    for k in covered {
+        if k < cur {
+            continue;
+        }
+        if k > cur {
+            return Some(cur);
+        }
+        cur = k.checked_add(1)?;
+        if cur > hi {
+            return None;
+        }
+    }
+    (cur <= hi).then_some(cur)
+}
+
+/// First cell in column `col` (rows `r0..=r1`) with neither a row style nor a cell entry, so the
+/// column style (or default style) takes effect there.
+fn first_uncovered_row_in_col(sheet: &Sheet, r0: u32, r1: u32, col: u32) -> Option<CellRef> {
+    let mut styled = sheet.rows.range(r0..=r1).filter(|(_, m)| m.style.is_some()).map(|(&row, _)| row).peekable();
+    let mut row = r0;
+    while row <= r1 {
+        while let Some(&s) = styled.peek() {
+            if s < row {
+                styled.next();
+            } else if s == row {
+                styled.next();
+                row = row.checked_add(1)?;
+            } else {
+                break;
+            }
+        }
+        if row > r1 {
+            return None;
+        }
+        let end = styled.peek().map_or(r1, |&s| s - 1);
+        for candidate in row..=end {
+            let c = CellRef::new(candidate, col);
+            if sheet.cells.get(c).is_none() {
+                return Some(c);
+            }
+        }
+        row = end.checked_add(1)?;
+    }
+    None
+}
+
+/// Find a selectable cell inside `r` on a protected sheet using only the sparse cell, row, and
+/// column style stores so distant selectable cells are found without scanning empty cells.
+fn find_selectable_in_range(wb: &gridcraft_engine::model::Workbook, sheet: &Sheet, r: RangeRef) -> Option<CellRef> {
+    let p = sheet.protection.as_ref()?;
+    if !p.select_locked && !p.select_unlocked {
+        return None;
+    }
+    if cell_selectable(wb, sheet, r.start) {
+        return Some(r.start);
+    }
+    // 1. Explicit cell styles.
+    if let Some((c, _)) = sheet.cells.iter_range(r).find(|(c, _)| cell_selectable(wb, sheet, *c)) {
+        return Some(c);
+    }
+    // 2. Explicit row styles (cells in `sheet.cells` were already checked above).
+    for (&row, meta) in sheet.rows.range(r.start.row..=r.end.row) {
+        if let Some(style) = meta.style
+            && style_selectable(wb, p, style)
+            && let Some(c) = (r.start.col..=r.end.col).map(|col| CellRef::new(row, col)).find(|c| sheet.cells.get(*c).is_none())
+        {
+            return Some(c);
+        }
+    }
+    // Column styles and the default style only take effect on rows with no row style.
+    let first_row =
+        first_gap(r.start.row, r.end.row, sheet.rows.range(r.start.row..=r.end.row).filter(|(_, m)| m.style.is_some()).map(|(&row, _)| row))?;
+    let probe_col = |col: u32| -> Option<CellRef> {
+        let fast = CellRef::new(first_row, col);
+        if sheet.cells.get(fast).is_none() {
+            return Some(fast);
+        }
+        first_row.checked_add(1).filter(|&next| next <= r.end.row).and_then(|next| first_uncovered_row_in_col(sheet, next, r.end.row, col))
+    };
+    // 3. Explicit column styles.
+    for (&col, meta) in sheet.cols.range(r.start.col..=r.end.col) {
+        if let Some(style) = meta.style
+            && style_selectable(wb, p, style)
+            && let Some(c) = probe_col(col)
+        {
+            return Some(c);
+        }
+    }
+    // 4. Default style on columns with no column style.
+    if style_selectable(wb, p, Default::default()) {
+        let mut styled = sheet.cols.range(r.start.col..=r.end.col).filter(|(_, m)| m.style.is_some()).map(|(&col, _)| col).peekable();
+        let mut col = r.start.col;
+        while col <= r.end.col {
+            while let Some(&s) = styled.peek() {
+                if s < col {
+                    styled.next();
+                } else if s == col {
+                    styled.next();
+                    col = col.checked_add(1)?;
+                } else {
+                    break;
+                }
+            }
+            if col > r.end.col {
+                break;
+            }
+            let end = styled.peek().map_or(r.end.col, |&s| s - 1);
+            for candidate in col..=end {
+                if let Some(c) = probe_col(candidate) {
+                    return Some(c);
+                }
+            }
+            col = end.checked_add(1)?;
+        }
+    }
+    None
+}
+
+/// Choose the active cell after deselecting an area and move its containing range to the end so
+/// `Selection`'s invariant ("the last area contains the active cell") holds. Keeps the previous
+/// active cell when it is still selected and selectable; otherwise, on a protected sheet, picks a
+/// selectable cell from the remaining areas so `selection.set` does not reject the removal.
+fn pick_active_after_removal(
+    wb: &gridcraft_engine::model::Workbook,
+    sheet: &Sheet,
+    ranges: &mut Vec<RangeRef>,
+    prev_active: CellRef,
+) -> Option<CellRef> {
+    if cell_selectable(wb, sheet, prev_active)
+        && let Some(i) = ranges.iter().rposition(|r| r.contains(prev_active))
+    {
+        let r = ranges.remove(i);
+        ranges.push(r);
+        return Some(prev_active);
+    }
+    if sheet.protection.is_some() {
+        for i in (0..ranges.len()).rev() {
+            if let Some(c) = find_selectable_in_range(wb, sheet, ranges[i]) {
+                let r = ranges.remove(i);
+                ranges.push(r);
+                return Some(c);
+            }
+        }
+    }
+    None
 }
 
 /// An arrow (or Page Up/Down, Ctrl+arrow) in Add mode. Without Shift the active cell moves and the
@@ -235,22 +487,36 @@ pub(super) fn add_mode_base(app: &SheetApp) -> Vec<String> {
     ranges
 }
 
-pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
+/// Updates the selection for a cell or header click. Returns `true` when `r` was selected/added
+/// (so dragging from this press may extend it) and `false` when it was deselected (or was the sole
+/// selection).
+pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, mode: SelectMode, active: CellRef) -> bool {
     // A clicked area is kept: the next Add mode arrow starts a new one.
     app.grid.add_pending = None;
-    let current: Vec<RangeRef> = if add { app.session.active().map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
-    let clicked = r.a1();
-    // A click on a cell inside a larger kept area removes that area, as a click on a single-cell area does.
-    let inside =
-        (add && current.len() > 1 && r.start == r.end).then(|| current.iter().position(|x| x.a1() != clicked && x.contains(r.start))).flatten();
-    let ranges: Vec<String> = match inside {
-        Some(i) => current.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, x)| x.a1()).collect(),
-        None => toggled_ranges(current.iter().map(|x| x.a1()).collect(), clicked.clone(), add),
+    let (ranges, added, next_active) = {
+        let doc = app.session.active();
+        let sheet = doc.and_then(|d| d.wb.active());
+        let clicked = if !r.is_full_cols() && !r.is_full_rows() { sheet.and_then(|sh| sh.merge_at(active)).unwrap_or(r) } else { r };
+        let current: Vec<RangeRef> = if mode != SelectMode::Replace { doc.map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
+        let (mut ranges, added) = toggled_ranges_for_sheet(sheet, current, clicked, mode);
+        let next_active = if added {
+            Some(active)
+        } else if let Some(d) = doc
+            && let Some(sh) = sheet
+        {
+            pick_active_after_removal(&d.wb, sh, &mut ranges, d.selection.active)
+        } else {
+            None
+        };
+        (ranges, added, next_active)
     };
-    // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
-    let params =
-        if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
-    let _ = app.run("selection.set", params);
+    let joined = ranges.iter().map(RangeRef::a1).collect::<Vec<_>>().join(",");
+    let params = match next_active {
+        Some(a) => json!({"range": joined, "active": a.a1()}),
+        None => json!({"range": joined}),
+    };
+    let ok = app.run("selection.set", params).is_ok();
+    added && ok
 }
 
 #[cfg(test)]
@@ -338,12 +604,22 @@ mod pane_tests {
 
     #[test]
     fn ctrl_click_on_a_selected_header_deselects_it() {
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(toggled_ranges(s(&["A:A", "C:C"]), "C:C".into(), true), s(&["A:A"]));
-        assert_eq!(toggled_ranges(s(&["A:A"]), "C:C".into(), true), s(&["A:A", "C:C"]));
-        assert_eq!(toggled_ranges(s(&["A:A"]), "A:A".into(), true), s(&["A:A"]));
-        assert_eq!(toggled_ranges(s(&["A1", "B2", "3:3"]), "B2".into(), true), s(&["A1", "3:3"]));
-        assert_eq!(toggled_ranges(s(&["A:A", "C:C"]), "C:C".into(), false), s(&["C:C"]));
+        let p = |x: &str| RangeRef::parse(x).unwrap();
+        let rs = |v: &[&str]| v.iter().map(|x| p(x)).collect::<Vec<_>>();
+        assert_eq!(toggled_ranges(rs(&["A:A", "C:C"]), p("C:C"), true), (rs(&["A:A"]), false));
+        assert_eq!(toggled_ranges(rs(&["A:A"]), p("C:C"), true), (rs(&["A:A", "C:C"]), true));
+        assert_eq!(toggled_ranges(rs(&["A:A"]), p("A:A"), true), (rs(&["A:A"]), false));
+        assert_eq!(toggled_ranges(rs(&["A1", "B2", "3:3"]), p("B2"), true), (rs(&["A1", "3:3"]), false));
+        assert_eq!(toggled_ranges(rs(&["A:A", "C:C"]), p("C:C"), false), (rs(&["C:C"]), true));
+        // Deselecting inside a dragged range splits that range around the clicked cell/header.
+        assert_eq!(toggled_ranges(rs(&["A1", "B1:D3"]), p("C2"), true), (rs(&["A1", "B1:D1", "B3:D3", "B2", "D2"]), false));
+        assert_eq!(toggled_ranges(rs(&["A1:C3"]), p("A1"), true), (rs(&["A2:C3", "B1:C1"]), false));
+        assert_eq!(toggled_ranges(rs(&["A:C"]), p("B:B"), true), (rs(&["A:A", "C:C"]), false));
+        assert_eq!(toggled_ranges(rs(&["1:3"]), p("2:2"), true), (rs(&["1:1", "3:3"]), false));
+        // Overlapping ranges both lose the deselected cell.
+        let (left, added) = toggled_ranges(rs(&["A1:B2", "B2:C3"]), p("B2"), true);
+        assert!(!added);
+        assert!(left.iter().all(|r| !r.contains(CellRef::parse("B2").unwrap())));
     }
 
     #[test]

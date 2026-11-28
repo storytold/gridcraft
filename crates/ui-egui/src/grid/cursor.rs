@@ -52,6 +52,9 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::None => None,
         Drag::Select => Some(CursorIcon::Cell),
         Drag::Rows(_) | Drag::Cols(_) | Drag::PointRows(_) | Drag::PointCols(_) => Some(CursorIcon::Default),
+        Drag::CtrlPending { clicked, .. } => {
+            Some(if clicked.is_full_cols() || clicked.is_full_rows() { CursorIcon::Default } else { CursorIcon::Cell })
+        }
         Drag::Fill { .. } => Some(CursorIcon::Crosshair),
         Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { handle: None, .. } => Some(CursorIcon::Move),
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
