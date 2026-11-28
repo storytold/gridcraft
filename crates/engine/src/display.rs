@@ -156,6 +156,13 @@ pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
     with_fill_space(format(v, code, wb))
 }
 
+/// A value through a format code given apart from a cell, not narrowed to the cell width: a number
+/// shown as General keeps every digit (`124412140710`, not `1.24412E+11`), as [`format_value_full`]
+/// writes it. For comparing values, where the display text's rounding would merge two of them.
+pub(crate) fn value_text_full_as(wb: &Workbook, v: &Value, code: &str) -> String {
+    with_fill_space(format_value_full(v, &parsed(code), wb.date_system))
+}
+
 /// The formatted text with a single space where a `*x` repeat fill would expand.
 fn with_fill_space(f: Formatted) -> String {
     match f.fill {
