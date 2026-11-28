@@ -189,10 +189,11 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // that needs less shrinks to its tabs, so New sheet (+) sits right after the last one.
             // After the handle at the scrollbar's left edge is dragged, the tabs and New sheet
             // take the share it was dragged to.
+            let new_sheet_width = if app.chrome.new_sheet { NEW_SHEET_WIDTH } else { 0.0 };
             let tabs_width = match share {
                 // Without the scroll bar the tabs have the whole bar.
-                _ if !view.show_horizontal_scroll => (bar_width - NEW_SHEET_WIDTH).max(0.0),
-                Some(share) => (bar_width * share - NEW_SHEET_WIDTH).max(0.0),
+                _ if !view.show_horizontal_scroll => (bar_width - new_sheet_width).max(0.0),
+                Some(share) => (bar_width * share - new_sheet_width).max(0.0),
                 None => (bar_width * 0.6).max(100.0),
             };
             // Reveal the selected sheet after navigation or layout changes, but
@@ -353,9 +354,11 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                             });
                         });
                 });
-                ui.add_space(6.0);
-                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
-                    app.run_or_alert("home.insertSheet", json!({}));
+                if app.chrome.new_sheet {
+                    ui.add_space(6.0);
+                    if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
+                        app.run_or_alert("home.insertSheet", json!({}));
+                    }
                 }
             }
             if !view.show_horizontal_scroll {

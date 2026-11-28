@@ -218,3 +218,12 @@ fn hiding_the_controls_clears_their_cached_rectangles() {
     h.run_steps(5);
     assert!(h.state().grid.hscroll.is_none() && h.state().grid.tab_split.is_none(), "no bar at all");
 }
+
+#[test]
+fn without_new_sheet_the_tabs_reach_the_handle() {
+    let mut h = harness(1200.0, 30);
+    h.state_mut().chrome.new_sheet = false;
+    let handle = split(&h);
+    drag(&mut h, handle.center(), pos2(900.0, handle.center().y));
+    assert!((strip(&h).right() - split(&h).left()).abs() <= 0.5, "the tabs end at the handle: {:?} {:?}", strip(&h), split(&h));
+}
