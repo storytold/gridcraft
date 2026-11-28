@@ -118,13 +118,24 @@ impl SheetApp {
     pub(super) fn hold_save(&mut self, request: SaveRequest) -> bool {
         let losses = self.save_losses_to_ask(&request);
         let Some(doc) = self.session.active().map(|d| d.uid).filter(|_| !losses.is_empty()) else { return false };
-        let pending = PendingSave { doc, request, losses, after: self.after_save.take().unwrap_or_default() };
+        let destination = self.save_destination(&request);
+        let pending = PendingSave { doc, request, destination, losses, after: self.after_save.take().unwrap_or_default() };
         if let Err(e) = self.commit_text_box_edit() {
             self.message = Some(("Text Box".into(), super::clean_error(&e)));
         } else {
             self.replace_dialog(|_| Some(crate::dialogs::Dialog::save_loss(pending)));
         }
         true
+    }
+
+    /// The file a held save writes when it names none: the active workbook's own file.
+    fn save_destination(&self, request: &SaveRequest) -> Option<String> {
+        match request {
+            SaveRequest::Command { id, params } if id == "file.save" && params.get("path").is_none() => {
+                self.session.active().and_then(|d| d.path.clone())
+            }
+            _ => None,
+        }
     }
 
     /// What the save would lose, unless the user already agreed to exactly that for this document.
@@ -151,6 +162,11 @@ impl SheetApp {
         }
         match answer {
             SaveLossAnswer::Cancel => {}
+            // The workbook's file changed while the question was open (a Save As through
+            // automation): the save is asked about again for the file it would write now.
+            SaveLossAnswer::Anyway if self.save_destination(&pending.request) != pending.destination => {
+                self.save_then(pending.request, pending.after, ctx);
+            }
             SaveLossAnswer::Anyway => {
                 self.accepted_losses.insert(pending.doc, pending.losses);
                 self.save_then(pending.request, pending.after, ctx);
@@ -256,6 +272,33 @@ mod tests {
         assert_eq!(std::fs::read(at("Second.xlsx")).unwrap(), before);
         assert!(app.session.active().is_some_and(|d| d.uid == second && d.is_dirty()));
         assert!(!app.accepted_losses.contains_key(&second) && app.message.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// A held Save is about the workbook's file when it asked: should that file change before the
+    /// answer, Save Anyway writes neither file and asks again about the new one.
+    #[test]
+    fn save_anyway_asks_again_when_the_workbooks_file_changed() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-loss-moved-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.run("file.save", json!({"path": at("First.xlsx")})).unwrap();
+        app.run("pageLayout.pageSetup", json!({"excluded": true})).unwrap();
+        app.run_or_alert("file.save", json!({}));
+        let pending = app.dialog.as_ref().and_then(|d| d.pending_save()).unwrap();
+
+        // While the question is open, automation gives the same workbook another file and changes it.
+        app.run("file.saveAs", json!({"path": at("Moved.xlsx")})).unwrap();
+        app.run("cell.set", json!({"cell": "A1", "input": "changed"})).unwrap();
+        let (first, moved) = (std::fs::read(at("First.xlsx")).unwrap(), std::fs::read(at("Moved.xlsx")).unwrap());
+        assert!(app.answer_save_loss(SaveLossAnswer::Anyway, pending, &egui::Context::default()));
+        assert_eq!(std::fs::read(at("First.xlsx")).unwrap(), first);
+        assert_eq!(std::fs::read(at("Moved.xlsx")).unwrap(), moved);
+        assert!(app.session.active().is_some_and(|d| d.is_dirty()));
+        let again = app.dialog.as_ref().and_then(|d| d.pending_save()).unwrap();
+        assert_eq!(again.destination.as_deref(), Some(at("Moved.xlsx").as_str()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

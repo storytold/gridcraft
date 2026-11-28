@@ -44,6 +44,9 @@ pub(crate) struct PendingSave {
     /// The workbook that asked (its document uid).
     pub doc: u64,
     pub request: SaveRequest,
+    /// The file a Save without a path of its own writes: the workbook's file when it asked. Should
+    /// the workbook's file change before the answer, the question is asked again for the new one.
+    pub destination: Option<String>,
     /// Exactly what the user is asked about.
     pub losses: gridcraft_engine::cmd::file::SaveLosses,
     pub after: AfterSave,
