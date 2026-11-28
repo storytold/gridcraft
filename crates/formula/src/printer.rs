@@ -1,5 +1,6 @@
 //! [`Expr`] → formula text (without `=`), A1 or R1C1.
 
+use std::borrow::Cow;
 use std::fmt::Write;
 
 use gridcraft_core::{CellRef, number_to_text};
@@ -47,6 +48,7 @@ fn push_col(s: &mut String, col: u32) {
     }
 }
 
+/// A reference in A1 notation.
 pub fn reference_a1(r: &Reference) -> String {
     range_a1(r, ":")
 }
@@ -202,7 +204,7 @@ fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
     out
 }
 
-fn number(n: f64) -> String {
+pub(crate) fn number(n: f64) -> String {
     let text = number_to_text(n);
     // 15 significant digits can round past f64::MAX, which no longer parses.
     if text.parse::<f64>().is_ok_and(f64::is_finite) {
@@ -215,21 +217,92 @@ fn number(n: f64) -> String {
     }
 }
 
+/// How a syntax spells what the printer writes. Every method defaults to Excel's A1 notation,
+/// so a syntax states only where it differs ([`print_with`]).
+pub trait Dialect {
+    /// A reference, with `sep` between its two ends (`:`, or a trim operator).
+    fn reference(&self, s: &mut String, r: &Reference, sep: &str) {
+        push_range_a1(s, r, sep);
+    }
+    /// A defined name, possibly sheet-qualified (`Sheet2!Total`).
+    fn name(&self, s: &mut String, n: &str) {
+        match sheet_split(n) {
+            // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote
+            // it so it parses back.
+            Some((sheet, name)) => {
+                s.push_str(&quote_sheet(sheet));
+                s.push('!');
+                s.push_str(name);
+            }
+            _ => s.push_str(n),
+        }
+    }
+    /// A structured reference (`Table1[Col]`).
+    fn struct_ref(&self, s: &mut String, st: &StructRef) {
+        s.push_str(&struct_ref(st));
+    }
+    /// A function's name as this syntax calls it.
+    fn function<'a>(&self, name: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed(name)
+    }
+    /// A logical constant (`TRUE`, `FALSE`).
+    fn boolean(&self, b: bool) -> &'static str {
+        if b { "TRUE" } else { "FALSE" }
+    }
+    /// The separators between a call's arguments, between an inline array's columns, and between
+    /// its rows (`,` `,` `;` in A1).
+    fn separators(&self) -> (char, char, char) {
+        (',', ',', ';')
+    }
+    /// A binary operator's symbol (`+`, `&`, `:`, a space for the intersection, ...).
+    fn operator(&self, op: BinOp) -> &'static str {
+        op.symbol()
+    }
+    /// The function written for a unary operator the syntax has no symbol for (`@`, `#`, a trim
+    /// reference), taking the operand (and, for a trim, its mode twice).
+    fn unary_call(&self, _op: UnOp) -> Option<&'static str> {
+        None
+    }
+}
+
+struct A1;
+impl Dialect for A1 {}
+
+struct R1C1(CellRef);
+impl Dialect for R1C1 {
+    fn reference(&self, s: &mut String, r: &Reference, sep: &str) {
+        s.push_str(&range_r1c1(r, self.0, sep));
+    }
+}
+
 /// Prints an expression in A1 notation.
 pub fn print(e: &Expr) -> String {
-    let mut s = String::new();
-    write_expr(&mut s, e, None);
-    s
+    print_with(e, &A1)
 }
 
 /// Prints an expression in R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
+    print_with(e, &R1C1(at))
+}
+
+/// Prints an expression in another syntax.
+pub fn print_with(e: &Expr, d: &dyn Dialect) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, d);
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+fn write_list<'e>(s: &mut String, items: impl IntoIterator<Item = &'e Expr>, sep: char, d: &dyn Dialect) {
+    for (i, a) in items.into_iter().enumerate() {
+        if i > 0 {
+            s.push(sep);
+        }
+        write_expr(s, a, d);
+    }
+}
+
+fn write_expr(s: &mut String, e: &Expr, d: &dyn Dialect) {
+    let (arg_sep, col_sep, row_sep) = d.separators();
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
         Expr::Text(t) => {
@@ -237,81 +310,75 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             s.push_str(&t.replace('"', "\"\""));
             s.push('"');
         }
-        Expr::Bool(b) => s.push_str(if *b { "TRUE" } else { "FALSE" }),
+        Expr::Bool(b) => s.push_str(d.boolean(*b)),
         Expr::Error(err) => s.push_str(err.as_str()),
         Expr::Array(rows) => {
             s.push('{');
             for (ri, row) in rows.iter().enumerate() {
                 if ri > 0 {
-                    s.push(';');
+                    s.push(row_sep);
                 }
-                for (ci, el) in row.iter().enumerate() {
-                    if ci > 0 {
-                        s.push(',');
-                    }
-                    write_expr(s, el, r1c1);
-                }
+                write_list(s, row, col_sep, d);
             }
             s.push('}');
         }
-        Expr::Ref(r) => match r1c1 {
-            Some(at) => s.push_str(&reference_r1c1(r, at)),
-            None => push_range_a1(s, r, ":"),
-        },
-        Expr::Name(n) => match sheet_split(n) {
-            // A sheet-qualified name is stored with the bare sheet name (`My Sheet!Total`): quote it so it parses back.
-            Some((sheet, name)) => {
-                s.push_str(&quote_sheet(sheet));
-                s.push('!');
-                s.push_str(name);
-            }
-            _ => s.push_str(n),
-        },
-        Expr::Struct(st) => s.push_str(&struct_ref(st)),
-        Expr::Unary(op, x) => match op {
-            UnOp::Neg => {
-                s.push('-');
-                write_expr(s, x, r1c1);
-            }
-            UnOp::Plus => {
-                s.push('+');
-                write_expr(s, x, r1c1);
-            }
-            UnOp::At => {
-                s.push('@');
-                write_expr(s, x, r1c1);
-            }
-            UnOp::Percent => {
-                write_expr(s, x, r1c1);
-                s.push('%');
-            }
-            UnOp::Spill => {
-                write_expr(s, x, r1c1);
-                // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
-                if !matches!(**x, Expr::Error(_)) {
-                    s.push('#');
+        Expr::Ref(r) => d.reference(s, r, ":"),
+        Expr::Name(n) => d.name(s, n),
+        Expr::Struct(st) => d.struct_ref(s, st),
+        Expr::Unary(op, x) => {
+            if let Some(f) = d.unary_call(*op) {
+                s.push_str(f);
+                s.push('(');
+                write_expr(s, x, d);
+                if let UnOp::Trim(mode) = op {
+                    let _ = write!(s, "{arg_sep}{0}{arg_sep}{0}", mode.code());
                 }
+                s.push(')');
+                return;
             }
-            UnOp::Trim(mode) => match &**x {
-                Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => match r1c1 {
-                    Some(at) => s.push_str(&range_r1c1(r, at, mode.symbol())),
-                    None => push_range_a1(s, r, mode.symbol()),
+            match op {
+                UnOp::Neg => {
+                    s.push('-');
+                    write_expr(s, x, d);
+                }
+                UnOp::Plus => {
+                    s.push('+');
+                    write_expr(s, x, d);
+                }
+                UnOp::At => {
+                    s.push('@');
+                    write_expr(s, x, d);
+                }
+                UnOp::Percent => {
+                    write_expr(s, x, d);
+                    s.push('%');
+                }
+                UnOp::Spill => {
+                    write_expr(s, x, d);
+                    // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
+                    if !matches!(**x, Expr::Error(_)) {
+                        s.push('#');
+                    }
+                }
+                UnOp::Trim(mode) => match &**x {
+                    Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => d.reference(s, r, mode.symbol()),
+                    Expr::Binary(BinOp::Range, a, b) => {
+                        write_expr(s, a, d);
+                        s.push_str(mode.symbol());
+                        write_expr(s, b, d);
+                    }
+                    // A reference that became #REF! stays `#REF!`.
+                    Expr::Error(_) => write_expr(s, x, d),
+                    // No operator form (e.g. a range shrunk to one cell): the equivalent call.
+                    other => {
+                        s.push_str(&d.function("TRIMRANGE"));
+                        s.push('(');
+                        write_expr(s, other, d);
+                        let _ = write!(s, "{arg_sep}{0}{arg_sep}{0})", mode.code());
+                    }
                 },
-                Expr::Binary(BinOp::Range, a, b) => {
-                    write_expr(s, a, r1c1);
-                    s.push_str(mode.symbol());
-                    write_expr(s, b, r1c1);
-                }
-                // A reference that became #REF! stays `#REF!`.
-                Expr::Error(_) => write_expr(s, x, r1c1),
-                // No operator form (e.g. a range shrunk to one cell): the equivalent call.
-                other => {
-                    s.push_str("TRIMRANGE(");
-                    write_expr(s, other, r1c1);
-                    let _ = write!(s, ",{0},{0})", mode.code());
-                }
-            },
-        },
+            }
+        }
         Expr::Binary(..) => {
             // Walk the left spine iteratively: a flat chain such as `1+1+1+...` parses into a
             // tree one level deeper per operator, and recursing on it could exhaust the stack.
@@ -321,38 +388,28 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 rest.push((op, b));
                 first = a;
             }
-            write_expr(s, first, r1c1);
+            write_expr(s, first, d);
             for (op, right) in rest.into_iter().rev() {
-                s.push_str(op.symbol());
-                write_expr(s, right, r1c1);
+                s.push_str(d.operator(*op));
+                write_expr(s, right, d);
             }
         }
         Expr::Call(name, args) => {
-            s.push_str(name);
+            s.push_str(&d.function(name));
             s.push('(');
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    s.push(',');
-                }
-                write_expr(s, a, r1c1);
-            }
+            write_list(s, args, arg_sep, d);
             s.push(')');
         }
         Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
+            write_expr(s, c, d);
             s.push('(');
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    s.push(',');
-                }
-                write_expr(s, a, r1c1);
-            }
+            write_list(s, args, arg_sep, d);
             s.push(')');
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, d);
             s.push(')');
         }
     }

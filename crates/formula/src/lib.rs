@@ -12,8 +12,8 @@ pub mod printer;
 
 pub use ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
 pub use input::{FormulaLocale, parse_input, print_input};
-pub use parser::{MAX_FORMULA_LEN, ParseError, normalize_function_name, parse, parse_closing_parens, parse_name};
-pub use printer::{print, print_r1c1, quote_sheet};
+pub use parser::{MAX_FORMULA_LEN, ParseError, normalize_function_name, parse, parse_closing_parens, parse_name, parse_tokens};
+pub use printer::{Dialect, print, print_r1c1, print_with, quote_sheet};
 
 /// Whether two LET/LAMBDA names are the same: case-insensitive in any script, as in Excel
 /// (`dług` = `DŁUG`, `ß` = `ẞ`). Close to Unicode's default case folding: lower case, plus the
