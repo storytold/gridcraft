@@ -1,5 +1,5 @@
 use super::read::{first_free_block, merge_vml};
-use super::write::{NameMap, attach, part_rels_xml, remap, write_parts};
+use super::write::{NameMap, attach, part_rels_xml, reachable, remap, write_parts};
 use super::*;
 
 /// A sheet's kept content being written.
@@ -30,11 +30,26 @@ impl<'a> SheetKept<'a> {
             })
             .map(|q| normalize(&q.name))
             .collect();
-        let (parts, sheet_rels): (Cow<'_, [PreservedPart]>, Cow<'_, [PreservedRel]>) = if orphan.is_empty() {
+        let has_pivot_passthrough = p.elements.iter().any(|e| e.slot == SLOT_PIVOT_PASSTHROUGH);
+        let reachable_from_sheet: Option<HashSet<String>> = has_pivot_passthrough.then(|| {
+            let mut keep = HashSet::new();
+            for r in p.rels.iter().chain(p.vml.iter().flat_map(|v| v.rels.iter())) {
+                keep.extend(reachable(p, r));
+            }
+            keep
+        });
+        let (parts, sheet_rels): (Cow<'_, [PreservedPart]>, Cow<'_, [PreservedRel]>) = if orphan.is_empty() && reachable_from_sheet.is_none() {
             (Cow::Borrowed(&p.parts), Cow::Borrowed(&p.rels))
         } else {
             (
-                p.parts.iter().filter(|q| !orphan.contains(&normalize(&q.name))).cloned().collect(),
+                p.parts
+                    .iter()
+                    .filter(|q| {
+                        let key = normalize(&q.name);
+                        !orphan.contains(&key) && reachable_from_sheet.as_ref().is_none_or(|keep| keep.contains(&key))
+                    })
+                    .cloned()
+                    .collect(),
                 p.rels.iter().filter(|r| r.external || !orphan.contains(&normalize(&r.target))).cloned().collect(),
             )
         };

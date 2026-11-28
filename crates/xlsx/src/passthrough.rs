@@ -69,6 +69,8 @@ pub use write::{
     KeptOut, SheetIds, WorkbookKept, finish_style_ids, kept_chart, workbook_elements, write_kept_chart, write_package_rels, write_workbook,
 };
 
+/// Slot for a PivotTable whose local worksheetSource cannot be resolved, kept as raw XML parts.
+pub(crate) const SLOT_PIVOT_PASSTHROUGH: &str = "pivotPassthrough";
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
 /// Largest single kept part.

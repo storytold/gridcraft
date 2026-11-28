@@ -565,6 +565,45 @@ impl KeptReader {
         };
         Ok((vml, q.parts))
     }
+
+    /// Preserves the raw XML parts (`pivotTable`, `pivotCacheDefinition`, `pivotCacheRecords`,
+    /// and their relationships) for a PivotTable whose local source cannot be resolved.
+    pub fn keep_pivot_passthrough(
+        &mut self,
+        cx: &mut Ctx<'_>,
+        sheet_preserved: &mut Option<Arc<Preserved>>,
+        sheet_name: &str,
+        src: &crate::pivot::ReadPivotSource,
+        orig_source: &str,
+    ) {
+        if !self.on {
+            return;
+        }
+        let mut p = sheet_preserved.as_deref().cloned().unwrap_or_default();
+        let mut scratch: HashSet<String> = p.parts.iter().map(|q| normalize(&q.name)).collect();
+        let table_rel = PreservedRel { id: String::new(), rel_type: format!("{NS_REL}/pivotTable"), target: src.table_part.clone(), external: false };
+        let cache_rel =
+            PreservedRel { id: String::new(), rel_type: format!("{NS_REL}/pivotCacheDefinition"), target: src.cache_part.clone(), external: false };
+        let through = ["pivotTable", "pivotCacheDefinition", "pivotCacheRecords"];
+        let mut collected = Vec::new();
+        let res = (|| -> Result<(), String> {
+            for root in [&table_rel, &cache_rel] {
+                let parts = self.closure(cx, root, &scratch, &through)?;
+                scratch.extend(parts.iter().map(|q| normalize(&q.name)));
+                collected.extend(parts);
+            }
+            Ok(())
+        })();
+        match res {
+            Ok(()) => {
+                p.parts.extend(collected);
+                let meta = format!("{}\t{}\t{}\t{orig_source}", src.pivot_id, src.table_part, src.cache_part);
+                p.elements.push(PreservedXml { slot: SLOT_PIVOT_PASSTHROUGH.into(), xml: meta });
+                *sheet_preserved = Some(Arc::new(p));
+            }
+            Err(why) => cx.warn(format!("sheet \"{sheet_name}\": PivotTable {} could not be preserved: {why}", src.table_part)),
+        }
+    }
 }
 
 /// Attribute values of `local` (any prefix) in an XML part, in document order. `None` when the

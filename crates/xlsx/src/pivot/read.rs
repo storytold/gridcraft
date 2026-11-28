@@ -73,6 +73,15 @@ pub struct SheetPivots {
     pub external: Vec<ExternalPivot>,
 }
 
+/// Source parts of a PivotTable read from an XLSX sheet, used to preserve raw pivot XML
+/// when the source cannot be resolved locally.
+#[derive(Clone, Debug)]
+pub struct ReadPivotSource {
+    pub pivot_id: u32,
+    pub table_part: String,
+    pub cache_part: String,
+}
+
 /// Workbook-level pivot cache lookup, filled from `<pivotCaches>`; caches are parsed once.
 #[derive(Default)]
 pub struct CachesIn {
@@ -236,7 +245,13 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str, connections: &Hash
 /// Reads the PivotTables related to a worksheet part. Those whose source is in another workbook,
 /// a data connection or the Data Model are listed in [`SheetPivots::external`] (with a warning),
 /// not modelled.
-pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sheet_name: &str) -> Result<SheetPivots, IoError> {
+pub fn read_pivots(
+    cx: &mut Ctx<'_>,
+    caches: &mut CachesIn,
+    sheet_part: &str,
+    sheet_name: &str,
+    sources: &mut Vec<ReadPivotSource>,
+) -> Result<SheetPivots, IoError> {
     let rels = cx.pkg.rels(sheet_part)?;
     let mut out = SheetPivots::default();
     for rel in rels.iter().filter(|r| r.kind == "pivotTable" && !r.external) {
@@ -275,6 +290,7 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
             continue;
         }
         if let Some(pt) = read_table(cx, &x, &cache, caches.next_id) {
+            sources.push(ReadPivotSource { pivot_id: pt.id, table_part: rel.target.clone(), cache_part: cache_part.clone() });
             caches.next_id = caches.next_id.saturating_add(1);
             out.tables.push(pt);
         }

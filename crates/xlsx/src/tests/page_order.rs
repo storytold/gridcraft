@@ -88,9 +88,9 @@ fn first_page_number_is_read_and_written_back() {
     // In the schema's order with the other attributes: after the scale, before Fit To.
     let mut wb = back;
     wb.sheet_mut(0).unwrap().print.scale = 80;
-    wb.sheet_mut(0).unwrap().print.fit_to = Some((1, 2));
+    wb.sheet_mut(0).unwrap().print.fit_to = Some((2, 3));
     let xml = sheet_xml(&write_xlsx(&wb).unwrap());
-    assert!(page_setup(&xml).contains(r#"scale="80" firstPageNumber="7" fitToWidth="1""#), "{xml}");
+    assert!(page_setup(&xml).contains(r#"scale="80" firstPageNumber="7" fitToWidth="2""#), "{xml}");
     // Automatic: no number, a number Excel keeps without using it, and `useFirstPageNumber="0"`.
     for body in [
         r#"<sheetData/><pageSetup paperSize="9" orientation="portrait"/>"#,
@@ -108,4 +108,72 @@ fn first_page_number_is_read_and_written_back() {
     wb.sheet_mut(0).unwrap().print.first_page_number = Some(1);
     let xml = sheet_xml(&write_xlsx(&wb).unwrap());
     assert!(xml.contains(r#"firstPageNumber="1""#) && xml.contains(r#"useFirstPageNumber="1""#), "{xml}");
+}
+
+#[test]
+fn scale_and_default_fit_to_do_not_inject_fit_to_width_or_height() {
+    // Explicit scale without fitToPage must not emit fitToWidth / fitToHeight or fitToPage.
+    let body_scale = r#"<sheetFormatPr defaultRowHeight="12.75"/><sheetData/><pageSetup scale="50" orientation="landscape"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body_scale, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.scale, 50);
+    assert_eq!(wb.sheet(0).unwrap().print.fit_to, None);
+    let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+    let ps = page_setup(&xml);
+    assert!(ps.contains(r#"scale="50""#), "{ps}");
+    assert!(!ps.contains("fitToWidth") && !ps.contains("fitToHeight"), "{ps}");
+    assert!(!xml.contains("fitToPage"), "{xml}");
+    assert!(!xml.contains(r#"customHeight="1""#), "non-custom defaultRowHeight must not inject customHeight: {xml}");
+
+    // fitToPage="1" with schema-default 1x1 (omitted fitToWidth/fitToHeight) and explicit scale
+    // preserves fitToPage and scale without injecting fitToWidth="1" fitToHeight="1".
+    let body_fit = r#"<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr><sheetFormatPr defaultRowHeight="21.95" customHeight="1"/><sheetData/><pageSetup scale="48" orientation="portrait"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body_fit, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.scale, 48);
+    assert_eq!(wb.sheet(0).unwrap().print.fit_to, Some((1, 1)));
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = sheet_xml(&bytes);
+    let ps = page_setup(&xml);
+    assert!(xml.contains(r#"<pageSetUpPr fitToPage="1"/>"#), "{xml}");
+    assert!(ps.contains(r#"scale="48""#), "{ps}");
+    assert!(!ps.contains("fitToWidth") && !ps.contains("fitToHeight"), "{ps}");
+    assert!(xml.contains(r#"defaultRowHeight="21.95" customHeight="1""#), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.scale, 48);
+    assert_eq!(back.sheet(0).unwrap().print.fit_to, Some((1, 1)));
+}
+
+#[test]
+fn default_row_height_custom_survives_json_and_programmatic_sheets() {
+    // (a) Source XLSX without customHeight="1" keeps customHeight omitted even across JSON serde.
+    let body_plain = r#"<sheetFormatPr defaultRowHeight="12.75"/><sheetData/>"#;
+    let (wb_plain, _) = read_xlsx(&minimal(body_plain, &[], "", "")).unwrap();
+    assert_eq!(wb_plain.sheet(0).unwrap().default_row_height_custom, Some(false));
+    let json_plain = serde_json::to_string(&wb_plain).unwrap();
+    let back_plain: Workbook = serde_json::from_str(&json_plain).unwrap();
+    assert_eq!(back_plain.sheet(0).unwrap().default_row_height_custom, Some(false));
+    let xml_plain = sheet_xml(&write_xlsx(&back_plain).unwrap());
+    assert!(!xml_plain.contains(r#"customHeight="1""#), "plain sheet must omit customHeight after JSON round-trip: {xml_plain}");
+
+    // Explicit customHeight="1" also survives JSON serde round-trip.
+    let body_custom = r#"<sheetFormatPr defaultRowHeight="21.95" customHeight="1"/><sheetData/>"#;
+    let (wb_custom, _) = read_xlsx(&minimal(body_custom, &[], "", "")).unwrap();
+    assert_eq!(wb_custom.sheet(0).unwrap().default_row_height_custom, Some(true));
+    let back_custom: Workbook = serde_json::from_str(&serde_json::to_string(&wb_custom).unwrap()).unwrap();
+    let xml_custom = sheet_xml(&write_xlsx(&back_custom).unwrap());
+    assert!(xml_custom.contains(r#"defaultRowHeight="21.95" customHeight="1""#), "{xml_custom}");
+
+    // (b) Programmatic sheet with default_row_height_custom == None omits customHeight at default
+    // 15pt (20px) and emits customHeight="1" for non-15pt heights (including after JSON serde).
+    let mut prog = Workbook::new();
+    assert_eq!(prog.sheet(0).unwrap().default_row_height_custom, None);
+    let prog_json = serde_json::to_string(&prog).unwrap();
+    assert!(!prog_json.contains("default_row_height_custom"), "None must be omitted from JSON: {prog_json}");
+    let xml_default = sheet_xml(&write_xlsx(&prog).unwrap());
+    assert!(!xml_default.contains(r#"customHeight="1""#), "default 15pt programmatic sheet must omit customHeight: {xml_default}");
+
+    prog.sheet_mut(0).unwrap().default_row_height = 24.0;
+    let prog_back: Workbook = serde_json::from_str(&serde_json::to_string(&prog).unwrap()).unwrap();
+    assert_eq!(prog_back.sheet(0).unwrap().default_row_height_custom, None);
+    let xml_tall = sheet_xml(&write_xlsx(&prog_back).unwrap());
+    assert!(xml_tall.contains(r#"defaultRowHeight="18" customHeight="1""#), "non-15pt programmatic sheet must emit customHeight: {xml_tall}");
 }

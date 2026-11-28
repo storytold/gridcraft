@@ -174,11 +174,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
 
     let max_row_outline = sheet.rows.values().map(|r| r.outline).max().unwrap_or(0);
     let max_col_outline = sheet.cols.values().map(|r| r.outline).max().unwrap_or(0);
+    let custom_height = sheet.default_row_height_custom.unwrap_or((sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01);
     part.features.format = Some(CraftSheetFormat {
         default_col_width: ((sheet.default_col_width - gridcraft_model::DEFAULT_COL_WIDTH).abs() > 0.01)
             .then(|| px_to_col_width(sheet.default_col_width)),
         default_row_height: Some(px_to_pt(sheet.default_row_height)),
-        custom_height: ((sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01).then_some(true),
+        custom_height: custom_height.then_some(true),
         outline_level_row: (max_row_outline > 0).then_some(u32::from(max_row_outline)),
         outline_level_col: (max_col_outline > 0).then_some(u32::from(max_col_outline)),
         ..Default::default()
@@ -514,8 +515,8 @@ fn build_sheet_printing<'a>(sheet: &'a Sheet, print: &mut CraftPrint, rels: &mut
         paper_size: paper_id(&p.paper).filter(|&id| id != 1),
         scale: (p.scale != 100 && (10..=400).contains(&p.scale)).then_some(u32::from(p.scale)),
         first_page_number: p.first_page_number,
-        fit_to_width: p.fit_to.map(|(w, _)| u32::from(w)),
-        fit_to_height: p.fit_to.map(|(_, h)| u32::from(h)),
+        fit_to_width: p.fit_to.map(|(w, _)| u32::from(w)).filter(|&w| w != 1),
+        fit_to_height: p.fit_to.map(|(_, h)| u32::from(h)).filter(|&h| h != 1),
         page_order: (p.page_order != PageOrder::DownThenOver).then(|| p.page_order.id().to_string()),
         orientation: Some(if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" }.to_string()),
         use_first_page_number: p.first_page_number.map(|_| true),

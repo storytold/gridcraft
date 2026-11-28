@@ -288,6 +288,7 @@ fn apply_craft_sheet_part(
                 sheet.default_row_height = px;
             }
         }
+        sheet.default_row_height_custom = Some(fmt.custom_height.unwrap_or(false));
         if let Some(w) = fmt.default_col_width {
             let px = col_width_to_px(w);
             if px > 0.0 {
