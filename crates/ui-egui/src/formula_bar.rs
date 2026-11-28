@@ -674,6 +674,9 @@ fn editor_shortcuts(
     if !has_focus || !mine || app.message.is_some() || app.dialog.is_some() {
         return outcome;
     }
+    // The editor owns Tab and the arrows (its `event_filter`), but egui applies a widget's filter
+    // only from its second focused frame on: cancel any focus move armed in `begin_pass`.
+    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     // Ctrl+Alt+Shift+P turns the edit into Python code.
     outcome.to_python = ui.input_mut(take_python_shortcut);
     let (action, cancel, py_trigger) = editor_confirm_keys(ui, ed);
@@ -690,16 +693,17 @@ fn editor_shortcuts(
 /// Enter, Tab, Esc and their variants: the move to make, whether the edit is cancelled, and
 /// whether `=PY` then Tab starts Python mode.
 fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> (Option<EditorAction>, bool, bool) {
-    let (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, shift) = ui.input_mut(|i| {
-        let m = i.modifiers;
+    let (enter, shift_enter, tab, shift_tab, esc, alt_enter, cmd_enter, ctrl_shift_enter) = ui.input_mut(|i| {
         let alt_enter = i.consume_key(egui::Modifiers::ALT, Key::Enter) || i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::ALT, Key::Enter);
         let ctrl_shift_enter = i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::Enter);
         let cmd_enter = i.consume_key(egui::Modifiers::COMMAND, Key::Enter);
-        let enter = i.consume_key(egui::Modifiers::NONE, Key::Enter) || i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
-        let tab = i.consume_key(egui::Modifiers::NONE, Key::Tab) || i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
+        let shift_enter = i.consume_key(egui::Modifiers::SHIFT, Key::Enter);
+        let enter = shift_enter || i.consume_key(egui::Modifiers::NONE, Key::Enter);
+        let shift_tab = i.consume_key(egui::Modifiers::SHIFT, Key::Tab);
+        let tab = shift_tab || i.consume_key(egui::Modifiers::NONE, Key::Tab);
         let esc = i.consume_key(egui::Modifiers::NONE, Key::Escape);
         dismiss_completion(i, &mut ed.completion);
-        (enter, tab, esc, alt_enter, cmd_enter, ctrl_shift_enter, m.shift)
+        (enter, shift_enter, tab, shift_tab, esc, alt_enter, cmd_enter, ctrl_shift_enter)
     });
     if alt_enter {
         let b = ed.text.char_indices().nth(ed.caret).map(|(i, _)| i).unwrap_or(ed.text.len());
@@ -709,16 +713,16 @@ fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> 
         ed.sync_caret = true;
     }
     // `=PY` then Tab starts Python mode, as in Excel.
-    let py_trigger = tab && !shift && ed.is_py_trigger();
+    let py_trigger = tab && !shift_tab && ed.is_py_trigger();
     let mut action = if py_trigger {
         None
     } else if !ed.autocomplete.is_empty() && tab {
         ed.accept_autocomplete();
         None
     } else if enter {
-        Some((if shift { -1 } else { 1 }, 0, false, false))
+        Some((if shift_enter { -1 } else { 1 }, 0, false, false))
     } else if tab {
-        Some((0, if shift { -1 } else { 1 }, false, false))
+        Some((0, if shift_tab { -1 } else { 1 }, false, false))
     } else {
         None
     };

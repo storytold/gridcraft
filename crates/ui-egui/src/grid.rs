@@ -48,6 +48,7 @@ pub use editor::validation_arrow;
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
+pub(crate) use keyboard::guard_sheet_focus;
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};
@@ -414,6 +415,8 @@ pub struct GridState {
     pub header_drag_base: Vec<String>,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// The grid widget's egui Id from the last pass (`guard_sheet_focus` checks whether it has focus).
+    pub(crate) widget_id: Option<egui::Id>,
 }
 
 /// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and

@@ -223,6 +223,7 @@ impl SheetApp {
         if self.backstage.is_none() || self.keytips.prefix().is_some() {
             self.ribbon_keys(&ctx);
         }
+        grid::guard_sheet_focus(self, &ctx);
         if self.chrome.title_bar {
             ribbon::title_bar(self, ui);
         }

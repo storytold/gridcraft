@@ -4,12 +4,51 @@ use super::menus::is_checkbox;
 use super::selection::add_mode_move;
 use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
+/// The editors' ids: the cell editor, the formula bar and the text box editor.
+fn editor_ids() -> [egui::Id; 3] {
+    [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()]
+}
+
+/// Whether a dialog, message, menu, popup or other overlay owns the keyboard: Tab and the arrows
+/// are its own then, and [`guard_sheet_focus`] leaves egui's focus moves alone.
+fn overlay_owns_keyboard(app: &SheetApp, ctx: &egui::Context) -> bool {
+    app.backstage.is_some()
+        || app.dialog.is_some()
+        || app.message.is_some()
+        || app.macros.question.is_some()
+        || app.text_box_editor.is_some()
+        || app.grid.hf_edit.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || app.grid.context_menu.is_some()
+        || app.grid.object_menu.is_some()
+        || app.grid.header_menu.is_some()
+        || app.grid.list_picker.is_some()
+        || app.grid.renaming_tab.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || egui::Popup::is_any_open(ctx)
+}
+
+/// Cancels any egui focus-navigation direction armed during `begin_pass` while the sheet or its
+/// cell editor owns the keyboard, so Tab, Shift+Tab and arrows on a first focused frame never
+/// send focus out into chrome widgets.
+pub(crate) fn guard_sheet_focus(app: &SheetApp, ctx: &egui::Context) {
+    if overlay_owns_keyboard(app, ctx) || app.editor.as_ref().is_some_and(|ed| ed.python) {
+        return;
+    }
+    let focused = ctx.memory(|m| m.focused());
+    let editors = editor_ids();
+    if focused.is_none() || focused == app.grid.widget_id || focused.is_some_and(|f| editors.contains(&f)) {
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
+}
+
 /// Whether something other than the grid owns the keyboard this frame: an editor, a dialog, a
 /// message, a menu or another focused widget. Kept out of [`keyboard`] to hold its complexity
 /// within the workspace limit.
 fn keyboard_elsewhere(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
     // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let stale = editor_ids();
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
     if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
         resp.request_focus();

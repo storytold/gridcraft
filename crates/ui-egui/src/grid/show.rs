@@ -54,6 +54,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         Rect::from_min_max(available.min, pos2(available.right() - bar, available.bottom()))
     };
     let resp = ui.allocate_rect(rect, crate::dialogs::grid_sense(app));
+    app.grid.widget_id = Some(resp.id);
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
