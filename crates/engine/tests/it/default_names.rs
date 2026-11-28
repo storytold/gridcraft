@@ -34,3 +34,21 @@ fn a_word_that_cannot_name_a_sheet_keeps_english() {
         assert_eq!(names, DefaultNames::default(), "{bad:?}");
     }
 }
+
+#[test]
+fn the_accessibility_check_flags_only_a_word_and_a_number() {
+    let mut s = Session::new();
+    s.default_names.set("Pasta", "Planilha");
+    s.default_names.set_known_sheet_words(["Sheet", "Planilha"]);
+    s.new_workbook();
+    for name in ["Planilha de vendas", "Sheets", "Sheet3"] {
+        s.execute("home.insertSheet", json!({"name": name})).unwrap();
+    }
+    // The interface goes back to English: a Portuguese default is still a default.
+    s.default_names.set("Book", "Sheet");
+    let issues = s.execute("review.checkAccessibility", json!({})).unwrap();
+    let flagged: Vec<&str> =
+        issues.as_array().unwrap().iter().filter(|i| i["issue"] == "Default sheet name").filter_map(|i| i["sheet"].as_str()).collect();
+    assert!(flagged.contains(&"Planilha1") && flagged.contains(&"Sheet3"), "{flagged:?}");
+    assert!(!flagged.contains(&"Planilha de vendas") && !flagged.contains(&"Sheets"), "{flagged:?}");
+}

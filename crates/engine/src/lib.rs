@@ -488,11 +488,14 @@ impl Default for Prefs {
 pub struct DefaultNames {
     pub book: String,
     pub sheet: String,
+    /// Every language's word for a new sheet, so `Planilha1` still reads as a default name after
+    /// the interface switches back to English ([`DefaultNames::set_known_sheet_words`]).
+    pub known_sheet_words: Vec<String>,
 }
 
 impl Default for DefaultNames {
     fn default() -> Self {
-        DefaultNames { book: "Book".into(), sheet: "Sheet".into() }
+        DefaultNames { book: "Book".into(), sheet: "Sheet".into(), known_sheet_words: Vec::new() }
     }
 }
 
@@ -510,6 +513,23 @@ impl DefaultNames {
         let english = DefaultNames::default();
         self.book = if usable(book) { book.trim().to_string() } else { english.book };
         self.sheet = if usable(sheet) { sheet.trim().to_string() } else { english.sheet };
+    }
+
+    /// Records the words other interface languages name new sheets with (`Planilha`, …).
+    pub fn set_known_sheet_words<'a>(&mut self, words: impl IntoIterator<Item = &'a str>) {
+        self.known_sheet_words.clear();
+        for w in words.into_iter().map(str::trim).filter(|w| !w.is_empty()) {
+            if !self.known_sheet_words.iter().any(|k| k == w) {
+                self.known_sheet_words.push(w.to_string());
+            }
+        }
+    }
+
+    /// Whether `name` is a default sheet name: a sheet word followed only by a number
+    /// (`Sheet3`, `Planilha12`), whatever language made it; `Planilha de vendas` is not.
+    pub fn is_default_sheet_name(&self, name: &str) -> bool {
+        let words = ["Sheet", self.sheet.as_str()].into_iter().chain(self.known_sheet_words.iter().map(String::as_str));
+        words.into_iter().any(|w| name.strip_prefix(w).is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
     }
 }
 
@@ -687,7 +707,7 @@ impl Session {
     /// A new blank workbook titled `BookN`, its sheets named `Sheet1`, `Sheet2`… (in the words of
     /// [`Session::default_names`]).
     pub fn new_workbook(&mut self) -> usize {
-        let DefaultNames { book, sheet } = self.default_names.clone();
+        let (book, sheet) = (self.default_names.book.clone(), self.default_names.sheet.clone());
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("{book}{n}") && d.path.is_none())).unwrap_or(1);
         let mut wb = Workbook::new();
         wb.sheets = vec![Arc::new(gridcraft_model::Sheet::new(format!("{sheet}1")))];

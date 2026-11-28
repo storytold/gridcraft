@@ -117,8 +117,10 @@ impl SheetApp {
         let language = self.ui.language;
         let (book, sheet) = (language.tr("Default name|Book"), language.tr("Default name|Sheet"));
         let names = &self.session.default_names;
-        if names.book != book || names.sheet != sheet {
+        if names.book != book || names.sheet != sheet || names.known_sheet_words.is_empty() {
             self.session.default_names.set(book, sheet);
+            let words = crate::i18n::Language::ALL.map(|l| l.tr("Default name|Sheet"));
+            self.session.default_names.set_known_sheet_words(words);
         }
     }
 

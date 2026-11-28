@@ -367,8 +367,8 @@ fn accessibility(s: &mut Session, _: &Json) -> Result<Json> {
         if !sh.merges.is_empty() {
             issues.push(json!({"sheet": sh.name, "issue": "Merged cells", "count": sh.merges.len()}));
         }
-        // The English default, or the interface language's word for new sheets (Planilha1).
-        if sh.name.starts_with("Sheet") || sh.name.starts_with(s.default_names.sheet.as_str()) {
+        // `Sheet3`, or another language's default such as `Planilha3`; not `Planilha de vendas`.
+        if s.default_names.is_default_sheet_name(&sh.name) {
             issues.push(json!({"sheet": sh.name, "issue": "Default sheet name"}));
         }
     }

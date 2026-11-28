@@ -8,8 +8,9 @@ use serde_json::json;
 fn a_new_workbook_is_named_in_the_interface_language() {
     let mut h = crate::support::blank_harness(4);
     let first = h.state().session.active().unwrap().title.clone();
+    // No frame in between: the language command itself updates the names, so a command later in
+    // the same batch (control channel, MCP) already uses them.
     h.state_mut().run("app.language.set", json!({"language": "pt"})).unwrap();
-    h.run_steps(2);
     let (book, sheet) = (Language::PtBr.tr("Default name|Book"), Language::PtBr.tr("Default name|Sheet"));
     assert!(book != "Book" && sheet != "Sheet", "Portuguese has its own words: {book}, {sheet}");
     h.state_mut().run("file.new", json!({})).unwrap();
