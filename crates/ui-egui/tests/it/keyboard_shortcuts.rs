@@ -27,9 +27,13 @@ fn book(selected: &str) -> Session {
 
 /// A key press as a US keyboard reports it (the physical key is the unshifted one).
 fn key(h: &mut Harness, k: Key, m: Modifiers) {
+    queue_key(h, k, m);
+    h.run_steps(2);
+}
+
+fn queue_key(h: &mut Harness, k: Key, m: Modifiers) {
     h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: true, repeat: false, modifiers: m });
     h.input_mut().events.push(Event::Key { key: k, physical_key: Some(k), pressed: false, repeat: false, modifiers: m });
-    h.run_steps(2);
 }
 
 fn style(h: &Harness, a1: &str) -> gridcraft_engine::model::Style {
@@ -75,6 +79,41 @@ fn ctrl_one_format_cells_takes_focus_and_switches_tabs_by_keyboard() {
     assert!(h.state().dialog.is_none());
     key(&mut h, Key::ArrowRight, Modifiers::NONE);
     assert_eq!(active_a1(&h), "B1", "the grid gets its keyboard back");
+}
+
+#[test]
+fn format_cells_first_arrow_after_tab_moves_the_format_code_caret() {
+    use egui::accesskit::Role;
+
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::Num1, CTRL);
+    let label = "Type (custom format code):";
+    for _ in 0..20 {
+        if h.get_by_role_and_label(Role::TextInput, label).is_focused() {
+            break;
+        }
+        key(&mut h, Key::Tab, Modifiers::NONE);
+    }
+    let field = h.get_by_role_and_label(Role::TextInput, label);
+    assert!(field.is_focused());
+    let mut expected = field.value().expect("the custom format code has a value");
+    let last_char = expected.pop().expect("the initial format code is nonempty");
+    expected.push('0');
+    expected.push(last_char);
+
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert!(!h.get_by_role_and_label(Role::TextInput, label).is_focused());
+    // Deliver Left in the first pass after Tab, before the field can register its filter.
+    queue_key(&mut h, Key::Tab, Modifiers::NONE);
+    h.step();
+    assert!(h.get_by_role_and_label(Role::TextInput, label).is_focused());
+    queue_key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    h.step();
+    assert!(h.get_by_role_and_label(Role::TextInput, label).is_focused());
+    h.input_mut().events.push(Event::Text("0".into()));
+    h.run_steps(2);
+    assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some(expected.as_str()));
 }
 
 #[test]

@@ -73,16 +73,19 @@ fn tab_through_controls(ui: &egui::Ui) {
     let moved = ui.memory_mut(|m| {
         let focused = m.focused();
         if let Some(backwards) = backwards {
-            let stops: Vec<_> = m.focus_candidates().iter().filter(|stop| stop.layer == layer).map(|stop| stop.id).collect();
-            let next = match (stops.iter().position(|id| Some(*id) == focused), backwards) {
+            let stops: Vec<_> = m.focus_candidates().iter().filter(|stop| stop.layer == layer).collect();
+            let next = match (stops.iter().position(|stop| Some(stop.id) == focused), backwards) {
                 (Some(index), true) => index.checked_sub(1).and_then(|index| stops.get(index)).or(stops.last()),
                 (Some(index), false) => stops.get(index + 1).or(stops.first()),
                 (None, true) => stops.last(),
                 (None, false) => stops.first(),
             };
             if let Some(&next) = next {
+                // Keep caret keys available from the first pass, before the text edit sets its filter.
+                let filter = egui::EventFilter { horizontal_arrows: next.text, vertical_arrows: next.text, ..KEEP_TAB };
+                let id = next.id;
                 m.move_focus(egui::FocusDirection::None);
-                m.request_focus_with_filter(next, KEEP_TAB);
+                m.request_focus_with_filter(id, filter);
                 return true;
             }
         }
