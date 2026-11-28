@@ -16,6 +16,33 @@ fn filter_blanks_include_empty_text_and_formula_results() {
 }
 
 #[test]
+fn subtotal_rejects_unknown_functions_before_changing_the_sheet() {
+    for (function, expected) in [(Some("average"), 15.0), (Some("sum"), 30.0), (None, 30.0)] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["East", 10], ["East", 20]]})).unwrap();
+        let before = s.doc().unwrap().wb.clone();
+        let selection = s.doc().unwrap().selection.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        let mut params = json!({"range": "A1:B3", "groupBy": "A", "columns": ["B"]});
+        for invalid in ["averag", ""] {
+            params["function"] = json!(invalid);
+            let err = s.execute("data.subtotal", params.clone()).unwrap_err();
+            assert!(err.to_string().contains("unknown `function`"), "{invalid}: {err}");
+            assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+            assert_eq!(s.doc().unwrap().selection, selection);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        params.as_object_mut().unwrap().remove("function");
+        if let Some(function) = function {
+            params["function"] = json!(function);
+        }
+        s.execute("data.subtotal", params).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(3, 1)), Value::Number(expected));
+    }
+}
+
+#[test]
 fn subtotal_honours_header_false() {
     // #131: with header:false the first data row was treated as a header and left out of its
     // group's subtotal and the grand total.
