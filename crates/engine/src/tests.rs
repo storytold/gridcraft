@@ -2333,6 +2333,68 @@ fn open_restores_height_of_plain_rows_the_fit_removed() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().row_height(4), 60.0, "a tall plain row keeps its height after the fit removes its entry");
 }
 
+#[test]
+fn fit_row_height_uses_stored_width_for_hidden_columns() {
+    let bytes = {
+        let mut wb = gridcraft_model::Workbook::new();
+        let mut wrap = gridcraft_model::Style::default();
+        wrap.align.wrap = true;
+        let wrap_id = wb.styles.intern(wrap);
+        let mut big = gridcraft_model::Style::default();
+        big.font.size = 28.0;
+        let big_id = wb.styles.intern(big);
+
+        let sh = wb.sheet_mut(0).unwrap();
+        // Column C is hidden with a stored 250px width and wrapped text that fits on one line at 250px.
+        sh.cols.entry(2).or_default().size = Some(250.0);
+        sh.cols.entry(2).or_default().hidden = true;
+        sh.set_value(CellRef::new(1, 0), Value::text("Item"));
+        sh.set_style(CellRef::new(1, 0), wrap_id);
+        sh.set_value(CellRef::new(1, 2), Value::text("Monthly hours summary for column"));
+        sh.set_style(CellRef::new(1, 2), wrap_id);
+        // Row 3 has a 28pt font in hidden column C: Excel AutoFit still counts hidden column fonts.
+        sh.set_value(CellRef::new(2, 0), Value::text("Plain"));
+        sh.set_value(CellRef::new(2, 2), Value::text("Hidden big"));
+        sh.set_style(CellRef::new(2, 2), big_id);
+        // Row 4 has a visible narrow wrapped cell alongside a wide hidden wrapped cell.
+        sh.cols.entry(1).or_default().size = Some(40.0);
+        sh.set_value(CellRef::new(3, 1), Value::text("one two three four"));
+        sh.set_style(CellRef::new(3, 1), wrap_id);
+        sh.set_value(CellRef::new(3, 2), Value::text("A wrapped label in a wide hidden column"));
+        sh.set_style(CellRef::new(3, 2), wrap_id);
+        // Row 5 has a zero-width column with wrapped text: must not wrap at 1px into 546px.
+        sh.cols.entry(3).or_default().size = Some(0.0);
+        sh.cols.entry(3).or_default().hidden = true;
+        sh.set_value(CellRef::new(4, 3), Value::text("Wrapped text in a zero-width hidden column must not explode"));
+        sh.set_style(CellRef::new(4, 3), wrap_id);
+        gridcraft_xlsx::write_xlsx(&wb).unwrap()
+    };
+    let default_h = gridcraft_model::Workbook::new().active().unwrap().row_height(1);
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "hidden-wrap.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let row4_open_h = {
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        assert_eq!(sh.row_height(1), default_h, "hidden column wrapped text measured at stored 250px width stays one line");
+        assert!(sh.row_height(2) > default_h * 1.5, "large font in a hidden column still grows the row as in Excel");
+        assert!(
+            sh.row_height(3) > default_h && sh.row_height(3) < 200.0,
+            "visible wrapped cell still grows row 4 normally without hidden column blowing up to 546px (got {})",
+            sh.row_height(3)
+        );
+        assert_eq!(sh.row_height(4), default_h, "zero-width column skips wrapping instead of blowing up to 546px");
+        sh.row_height(3)
+    };
+    // Exercise home.autofitRowHeight independently: set rows 2 and 4 to a custom 60pt height, then autofit.
+    s.execute("home.rowHeight", json!({"rows": "2:2", "points": 60.0})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "4:4", "points": 60.0})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().row_height(1) > default_h * 2.0);
+    s.execute("home.autofitRowHeight", json!({"rows": "2:2"})).unwrap();
+    s.execute("home.autofitRowHeight", json!({"rows": "4:4"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.row_height(1), default_h, "autofitRowHeight measures hidden column at stored width and shrinks row 2 back to default");
+    assert_eq!(sh.row_height(3), row4_open_h, "autofitRowHeight restores row 4 to its visible wrapped height");
+}
+
 #[test] // D — Review Focus 5
 fn open_fitting_keeps_hidden_rows_hidden() {
     let mut s = Session::new();
