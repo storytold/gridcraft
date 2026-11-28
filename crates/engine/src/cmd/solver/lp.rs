@@ -552,7 +552,10 @@ pub(super) fn linearize(ev: &mut Evaluator, x0: &[f64]) -> std::result::Result<L
     let xt: Vec<f64> =
         x0.iter().enumerate().map(|(j, v)| v + if j % 2 == 0 { 1.7 + 0.3 * (j % 5) as f64 } else { -0.6 - 0.2 * (j % 3) as f64 }).collect();
     let pt = ev.eval(&xt).ok_or("budget")?;
-    let close = |actual: f64, pred: f64, terms: f64| actual.is_finite() && (actual - pred).abs() <= 1e-6 * (1.0 + actual.abs() + terms);
+    // The slack is relative to the terms that change with the variables. The value as a whole
+    // (a constant can make it large) only adds room for the rounding of that constant: scaled by
+    // the value, a quadratic objective plus 10,000,000 passed as linear (#3857).
+    let close = |actual: f64, pred: f64, terms: f64| actual.is_finite() && (actual - pred).abs() <= 1e-6 * (1.0 + terms) + 1e-12 * actual.abs();
     let terms = |a: &[f64]| a.iter().zip(&xt).map(|(p, q)| (p * q).abs()).sum::<f64>();
     if !close(pt.f, f_const + dot(&cf, &xt), terms(&cf)) {
         return Err("nonlinear");
