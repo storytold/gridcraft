@@ -23,8 +23,8 @@ use descriptive::{
 use distributions::{
     beta_dist, beta_inv, betadist_legacy, binom_dist, binom_dist_range, binom_inv, chisq_dist, chisq_dist_rt, chisq_inv, chisq_inv_rt, chisq_test,
     confidence_norm, confidence_t, expon_dist, f_dist, f_dist_rt, f_inv, f_inv_rt, f_test, fisher, gamma_dist, gamma_fn, gamma_inv, gammaln, gauss,
-    hypgeom_dist, lognorm_dist, lognorm_inv, negbinom_dist, norm_dist, norm_inv_fn, norm_s_dist, norm_s_inv, poisson_dist, t_dist, t_dist_2t,
-    t_dist_rt, t_inv, t_inv_2t, t_test, tdist_legacy, weibull_dist, z_test,
+    hypgeom_dist, hypgeomdist_legacy, lognorm_dist, lognorm_inv, negbinom_dist, norm_dist, norm_inv_fn, norm_s_dist, norm_s_inv, poisson_dist,
+    t_dist, t_dist_2t, t_dist_rt, t_inv, t_inv_2t, t_test, tdist_legacy, weibull_dist, z_test,
 };
 #[cfg(test)]
 use regression::{MAX_REGRESSORS, check_regression_size};
@@ -649,7 +649,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             S,
             "HYPGEOMDIST(sample_s, number_sample, population_s, number_pop)",
             "Hypergeometric probability of an exact count.",
-            hypgeom_dist
+            hypgeomdist_legacy
         ),
         f!(
             "NEGBINOM.DIST",

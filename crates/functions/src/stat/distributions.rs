@@ -804,14 +804,27 @@ pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })
 }
 
-pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
+fn hypgeom_common(a: &[Arg], strict: bool) -> R<Value> {
     let k = num(a, 0)?.trunc();
     let n = num(a, 1)?.trunc();
     let kk = num(a, 2)?.trunc();
     let nn = num(a, 3)?.trunc();
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
-    if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
+    if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
+    }
+    let lo = (n - nn + kk).max(0.0);
+    let hi = n.min(kk);
+    if k < lo || k > hi {
+        // Outside the support the mass is zero; the cumulative form is 0 below
+        // the support and 1 above it. The legacy compatibility form stays strict.
+        if strict {
+            return Err(CellError::Num);
+        }
+        if !cum {
+            return num_val(0.0);
+        }
+        return num_val(if k < lo { 0.0 } else { 1.0 });
     }
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
@@ -827,6 +840,14 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
         i += 1.0;
     }
     num_val(s.min(1.0))
+}
+
+pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
+    hypgeom_common(a, false)
+}
+
+pub(super) fn hypgeomdist_legacy(a: &[Arg], _: C) -> R<Value> {
+    hypgeom_common(a, true)
 }
 
 pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
