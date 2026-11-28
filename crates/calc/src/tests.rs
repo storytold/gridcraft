@@ -67,6 +67,41 @@ fn spill_range_operator() {
     assert_eq!(t.num("E1"), 100.0);
 }
 
+/// Native Excel (#4269): SUBTOTAL and AGGREGATE leave out cells whose formula calls SUBTOTAL or
+/// AGGREGATE, but text that only looks like a call, inside a string, is no call.
+#[test]
+fn subtotal_skips_real_nested_calls_not_quoted_text() {
+    let mut t = T::new();
+    t.set("A1", "10");
+    t.set("A2", "=IF(\"SUBTOTAL(\"=\"\",0,20)");
+    t.set("B1", "10");
+    t.set("B2", "=IF(\"aGgReGaTe(\"=\"\",0,20)");
+    t.set("C1", "10");
+    t.set("C2", "=SUBTOTAL(9,C1)*2");
+    t.set("D1", "10");
+    t.set("D2", "=IF(\"say \"\"SUBTOTAL(\"\"\"=\"\",0,20)");
+    t.set("F1", "10");
+    t.set("F2", "=LEN(\"x\")+AGGREGATE(9,0,F1)");
+    let rows: [(&str, f64); 10] = [
+        ("=SUBTOTAL(9,A1:A2)", 30.0),
+        ("=SUBTOTAL(109,A1:A2)", 30.0),
+        ("=AGGREGATE(9,0,A1:A2)", 30.0),
+        ("=AGGREGATE(9,4,A1:A2)", 30.0),
+        ("=SUBTOTAL(9,B1:B2)", 30.0),
+        ("=SUBTOTAL(9,D1:D2)", 30.0),
+        // Real nested calls are still left out, also after a string literal.
+        ("=SUBTOTAL(9,C1:C2)", 10.0),
+        ("=AGGREGATE(9,0,C1:C2)", 10.0),
+        ("=AGGREGATE(9,4,C1:C2)", 30.0),
+        ("=SUBTOTAL(9,F1:F2)", 10.0),
+    ];
+    for (i, (f, want)) in rows.into_iter().enumerate() {
+        let at = format!("H{}", i + 1);
+        t.set(&at, f);
+        assert_eq!(t.num(&at), want, "{f}");
+    }
+}
+
 #[test]
 fn arrays_that_spill_as_before_do_not_requeue_their_dependents() {
     // Two arrays that each read the other's spill area, and a formula reading both spills.
