@@ -1013,8 +1013,8 @@ Fixtures are built in code and never committed as large binaries:
 
 - `Session::new()` + `file.new {sample: "sales"|"budget"|"grades"}` for the three samples.
 - A 100,000-row × 6-column workbook built through `range.setValues` in 10,000-row chunks, plus
-  formulas `G=B*C+D`, a chained running sum, `SUM`/`SUMIFS`/`XLOOKUP` and a sort, mirroring
-  `crates/engine/examples/perf.rs`.
+  formulas `G=B*C+D`, a chained running sum, `SUM`/`SUMIFS`/`XLOOKUP` and a sort, like the
+  workloads in `crates/engine/examples/bench.rs` (`cargo xtask bench`).
 - A two-sheet workbook with a formula being pointed across sheets, a right-to-left sheet, frozen
   panes, merged cells, a table, a chart, comments/notes, validation and a cell picture.
 - Password-protected and corrupt-font fixtures through `gridcraft-xlsx`'s `test-support` feature
@@ -1111,7 +1111,7 @@ Never report compile duration as UI performance.
 | Startup | fresh process → first painted frame / control channel ready | wall time, split font setup, wgpu renderer creation, first frame |
 | Grid scroll | `sales`/100k-row synthetic workbook, 1,000 frames of vertical/horizontal scroll | frame distribution, `grid_ms`, tessellation time, vertices/indices, uploads |
 | Cell edit | type/commit 1,000 cells via control channel | command latency, frame CPU, undo memory |
-| Recalc | `crates/engine/examples/perf` on the same workbook | engine-only latency, recalc cell count (not a UI number) |
+| Recalc | `cargo xtask bench` (`crates/engine/examples/bench.rs`, fixed in-code workbooks; `recalc.full` and the edit scenarios) | engine-only latency, recalc cell count (not a UI number) |
 | Dialog/ribbon | open/close Format Cells, switch tabs, type filter | CPU frame time, paint counts |
 | Text tessellation | fixed 120-ASCII-label scene + mixed color-glyph row | per-tessellate time/instructions; reproduce #8731 |
 | Fonts | 20 cold starts with the same font set | discovery/build/set_fonts time, peak RSS |

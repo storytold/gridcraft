@@ -23,6 +23,11 @@ fn sample() -> Workbook {
     wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true, r1c1: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
+    wb.write_reservation = Some(gridcraft_model::WriteReservation {
+        user_name: "Ann & <Bob>".into(),
+        read_only_recommended: true,
+        password: Some(gridcraft_model::PasswordHash::new_sha512("modify-me", b"fedcba9876543210")),
+    });
     wb.props = DocProps {
         title: "T & <x>".into(),
         subject: "S".into(),
@@ -112,7 +117,8 @@ fn sample() -> Workbook {
     s.spill.insert(at("H3"), Value::Number(3.0));
 
     s.cols.insert(0, LineInfo { size: Some(100.0), ..Default::default() });
-    s.cols.insert(1, LineInfo { size: Some(100.0), ..Default::default() });
+    // Column B was sized by hand (customWidth), A widened by itself; both come back as they were.
+    s.cols.insert(1, LineInfo { size: Some(100.0), custom: true, ..Default::default() });
     s.cols.insert(3, LineInfo { hidden: true, outline: 1, ..Default::default() });
     s.cols.insert(5, LineInfo { style: Some(money), ..Default::default() });
     s.rows.insert(0, LineInfo { size: Some(30.0), ..Default::default() });
@@ -271,7 +277,7 @@ fn sample() -> Workbook {
     s.autofilter = Some(AutoFilter {
         range: rr("K1:N20"),
         criteria: vec![
-            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true }),
+            (0, FilterCriterion::Values { values: vec!["a".into(), "b".into()], blanks: true, identities: vec![] }),
             (1, FilterCriterion::Custom { a: (">=".into(), "5".into()), b: Some(("<".into(), "9".into())), and: true }),
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
@@ -346,7 +352,7 @@ fn sample() -> Workbook {
         last_col: false,
         filter_button: true,
         filter: vec![
-            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false }),
+            (0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] }),
             (1, FilterCriterion::Icon { set: "3TrafficLights1".into(), id: Some(1) }),
         ],
         table_type: None,
@@ -422,6 +428,8 @@ fn sample() -> Workbook {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            number_format: None,
+            innermost_categories: false,
         }],
         legend: LegendPos::Bottom,
         data_labels: true,
@@ -446,6 +454,8 @@ fn sample() -> Workbook {
         ChartKind::Line,
         ChartKind::LineMarkers,
         ChartKind::LineStacked,
+        ChartKind::LineStacked100,
+        ChartKind::LineStacked100Markers,
         ChartKind::Pie,
         ChartKind::Doughnut,
         ChartKind::Area,
@@ -529,6 +539,8 @@ fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert!(back.protected_structure);
     assert_eq!(back.structure_password, wb.structure_password);
     assert!(back.structure_password.as_ref().unwrap().verify("s3cret").unwrap());
+    assert_eq!(back.write_reservation, wb.write_reservation);
+    assert!(back.write_reservation.as_ref().and_then(|r| r.password.as_ref()).unwrap().verify("modify-me").unwrap());
     assert_eq!(back.props, wb.props);
     assert_eq!(back.theme, wb.theme);
     assert_eq!(back.names, wb.names);
@@ -1921,6 +1933,25 @@ fn japanese_paper_sizes_round_trip() {
     assert_eq!(back.sheet(0).unwrap().print.paper, "B5");
 }
 
+/// The paper names every spelling folds onto keep their file id: `11x17` is Tabloid (3), and
+/// ISO B5 is id 34 (ECMA-376's 176×250 mm "B5 envelope"), read back as `B5 (ISO)`. An empty
+/// paper (none stated) writes no `paperSize`, so the reader's own paper applies.
+#[test]
+fn paper_names_keep_their_xlsx_id_and_an_unstated_paper_writes_none() {
+    for (paper, id, back_as) in [("11x17", 3, "Tabloid"), ("US Legal", 5, "Legal"), ("B5 (ISO)", 34, "B5 (ISO)"), ("Envelope B5", 34, "B5 (ISO)")] {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().print.paper = paper.into();
+        let bytes = write_xlsx(&wb).unwrap();
+        assert!(sheet1_xml(&bytes).0.contains(&format!("paperSize=\"{id}\"")), "{paper}");
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheet(0).unwrap().print.paper, back_as);
+    }
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().print.paper = String::new();
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    assert!(!xml.contains("paperSize"), "{xml}");
+}
+
 /// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),
 /// not in `Table::filter`. Writing used to suppress the sheet `<autoFilter>` because a table
 /// intersects it and write the table part from `Table::filter`, which was empty: the criteria
@@ -1951,8 +1982,10 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
-    s.autofilter =
-        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
     s.rows.entry(1).or_default().hidden = true;
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1965,9 +1998,9 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     assert!(b.autofilter.is_none(), "a table's filter belongs to the table part, not the sheet");
 }
 
-/// Stored `colId` offsets are relative to the filter range's first column, so criteria of a filter
-/// that starts right of the table's first column must not be folded into the table part, where
-/// they would apply to the wrong column.
+/// Stored `colId` offsets are relative to the table's first column, so criteria of a sheet filter
+/// that starts right of the table's first column are moved to the column they filter (Region), not
+/// kept at the filter's own offset (which would be Id).
 #[test]
 fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let mut wb = Workbook::new();
@@ -1994,15 +2027,35 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         table_type: None,
         connection_id: None,
     });
-    s.autofilter =
-        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("B1:B3"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+    });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let b = back.sheet(0).unwrap();
     let t = b.tables.first().expect("the table survived");
-    assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
+    assert!(
+        matches!(t.filter.as_slice(), [(1, FilterCriterion::Values { values, .. })] if values == &["East".to_string()]),
+        "the criteria landed on the wrong table column: {:?}",
+        t.filter
+    );
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn legacy_reservation_password_is_written_with_a_user_name() {
+    let mut wb = sample();
+    wb.write_reservation =
+        Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let r = back.write_reservation.expect("the reservation survived");
+    assert_eq!(r.password, Some(PasswordHash::Legacy(0x83AF)), "a nameless legacy password is kept, under a placeholder name");
+    assert!(!r.user_name.is_empty());
+    wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
 }
 
 #[test]
@@ -2240,6 +2293,29 @@ fn remove_personal_information_is_kept_and_honoured() {
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
+
+/// A password set in GridCraft (both forms) is written as its Excel form, which reads back and
+/// verifies; a SHA-256 digest alone has no XLSX form, so its protection is kept without it.
+#[test]
+fn protection_passwords_write_the_form_xlsx_stores() {
+    let mut wb = Workbook::new();
+    wb.protected_structure = true;
+    wb.structure_password = Some(PasswordHash::new_for_files("b00k", b"0123456789abcdef"));
+    let both = PasswordHash::new_for_files("pa55", b"fedcba9876543210");
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.protection = Some(SheetProtection { password: Some(both.clone()), ..Default::default() });
+    let mut digest_only = Sheet::new("Digest");
+    digest_only.protection = Some(SheetProtection { password: Some(PasswordHash::new_sha256_digest("pa55")), ..Default::default() });
+    wb.sheets.push(Arc::new(digest_only));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.structure_password.as_ref(), wb.structure_password.as_ref().and_then(PasswordHash::excel));
+    assert!(back.structure_password.as_ref().unwrap().verify("b00k").unwrap());
+    let read = back.sheets[0].protection.as_ref().and_then(|p| p.password.clone());
+    assert_eq!(read.as_ref(), both.excel());
+    assert!(read.unwrap().verify("pa55").unwrap());
+    let digest = back.sheets[1].protection.as_ref().unwrap();
+    assert_eq!(digest.password, None);
 }
 
 #[test]

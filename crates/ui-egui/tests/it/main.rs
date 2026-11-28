@@ -13,6 +13,7 @@ mod argument_names;
 mod autosave_persist;
 mod autosum_edit;
 mod borders;
+mod cascading_filter_values;
 mod cell_editor_caret;
 mod cell_pictures;
 mod cf_rule_pick;

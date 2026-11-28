@@ -235,7 +235,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             moved.dynamic = f.dynamic;
                             return Some(std::sync::Arc::new(moved));
                         }
-                        let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                        let moved = if transpose {
+                            // A transposed paste turns the references instead of shifting them (#2450).
+                            gridcraft_formula::adjust::transpose_relative(e, sc, dest)
+                        } else {
+                            gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)
+                        };
                         Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
@@ -416,6 +421,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
                     let nm = RangeRef::new(a, b);
                     let sh = cx.sheet_mut(dest_sheet)?;
+                    // A table can't hold merged cells (Excel removes the table on open): the
+                    // cells are pasted there unmerged.
+                    if sh.tables.iter().any(|t| t.range.intersects(&nm)) {
+                        continue;
+                    }
                     sh.merges.retain(|x| !x.intersects(&nm));
                     sh.merges.push(nm);
                 }

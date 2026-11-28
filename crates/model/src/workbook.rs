@@ -144,6 +144,56 @@ pub struct DefinedName {
     pub hidden: bool,
 }
 
+/// The language, script, country and font a document gives one script's text by default, each
+/// `None` when unstated. Codes are as files spell them (`de`/`DE`; ODF states "no language" as
+/// language `zxx` with country `none`). ODF 1.2 and later can also state a script code (`Latn` in `sr-Latn-RS`) and a full
+/// BCP 47 tag for locales the separate codes cannot express (`ca-ES-valencia`); both are kept so
+/// such a locale survives open and save.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScriptDefault {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// ISO 15924 script code (ODF `fo:script`, `style:script-asian`, `style:script-complex`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// BCP 47 language tag (ODF `style:rfc-language-tag`, `-asian`, `-complex`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfc_language_tag: Option<String>,
+    /// The font family name (not an ODF `style:font-face` declaration name: a reader resolves
+    /// `style:font-name-asian`/`-complex` to its family, a writer declares a face for it). Read
+    /// for Asian and complex text only; Western text takes the default style's font, so
+    /// `western.font` is unused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+}
+
+impl ScriptDefault {
+    pub fn is_empty(&self) -> bool {
+        self.language.is_none() && self.script.is_none() && self.country.is_none() && self.rfc_language_tag.is_none() && self.font.is_none()
+    }
+}
+
+/// Default language and fonts of Western, Asian (CJK) and complex (right-to-left, Indic) text.
+/// Empty unless a reader for a format that states them fills them (OpenDocument puts them on
+/// its default cell style); Excel has no equivalent, so XLSX neither reads nor writes them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TextDefaults {
+    #[serde(default, skip_serializing_if = "ScriptDefault::is_empty")]
+    pub western: ScriptDefault,
+    #[serde(default, skip_serializing_if = "ScriptDefault::is_empty")]
+    pub asian: ScriptDefault,
+    #[serde(default, skip_serializing_if = "ScriptDefault::is_empty")]
+    pub complex: ScriptDefault,
+}
+
+impl TextDefaults {
+    pub fn is_empty(&self) -> bool {
+        self.western.is_empty() && self.asian.is_empty() && self.complex.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocProps {
     pub title: String,
@@ -219,9 +269,14 @@ pub struct Workbook {
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
-    /// Password of the structure protection (XLSX `workbookProtection`), never the password.
+    /// Hash of the structure protection's password, never the password. XLSX
+    /// `workbookProtection` writes its Excel form ([`crate::PasswordHash::excel`]); a digest
+    /// alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
+    /// "Password to modify" (XLSX `fileSharing`): the file opens read-only unless it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_reservation: Option<WriteReservation>,
     /// Custom fill lists (Options › Custom Lists) beyond the built-in ones.
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
@@ -261,6 +316,11 @@ pub struct Workbook {
     /// Shared between snapshots, as nothing changes them.
     #[serde(skip)]
     pub macros_unread: Arc<Vec<serde_json::Value>>,
+    /// The language and fonts the document gives text of each script by default (an
+    /// OpenDocument file's default cell style). Empty until a reader for a format that states
+    /// them fills them.
+    #[serde(default, skip_serializing_if = "TextDefaults::is_empty")]
+    pub text_defaults: TextDefaults,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -290,6 +350,15 @@ impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()
     }
+}
+
+/// The write-reservation of a file (XLSX `fileSharing`): who reserved it, whether it asks to open
+/// read-only, and the hash of its password to modify, never the password.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteReservation {
+    pub user_name: String,
+    pub read_only_recommended: bool,
+    pub password: Option<crate::PasswordHash>,
 }
 
 /// The active sheet index of a [`Workbook`].
@@ -562,6 +631,7 @@ impl Workbook {
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
+            write_reservation: None,
             custom_lists: vec![],
             cell_styles: vec![],
             phonetics: vec![],
@@ -570,6 +640,7 @@ impl Workbook {
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
+            text_defaults: TextDefaults::default(),
             preserved: None,
             source_dir: None,
             region: gridcraft_core::region::default_region(),
@@ -829,6 +900,59 @@ mod tests {
         assert_eq!(wb.sheets.get(3).and_then(|s| s.validations.first()).map(|v| v.f1.as_str()), Some("=Data!A1>0"));
         let f = wb.sheets.get(1).and_then(|s| s.cell(gridcraft_core::CellRef::new(0, 0))).and_then(|c| c.formula.clone()).ok_or("formula")?;
         assert_eq!(f.text, "Data!A1+1");
+        Ok(())
+    }
+
+    #[test]
+    fn text_defaults_round_trip_in_json_and_are_skipped_when_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let mut wb = Workbook::new();
+        assert!(wb.text_defaults.is_empty(), "new workbooks state no text defaults");
+        // A workbook without them serialises exactly as before the field existed.
+        let json = serde_json::to_string(&wb)?;
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        assert!(value.get("text_defaults").is_none(), "empty text defaults are not written");
+        // JSON written before the field existed still loads, with empty defaults.
+        assert!(serde_json::from_str::<Workbook>(&json)?.text_defaults.is_empty());
+
+        wb.text_defaults = TextDefaults {
+            western: ScriptDefault {
+                language: Some("sr".into()),
+                script: Some("Latn".into()),
+                country: Some("RS".into()),
+                rfc_language_tag: Some("sr-Latn-RS".into()),
+                font: None,
+            },
+            asian: ScriptDefault {
+                language: Some("ja".into()),
+                country: Some("JP".into()),
+                font: Some("Noto Sans CJK JP".into()),
+                ..Default::default()
+            },
+            complex: ScriptDefault { font: Some("Noto Naskh Arabic".into()), ..Default::default() },
+        };
+        assert!(!wb.text_defaults.is_empty());
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.text_defaults, wb.text_defaults);
+        // Unstated parts stay out of the JSON.
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        let td = value.get("text_defaults").ok_or("text_defaults written")?;
+        assert!(td["western"].get("font").is_none());
+        assert!(td["complex"].get("language").is_none());
+        assert!(td["asian"].get("script").is_none() && td["asian"].get("rfc_language_tag").is_none());
+        assert_eq!(td["western"]["script"], "Latn");
+        assert_eq!(td["western"]["rfc_language_tag"], "sr-Latn-RS");
+        // A script that states only a script code or only a language tag is not empty.
+        assert!(!ScriptDefault { script: Some("Latn".into()), ..Default::default() }.is_empty());
+        assert!(!ScriptDefault { rfc_language_tag: Some("ca-ES-valencia".into()), ..Default::default() }.is_empty());
+
+        // Only one script stated: the others are skipped and load back empty.
+        wb.text_defaults =
+            TextDefaults { asian: ScriptDefault { font: Some("Noto Serif CJK SC".into()), ..Default::default() }, ..Default::default() };
+        let json = serde_json::to_string(&wb)?;
+        let value: serde_json::Value = serde_json::from_str(&json)?;
+        let td = value.get("text_defaults").ok_or("text_defaults written")?;
+        assert!(td.get("western").is_none() && td.get("complex").is_none());
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.text_defaults, wb.text_defaults);
         Ok(())
     }
 

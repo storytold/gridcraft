@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_fill, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MergedArea, cell_job, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border,
+    paint_cell_galley, paint_cf_icon, painted_fill, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -362,6 +362,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let size = st.font.size * 96.0 / 72.0 * z;
     let fam = theme::cell_family(&st.font.name, st.font.bold, st.font.italic);
     let font = FontId::new(size, fam);
+    let slant = st.font.italic && crate::fonts::is_slanted(&st.font.name, st.font.bold);
+    let embolden = st.font.bold && crate::fonts::is_emboldened(&st.font.name, st.font.italic);
+    // How far the second impression of imitated bold sits from the first, by the size painted.
+    let ppp = p.ctx().pixels_per_point();
+    let bold_dx = |size: f32| if embolden { (size / 36.0).max(1.0 / ppp) } else { 0.0 };
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
@@ -390,7 +395,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-        let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
+        let mut job = cell_job(text.clone(), font.clone(), color, wrap_w, slant);
         job.direction = direction;
         job.halign_min_is_start = false;
         job.halign = match painted_halign(halign, geo.rtl) {
@@ -407,7 +412,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let (text_top, text_bottom) = galley_baseline_bounds(&galley);
         let y = wrapped_cell_text_y(st.align.v, *rect, text_bottom - text_top, z) - text_top;
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        paint_cell_galley(&p.with_clip_rect(text_clip), pos2(x, y), galley, color, bold_dx(size));
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -422,7 +427,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let shrunk = small.is_some();
     let font = small.unwrap_or(font);
     let layout = |text: String| {
-        let mut job = egui::text::LayoutJob::simple(text, font.clone(), color, f32::INFINITY);
+        let mut job = cell_job(text, font.clone(), color, f32::INFINITY, slant);
         job.direction = direction;
         job.halign_min_is_start = false;
         p.layout_job(job)
@@ -517,23 +522,34 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let angle = -(st.align.rotation as f32).to_radians();
         // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
         let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
-            let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
+            let mut job = cell_job(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0), slant);
             job.direction = direction;
             p.layout_job(job)
         } else {
             galley.clone()
         };
         let pos = rotated_text_pos(*rect, galley.size(), angle, halign, st.align.v, pad, indent);
-        let mut shape = egui::epaint::TextShape::new(pos, galley, color);
-        shape.angle = angle;
-        cp.add(shape);
+        paint_rotated_galley(&cp, pos, galley, color, angle, bold_dx(font.size));
     } else {
-        cp.galley(pos2(x, y), galley.clone(), color);
+        paint_cell_galley(&cp, pos2(x, y), galley.clone(), color, bold_dx(font.size));
     }
     paint_text_decorations(
         &cp,
         TextDecoration { x, y: y + text_top, width: w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
     );
+}
+
+/// Paints rotated cell text; `bold_dx` > 0 first paints it that far along the text's own
+/// direction, the second impression of imitated bold.
+fn paint_rotated_galley(cp: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32, angle: f32, bold_dx: f32) {
+    if bold_dx > 0.0 {
+        let mut thick = egui::epaint::TextShape::new(pos + bold_dx * egui::vec2(angle.cos(), angle.sin()), galley.clone(), color);
+        thick.angle = angle;
+        cp.add(thick);
+    }
+    let mut shape = egui::epaint::TextShape::new(pos, galley, color);
+    shape.angle = angle;
+    cp.add(shape);
 }
 
 struct TextDecoration {

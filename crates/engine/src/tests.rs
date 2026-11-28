@@ -962,11 +962,13 @@ fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
 #[test]
 fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
     let mut s = s();
-    let text = "&".repeat(1_000_000);
-    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
-    let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
+    // Cells hold at most 32,767 characters, so 30 full cells of `&` (5 bytes each once escaped)
+    // pass the 4 MiB HTML budget while the plain text stays far below it.
+    let cell = "&".repeat(32_767);
+    s.execute("range.setValues", json!({"range": "A1", "values": [vec![cell; 30]]})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:AD1", "html": true})).unwrap();
     assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
-    assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
+    assert_eq!(copied["text"].as_str().unwrap().len(), 30 * 32_767 + 30);
     assert!(copied["text"].as_str().unwrap().ends_with("&\n"));
 }
 
@@ -1347,6 +1349,177 @@ fn fill_days_weekdays_months_and_years_step_a_date_by_that_unit() {
     s.execute("cell.set", json!({"cell": "J1", "input": "1/31/2026 12:00"})).unwrap();
     s.execute("edit.fillSeries", json!({"range": "J1:J2", "type": "date", "dateUnit": "month"})).unwrap();
     assert_eq!(v(&s, "J2"), Value::Number(46081.5));
+}
+
+#[test]
+fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    let fill =
+        |s: &mut Session, src: &str, target: &str, mode: &str| s.execute("edit.autoFill", json!({"source": src, "target": target, "mode": mode}));
+    // The examples on Excel's "Project values in a series" page: 1, 2 and 1, 3 for both trends, 2, 3
+    // for Growth Trend and 100, 95 for Linear Trend. 2, 3 gives 4, 5, 6 by Linear Trend.
+    for (col, start, linear, growth) in [
+        ("A", [1.0, 2.0], [3.0, 4.0, 5.0], [4.0, 8.0, 16.0]),
+        ("B", [1.0, 3.0], [5.0, 7.0, 9.0], [9.0, 27.0, 81.0]),
+        ("C", [2.0, 3.0], [4.0, 5.0, 6.0], [4.5, 6.75, 10.125]),
+    ] {
+        s.execute("range.setValues", json!({"range": format!("{col}1"), "values": [[start[0]], [start[1]]]})).unwrap();
+        let (src, target) = (format!("{col}1:{col}2"), format!("{col}1:{col}5"));
+        let cells: Vec<String> = (3..=5).map(|r| format!("{col}{r}")).collect();
+        let cells: Vec<&str> = cells.iter().map(String::as_str).collect();
+        fill(&mut s, &src, &target, "linearTrend").unwrap();
+        assert_eq!(nums(&s, &cells), n(&linear), "Linear Trend from {start:?}");
+        fill(&mut s, &src, &target, "growthTrend").unwrap();
+        assert_eq!(nums(&s, &cells), n(&growth), "Growth Trend from {start:?}");
+    }
+    s.execute("range.setValues", json!({"range": "F1", "values": [[100], [95]]})).unwrap();
+    fill(&mut s, "F1:F2", "F1:F4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["F3", "F4"]), n(&[90.0, 85.0]));
+    // Three numbers: the targets follow the best fit and the source keeps its values. 1, 3, 4 fit
+    // y = 1.5x + 7/6; 1, 2, 8 fit y = 0.8909·2.8284^x.
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1, 1], [3, 2], [4, 8]]})).unwrap();
+    fill(&mut s, "D1:D3", "D1:D5", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["D1", "D2", "D3", "D4", "D5"]), n(&[1.0, 3.0, 4.0, 5.66666666666667, 7.16666666666667]));
+    fill(&mut s, "E1:E3", "E1:E4", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["E1", "E2", "E3", "E4"]), n(&[1.0, 2.0, 8.0, 20.158736798318]));
+    // Upward and leftward the trend continues backward: 1, 2 gives 0 and -1, or 0.5 and 0.25.
+    s.execute("range.setValues", json!({"range": "G3", "values": [[1], [2]]})).unwrap();
+    fill(&mut s, "G3:G4", "G1:G4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["G2", "G1"]), n(&[0.0, -1.0]));
+    s.execute("range.setValues", json!({"range": "J1", "values": [[1, 2]]})).unwrap();
+    fill(&mut s, "J1:K1", "H1:K1", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["I1", "H1"]), n(&[0.5, 0.25]));
+    // Negative numbers grow away from zero: -2, -4 gives -8.
+    s.execute("range.setValues", json!({"range": "L1", "values": [[-2], [-4]]})).unwrap();
+    fill(&mut s, "L1:L2", "L1:L3", "growthTrend").unwrap();
+    assert_eq!(v(&s, "L3"), Value::Number(-8.0));
+    // A tiny start with a huge factor still reaches 1e300 without overflowing on the way.
+    s.execute("range.setValues", json!({"range": "S1", "values": [[1e-200], [1e-100]]})).unwrap();
+    fill(&mut s, "S1:S2", "S1:S6", "growthTrend").unwrap();
+    let Value::Number(s6) = v(&s, "S6") else { panic!("S6 is {:?}", v(&s, "S6")) };
+    assert!((s6 / 1e300 - 1.0).abs() < 1e-9, "S6 = {s6}");
+    // Numbers near the largest double continue their line without a sum overflowing: two equal
+    // numbers repeat, and 1e308 four times then 0 fit a step of -2e307 and continue at 2e307.
+    s.execute("range.setValues", json!({"range": "T1", "values": [[1e308, 1e308], [1e308, 1e308], [0, 1e308], [0, 1e308], [0, 0]]})).unwrap();
+    fill(&mut s, "T1:T2", "T1:T3", "linearTrend").unwrap();
+    fill(&mut s, "U1:U5", "U1:U6", "linearTrend").unwrap();
+    for (cell, want) in [("T3", 1e308), ("U6", 2e307)] {
+        let Value::Number(got) = v(&s, cell) else { panic!("{cell} is {:?}", v(&s, cell)) };
+        assert!((got / want - 1.0).abs() < 1e-9, "{cell} = {got}");
+    }
+    // A lone number repeats, and dates a month apart step by their days, not by months.
+    s.execute("cell.set", json!({"cell": "M1", "input": "7"})).unwrap();
+    fill(&mut s, "M1", "M1:M2", "linearTrend").unwrap();
+    assert_eq!(v(&s, "M2"), Value::Number(7.0));
+    // It repeats unchanged, with every digit and at any size, by either trend.
+    s.execute("range.setValues", json!({"range": "V1", "values": [[1e308, 0.12345678901234567]]})).unwrap();
+    fill(&mut s, "V1", "V1:V3", "growthTrend").unwrap();
+    fill(&mut s, "W1", "W1:W3", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["V2", "V3", "W2", "W3"]), n(&[1e308, 1e308, 0.12345678901234567, 0.12345678901234567]));
+    // The smallest double three times repeats rather than averaging to zero.
+    let tiny = f64::from_bits(1);
+    s.execute("range.setValues", json!({"range": "X1", "values": [[tiny], [tiny], [tiny]]})).unwrap();
+    fill(&mut s, "X1:X3", "X1:X4", "linearTrend").unwrap();
+    assert_eq!(v(&s, "X4"), Value::Number(tiny));
+    // The two smallest doubles continue their step: 1 and 2 times the smallest give 3 and 4 times it.
+    s.execute("range.setValues", json!({"range": "AD1", "values": [[tiny], [f64::from_bits(2)]]})).unwrap();
+    fill(&mut s, "AD1:AD2", "AD1:AD4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["AD3", "AD4"]), n(&[f64::from_bits(3), f64::from_bits(4)]));
+    // Huge numbers three times repeat exactly: the largest double, and one with 14 digits.
+    let (big, big14) = (f64::MAX, 1.7976931348623e308);
+    s.execute("range.setValues", json!({"range": "Y1", "values": [[big, big14], [big, big14], [big, big14]]})).unwrap();
+    fill(&mut s, "Y1:Z3", "Y1:Z4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["Y4", "Z4"]), n(&[big, big14]));
+    // Growth Trend repeats the same number exactly too, huge, tiny or below zero.
+    s.execute("range.setValues", json!({"range": "AA1", "values": [[1e300, 1e-300, -0.3], [1e300, 1e-300, -0.3]]})).unwrap();
+    fill(&mut s, "AA1:AC2", "AA1:AC4", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["AA4", "AB4", "AC4"]), n(&[1e300, 1e-300, -0.3]));
+    s.execute("cell.set", json!({"cell": "N1", "input": "1/15/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "N2", "input": "2/15/2026"})).unwrap();
+    fill(&mut s, "N1:N2", "N1:N3", "linearTrend").unwrap();
+    assert_eq!(v(&s, "N3"), Value::Number(46099.0), "2/15/2026 plus 31 days");
+    // Text or an empty cell in the source, and zero or mixed signs for Growth Trend, are refused
+    // and fill nothing.
+    s.execute("range.setValues", json!({"range": "O1", "values": [[1, 1, 0], ["x", -2, 2]]})).unwrap();
+    assert!(fill(&mut s, "O1:O2", "O1:O3", "linearTrend").is_err());
+    assert!(fill(&mut s, "P1:P2", "P1:P3", "growthTrend").is_err());
+    assert!(fill(&mut s, "Q1:Q2", "Q1:Q3", "growthTrend").is_err());
+    assert!(fill(&mut s, "R1:R2", "R1:R3", "linearTrend").is_err());
+    assert_eq!(nums(&s, &["O3", "P3", "Q3", "R3"]), [Value::Empty, Value::Empty, Value::Empty, Value::Empty]);
+    fill(&mut s, "P1:P2", "P1:P3", "linearTrend").unwrap();
+    assert_eq!(v(&s, "P3"), Value::Number(-5.0));
+}
+
+#[test]
+fn trend_fills_are_offered_for_numbers_only() {
+    let mut s = s();
+    let offered = |s: &Session, src: &str, target: &str, growth: bool| {
+        let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+        crate::fill::trend_applies(&s.doc().unwrap().wb, 0, r(src), r(target), growth)
+    };
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, -1, 1], [2, -3, "x"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "5"})).unwrap();
+    assert!(offered(&s, "A1:A2", "A1:A5", false) && offered(&s, "A1:A2", "A1:A5", true));
+    // Down A1:B2, each column keeps one sign; across it, row 1 holds 1 and -1.
+    assert!(offered(&s, "A1:B2", "A1:B5", true));
+    assert!(offered(&s, "A1:B2", "A1:E2", false) && !offered(&s, "A1:B2", "A1:E2", true));
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:E2")), (true, false));
+    assert_eq!(crate::fill::trends_that_apply(&s.doc().unwrap().wb, 0, r("A1:B2"), r("A1:B5")), (true, true));
+    assert!(!offered(&s, "C1:C2", "C1:C4", false), "text");
+    assert!(!offered(&s, "D1:D2", "D1:D4", false), "a formula");
+    assert!(!offered(&s, "E1:E2", "E1:E4", false), "empty cells");
+    // A fill `edit.autoFill` refuses is not offered: five columns down to the last row is more than
+    // MAX_FILL_CELLS cells, and a target that doesn't hold the source in a corner.
+    s.execute("range.setValues", json!({"range": "F1", "values": [[1, 2, 3, 4, 5], [2, 4, 6, 8, 10]]})).unwrap();
+    assert!(offered(&s, "F1:J2", "F1:J1000", false) && offered(&s, "F1:J2", "F1:J1000", true));
+    assert!(!offered(&s, "F1:J2", "F1:J1048576", false) && !offered(&s, "F1:J2", "F1:J1048576", true), "too large");
+    assert!(!offered(&s, "F1:J2", "F2:J5", false), "source outside the target");
+}
+
+#[test]
+fn trend_fills_fit_each_lane_of_a_two_dimensional_source() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let n = |xs: &[f64]| xs.iter().map(|x| Value::Number(*x)).collect::<Vec<_>>();
+    let fill =
+        |s: &mut Session, src: &str, target: &str, mode: &str| s.execute("edit.autoFill", json!({"source": src, "target": target, "mode": mode}));
+    // Down: column A holds 1, 2 and column B 10, 20, and one command fits each column on its own.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let down = ["A3", "A4", "A5", "B3", "B4", "B5"];
+    fill(&mut s, "A1:B2", "A1:B5", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[3.0, 4.0, 5.0, 30.0, 40.0, 50.0]));
+    fill(&mut s, "A1:B2", "A1:B5", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &down), n(&[4.0, 8.0, 16.0, 40.0, 80.0, 160.0]));
+    // Across: row 1 holds 1, 10 and row 2 holds 2, 20, and each row is fitted on its own.
+    s.execute("range.setValues", json!({"range": "H1", "values": [[1, 10], [2, 20]]})).unwrap();
+    let across = ["J1", "K1", "L1", "J2", "K2", "L2"];
+    fill(&mut s, "H1:I2", "H1:L2", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[19.0, 28.0, 37.0, 38.0, 56.0, 74.0]));
+    fill(&mut s, "H1:I2", "H1:L2", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &across), n(&[100.0, 1000.0, 10000.0, 200.0, 2000.0, 20000.0]));
+    // The sources keep their values.
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2", "H1", "I1", "H2", "I2"]), n(&[1.0, 2.0, 10.0, 20.0, 1.0, 10.0, 2.0, 20.0]));
+}
+
+#[test]
+fn a_trend_fill_undoes_as_one_step() {
+    let mut s = s();
+    let nums = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 10], [2, 20]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "99"})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:B2", "target": "A1:B5", "mode": "linearTrend"})).unwrap();
+    assert_eq!(v(&s, "A4"), Value::Number(4.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    // The targets are back as they were (empty, and 99 in A4), and the source is unchanged.
+    assert_eq!(
+        nums(&s, &["A3", "A4", "A5", "B3", "B4", "B5"]),
+        [Value::Empty, Value::Number(99.0), Value::Empty, Value::Empty, Value::Empty, Value::Empty]
+    );
+    assert_eq!(nums(&s, &["A1", "A2", "B1", "B2"]), [Value::Number(1.0), Value::Number(2.0), Value::Number(10.0), Value::Number(20.0)]);
 }
 
 #[test]
@@ -1817,6 +1990,27 @@ fn case_sensitive_sort_puts_lowercase_first() {
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
 }
 
+/// Data > Sort orders numbers exactly, like Excel 365: 0.3 sorts before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
+#[test]
+fn sort_orders_numbers_exactly() {
+    for first_noisy in [true, false] {
+        let mut s = s();
+        let (a1, a2, b1, b2) = if first_noisy { ("=0.1+0.2", "0.3", "e", "t") } else { ("0.3", "=0.1+0.2", "t", "e") };
+        for (cell, input) in [("A1", a1), ("A2", a2), ("B1", b1), ("B2", b2)] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        let labels = |s: &Session| [v(s, "B1"), v(s, "B2")];
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A"}]})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "ascending, noisy first: {first_noisy}");
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A", "order": "desc"}]})).unwrap();
+        assert_eq!(labels(&s), ["e", "t"].map(Value::from), "descending, noisy first: {first_noisy}");
+        s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+        s.execute("data.sortAscending", json!({"range": "A1:B2", "column": "A"})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "quick sort, noisy first: {first_noisy}");
+    }
+}
+
 /// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
 #[test]
 fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
@@ -1972,7 +2166,7 @@ fn filter_with_a_sheet_prefix_toggles_the_table_at_the_range() {
         wb.sheet(wb.sheet_index("Prices").unwrap()).unwrap().clone()
     };
     assert!(prices(&s).tables[0].filter_button);
-    s.execute("data.filter", json!({"range": "Prices!A2:B3"})).unwrap();
+    s.execute("data.filter", json!({"range": "Prices!A1:B3"})).unwrap();
     assert!(!prices(&s).tables[0].filter_button);
     assert!(prices(&s).autofilter.is_none());
     assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
@@ -5398,6 +5592,75 @@ fn encrypted_book(password: &str) -> Vec<u8> {
 }
 
 #[test]
+fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
+    const PW: &str = "synthetic-modify-pw";
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    let b64 = crate::io::base64_encode(&bytes);
+    let open = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"name": "Reserved.xlsx", "base64": b64});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.execute("file.open", p)
+    };
+    let mut s = Session::new();
+    let err = open(&mut s, json!({})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::MODIFY_PASSWORD_REQUIRED), "{err}");
+    assert!(s.take_ui_requests().is_empty(), "programmatic calls never open dialogs");
+    for wrong in ["not-it", ""] {
+        let err = open(&mut s, json!({"modifyPassword": wrong})).unwrap_err().to_string();
+        assert!(err.contains(crate::io::WRONG_PASSWORD), "{err}");
+    }
+    assert!(s.documents().is_empty());
+
+    // Read-only: opens, keeps the reservation, but has no file to save over.
+    open(&mut s, json!({"readOnly": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    assert!(s.doc().unwrap().wb.write_reservation.is_some());
+
+    // The password: opens, and the reservation survives a save.
+    let mut s = Session::new();
+    open(&mut s, json!({"modifyPassword": PW})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    let saved = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &saved).unwrap();
+    assert!(back.write_reservation.and_then(|r| r.password).is_some_and(|h| h.verify(PW) == Ok(true)));
+}
+
+#[test]
+fn a_read_only_open_never_saves_over_its_reserved_file() {
+    const PW: &str = "synthetic-modify-pw";
+    let dir = std::env::temp_dir().join(format!("gridcraft-read-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reserved.xlsx").to_string_lossy().into_owned();
+    let copy = dir.join("copy.xlsx").to_string_lossy().into_owned();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    let err = s.execute("file.save", json!({"path": path})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    let dotted = dir.join(".").join("reserved.xlsx").to_string_lossy().into_owned();
+    let err = s.execute("file.save", json!({"path": dotted})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "the same file under another spelling: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    assert!(std::fs::metadata(&copy).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn encrypted_workbooks_open_with_their_password() {
     const PW: &str = "synthetic-pw-5521";
     let b64 = crate::io::base64_encode(&encrypted_book(PW));
@@ -6114,6 +6377,58 @@ fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
 }
 
 #[test]
+fn a_multi_level_pivot_chart_draws_one_label_per_point_after_saves() {
+    use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Workbook};
+    // Two levels of row labels in A4:B7, the outer one (country) on the left, as a PivotChart
+    // opened from a file keeps them when the innermost column holds its cache.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.name = "Graph".into();
+    sh.set_value(CellRef::new(2, 2), Value::from("Total"));
+    for (i, (outer, inner)) in [("Canada", "Ottawa"), ("", "Toronto"), ("USA", "Boston"), ("", "NYC")].iter().enumerate() {
+        let r = 3 + i as u32;
+        if !outer.is_empty() {
+            sh.set_value(CellRef::new(r, 0), Value::from(*outer));
+        }
+        sh.set_value(CellRef::new(r, 1), Value::from(*inner));
+        sh.set_value(CellRef::new(r, 2), Value::Number(i as f64 + 1.0));
+    }
+    sh.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: CellRef::new(0, 5), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: vec![Series {
+            name: Some("Graph!$C$3".into()),
+            categories: Some("Graph!$A$4:$B$7".into()),
+            values: "Graph!$C$4:$C$7".into(),
+            innermost_categories: true,
+            ..Series::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        data_table: None,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: Some("Graph!PivotTable1".into()),
+        first_slice_angle: 0,
+        hole_size: 50,
+    });
+    let labels = ["Ottawa", "Toronto", "Boston", "NYC"];
+    for _ in 0..2 {
+        wb = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap().0;
+        let ch = &wb.sheet(0).unwrap().charts[0];
+        let s = &ch.series[0];
+        assert_eq!((s.name.as_deref(), s.categories.as_deref(), s.innermost_categories), (Some("Graph!$C$3"), Some("Graph!$A$4:$B$7"), true));
+        assert_eq!(gridcraft_chart::resolve(&wb, 0, ch).categories, labels);
+    }
+}
+
+#[test]
 fn object_move_refuses_to_rotate_ink() {
     let mut s = s();
     let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
@@ -6185,7 +6500,6 @@ fn editing_quote_prefixed_text_keeps_it_text() {
     let d = s.doc().unwrap();
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B1").unwrap()), "hello");
 }
-
 #[test]
 fn csv_as_text_keeps_identifier_columns_as_written() {
     let csv = "gtin,zip,flag,day\n8435392892278,01234,TRUE,2026-03-04\n";
@@ -7409,6 +7723,45 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
 }
 
+/// A password set in GridCraft is kept in every form a file stores; XLSX writes its Excel form,
+/// so a sheet or workbook password survives saving and reopening and still unprotects.
+#[test]
+fn passwords_set_in_gridcraft_survive_xlsx_saving() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({"password": "pa55"})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true, "password": "b00k"})).unwrap();
+    // The workbook password, like the sheet's, also keeps OpenDocument's SHA-256 digest.
+    let book = s.doc().unwrap().wb.structure_password.clone().unwrap();
+    assert_eq!(book.odf_key(), gridcraft_model::PasswordHash::new_sha256_digest("b00k").odf_key());
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(t.execute("review.unprotectSheet", json!({})).is_err());
+    assert!(t.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    t.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    assert!(t.execute("review.protectWorkbook", json!({"on": false, "password": "nope"})).is_err());
+    t.execute("review.protectWorkbook", json!({"on": false, "password": "b00k"})).unwrap();
+    assert!(!t.doc().unwrap().wb.protected_structure);
+}
+
+/// A password held only as a SHA-256 digest (as OpenDocument stores it) unprotects with the
+/// password; XLSX has no form for it, so saving keeps the protection without the password.
+#[test]
+fn sha256_digest_passwords_unprotect_and_save_to_xlsx_without_the_password() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let digest = gridcraft_model::PasswordHash::new_sha256_digest("pa55");
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().protection.as_mut().unwrap().password = Some(digest);
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    assert!(s.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    s.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    let prot = t.doc().unwrap().wb.sheets[0].protection.clone().unwrap();
+    assert_eq!(prot.password, None);
+    t.execute("review.unprotectSheet", json!({})).unwrap();
+}
+
 /// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
 #[test]
 fn sheet_rename_renames_a_pivot_source() {
@@ -7868,6 +8221,99 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+#[test]
+fn tables_never_hold_merged_cells() {
+    // Excel removes a table that contains a merged cell when it opens the file. Merging in a
+    // table is refused; making or resizing a table over merged cells unmerges them; pasting into
+    // a table skips the merges.
+    let base = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:D4", "values": [["A", "B", "C", "D"], [1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]}))
+            .unwrap();
+        s
+    };
+    let merges = |s: &Session| s.doc().unwrap().wb.active().unwrap().merges.clone();
+
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    for id in ["home.mergeCells", "home.mergeCenter", "home.mergeAcross"] {
+        for range in ["A2:B2", "A1:B1", "C3:D3"] {
+            let e = s.execute(id, json!({"range": range})).unwrap_err().to_string();
+            assert!(e.contains("can't merge cells in a table"), "{id} {range}: {e}");
+        }
+    }
+    assert!(merges(&s).is_empty());
+    s.execute("home.mergeCells", json!({"range": "E2:F2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F2").unwrap()]);
+
+    // A table over merged cells unmerges them; undo brings them back.
+    let mut s = base();
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C3:D4"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:G1"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("F1:G1").unwrap()]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(merges(&s).len(), 3);
+    s.execute("edit.redo", json!({})).unwrap();
+
+    // Resizing a table over merged cells is refused, as in Excel; the merge stays.
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    let e = s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap_err().to_string();
+    assert!(e.contains("can't overlap merged cells"), "{e}");
+    s.execute("home.unmergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
+
+    // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
+    s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F3").unwrap(), gridcraft_core::RangeRef::parse("H2:I3").unwrap()]);
+
+    // The saved file has no merge inside the table.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = crate::io::open_bytes("t.xlsx", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    assert_eq!(sh.tables.len(), 1);
+    assert_eq!(sh.tables[0].range, gridcraft_core::RangeRef::parse("A1:C4").unwrap());
+    assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
+}
+
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+    // a scheme-less address with a query, fragment or port opens over https too
+    for (cell, input, url) in [
+        ("D1", "=HYPERLINK(\"google.com?q=rust\")", "https://google.com?q=rust"),
+        ("D2", "=HYPERLINK(\"google.com#results\")", "https://google.com#results"),
+        ("D3", "=HYPERLINK(\"example.com:8443/x\")", "https://example.com:8443/x"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("link.open", json!({"cell": cell})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(url.into())], "{input}");
+    }
+    // a table named like an address stays an internal target
+    s.execute("range.setValues", json!({"range": "F1:G2", "values": [["a", "b"], [1, 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "F1:G2", "name": "sales.data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D4", "input": "=HYPERLINK(\"sales.data\")"})).unwrap();
+    let link = crate::links::cell_link(&s.doc().unwrap().wb, 0, gridcraft_core::CellRef::parse("D4").unwrap()).unwrap();
+    assert_eq!(link.target, "sales.data");
 }
 
 /// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take

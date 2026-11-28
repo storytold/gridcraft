@@ -10,6 +10,12 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Exactly the secrets the nightly sign steps read; the signer caller may forward these and no others.
+SIGNER_SECRETS = {
+    "LINUX_SIGNING_KEY", "APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "KEYCHAIN_PASSWORD",
+    "APPLE_ID", "APPLE_PASSWORD", "APPLE_TEAM_ID", "AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET",
+    "AZURE_SIGNING_ENDPOINT", "AZURE_SIGNING_ACCOUNT", "AZURE_CERT_PROFILE",
+}
 INSTALLED_POLICY = ROOT / ".github/nightly-signing-policy.json"
 
 DISPATCHER = ROOT / ".github/workflows/nightly-dispatch.yml"
@@ -259,8 +265,37 @@ class TrustedSourcePreparation(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertNotRegex(executable, r"(?im)^\s*(?:-\s*)?uses:\s*[^\n]*cache")
                 self.assertNotRegex(executable, r"(?im)^\s*[^\s:#]*cache[^\s:#]*:")
-                self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
-                self.assertNotIn("secrets.", executable)
+                # The producer caller forwards nothing. The signer caller declares the release
+                # environment and forwards exactly the fifteen secrets the sign steps read; those
+                # are the only allowed forms, and `inherit` is never one of them.
+                if name == "nightly.yml":
+                    self.assertNotRegex(executable, r"(?im)^\s*(?:environment|secrets):")
+                    self.assertNotIn("secrets.", executable)
+                else:
+                    self.assertNotIn("secrets: inherit", executable)
+                    # A job that calls a reusable workflow cannot declare an environment at all, so
+                    # none may appear here.
+                    self.assertNotRegex(executable, r"(?im)^\s*environment:")
+                    # Parse the whole mapping: blank lines are legal inside a YAML block, so the
+                    # block ends at the first non-blank line indented four spaces or less. Every
+                    # entry must map a name to exactly its own secret, and the set must be exact.
+                    lines = executable.splitlines()
+                    start = lines.index("    secrets:") if "    secrets:" in lines else -1
+                    self.assertGreaterEqual(start, 0, "nightly-sign.yml must forward its named secrets")
+                    entries = []
+                    for line in lines[start + 1:]:
+                        if not line.strip():
+                            continue
+                        if len(line) - len(line.lstrip()) <= 4:
+                            break
+                        entries.append(line.strip())
+                    pairs = {}
+                    for entry in entries:
+                        match = re.fullmatch(r"([A-Z][A-Z0-9_]*): \$\{\{ secrets\.([A-Za-z0-9_]+) \}\}", entry)
+                        self.assertIsNotNone(match, f"unexpected entry in the signer's secrets block: {entry}")
+                        self.assertEqual(match.group(1), match.group(2), f"secret forwarded under another name: {entry}")
+                        pairs[match.group(1)] = match.group(2)
+                    self.assertEqual(set(pairs), SIGNER_SECRETS, "only the signer's named secrets may be forwarded")
 
     def test_both_callers_use_one_shared_pin_in_uses_and_tooling_revision(self):
         pins = set()

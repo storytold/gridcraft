@@ -44,6 +44,7 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            ctrl_wheel: false,
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
@@ -248,10 +249,18 @@ impl SheetApp {
                 self.perf.grid_ms = now_ms() - g0;
             });
         }
+        // An existing message owns Enter/Escape before the underlying dialog.
+        // A newly created message is still shown in the same frame (#2189).
+        let had_message = self.message.is_some();
+        if had_message {
+            widgets::message_box(self, &ctx);
+        }
         dialogs::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
-        widgets::message_box(self, &ctx);
+        if !had_message {
+            widgets::message_box(self, &ctx);
+        }
         widgets::toast(self, &ctx);
         // Last, so its resize cursors win over the widgets under the window edges.
         ribbon::window_frame(self, &ctx);
@@ -366,6 +375,41 @@ mod lifecycle_tests {
         app.raw_input_hook(&ctx, &mut second);
         assert!(second.events.is_empty(), "an unapplied step is not injected a second time");
         assert_eq!(app.synthetic.len(), 2, "press and release stay distinct batches");
+    }
+
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    /// A synthetic Ctrl+wheel touch followed by a plain wheel move gets a zero-delta End inserted before the move.
+    fn synthetic_wheel_events_end_a_stuck_ctrl_touch() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let wheel = |modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: vec2(0.0, 3.0),
+            phase: TouchPhase::Move,
+            modifiers,
+        };
+        app.synthetic.push_back(vec![wheel(Modifiers::CTRL)]);
+        app.synthetic.push_back(vec![wheel(Modifiers::NONE)]);
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        assert_eq!(raw.events, vec![wheel(Modifiers::CTRL)]);
+        // A UI pass applied the first batch.
+        app.synthetic.pop_front();
+        app.synthetic_pending = false;
+        app.synthetic_injected_at_pass = None;
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        let end = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::Vec2::ZERO,
+            phase: TouchPhase::End,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(raw.events, vec![end, wheel(Modifiers::NONE)]);
     }
 
     /// Returns raw input with a screen rect at the given size.
