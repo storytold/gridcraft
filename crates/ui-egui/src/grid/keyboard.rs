@@ -4,6 +4,37 @@ use super::menus::is_checkbox;
 use super::selection::add_mode_move;
 use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
+/// Grid keyboard handling when no text field has focus.
+fn handle_copy(app: &mut SheetApp, ctx: &egui::Context) -> bool {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let copy_combo = if mac { "Cmd+C" } else { "Ctrl+C" };
+    let target = app.ui.shortcuts.get(copy_combo).cloned();
+    if let Some(target) = target {
+        if !target.is_empty() {
+            crate::keymap::dispatch_target(app, ctx, &target);
+        }
+        true
+    } else {
+        app.copy_to_clipboard(ctx, "edit.copy");
+        false
+    }
+}
+
+fn handle_cut(app: &mut SheetApp, ctx: &egui::Context) -> bool {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    let cut_combo = if mac { "Cmd+X" } else { "Ctrl+X" };
+    let target = app.ui.shortcuts.get(cut_combo).cloned();
+    if let Some(target) = target {
+        if !target.is_empty() {
+            crate::keymap::dispatch_target(app, ctx, &target);
+        }
+        true
+    } else {
+        app.copy_to_clipboard(ctx, "edit.cut");
+        false
+    }
+}
+
 /// Whether something other than the grid owns the keyboard this frame: an editor, a dialog, a
 /// message, a menu or another focused widget. Kept out of [`keyboard`] to hold its complexity
 /// within the workspace limit.
@@ -58,12 +89,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             return;
         }
         match ev {
-            egui::Event::Copy => {
-                app.copy_to_clipboard(ctx, "edit.copy");
-            }
-            egui::Event::Cut => {
-                app.copy_to_clipboard(ctx, "edit.cut");
-            }
+            egui::Event::Copy => shortcut_ran |= handle_copy(app, ctx),
+            egui::Event::Cut => shortcut_ran |= handle_cut(app, ctx),
             egui::Event::Paste(text) => app.paste_external(text),
             // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
             // a floating picture at the active cell, as Excel does.
