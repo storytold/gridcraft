@@ -119,8 +119,6 @@ sync_github_name = true
 [people.RockerHX]
 sync_github_name = true
 
-[people.gmrmad1]
-real_name = "Madhav Agarwal"
-
-[people.alosslessdev]
-real_name = "Francisco Herrera"
+[people.MauriciDmarc]
+real_name = "Maurici D'marco Fernandes"
+display_name = "Maurici D'marco Fernandes"

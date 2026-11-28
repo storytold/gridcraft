@@ -9,6 +9,7 @@ pub enum FormulaLocale {
     #[default]
     En,
     Es,
+    PtBr,
 }
 
 const SPANISH: &[(&str, &str)] = &[
@@ -30,28 +31,170 @@ const SPANISH: &[(&str, &str)] = &[
     ("FALSE", "FALSO"),
 ];
 
+/// Brazilian Portuguese (pt-BR) worksheet function aliases.
+const PORTUGUESE_BR: &[(&str, &str)] = &[
+    // Lookup & Reference
+    ("VLOOKUP", "PROCV"),
+    ("HLOOKUP", "PROCH"),
+    ("XLOOKUP", "PROCX"),
+    ("LOOKUP", "PROC"),
+    ("MATCH", "CORRESP"),
+    ("XMATCH", "CORRESPX"),
+    ("INDEX", "ÍNDICE"),
+    ("INDEX", "INDICE"),
+    ("OFFSET", "DESLOC"),
+    ("INDIRECT", "INDIRETO"),
+    ("ROW", "LIN"),
+    ("ROWS", "LINS"),
+    ("COLUMN", "COL"),
+    ("COLUMNS", "COLS"),
+    ("TRANSPOSE", "TRANSPOR"),
+    ("CHOOSE", "ESCOLHER"),
+    ("ADDRESS", "ENDEREÇO"),
+    ("ADDRESS", "ENDERECO"),
+    // Math & Trig
+    ("SUM", "SOMA"),
+    ("SUMIF", "SOMASE"),
+    ("SUMIFS", "SOMASES"),
+    ("PRODUCT", "MULT"),
+    ("ROUND", "ARRED"),
+    ("ROUNDUP", "ARREDONDAR.PARA.CIMA"),
+    ("ROUNDDOWN", "ARREDONDAR.PARA.BAIXO"),
+    ("ABS", "ABS"),
+    ("INT", "INT"),
+    ("MOD", "RESTO"),
+    ("POWER", "POTÊNCIA"),
+    ("POWER", "POTENCIA"),
+    ("SQRT", "RAIZ"),
+    ("SUBTOTAL", "SUBTOTAL"),
+    ("AGGREGATE", "AGREGAR"),
+    // Statistical
+    ("AVERAGE", "MÉDIA"),
+    ("AVERAGE", "MEDIA"),
+    ("AVERAGEIF", "MÉDIASE"),
+    ("AVERAGEIF", "MEDIASE"),
+    ("AVERAGEIFS", "MÉDIASES"),
+    ("AVERAGEIFS", "MEDIASES"),
+    ("COUNT", "CONT.NUM"),
+    ("COUNTA", "CONT.VALORES"),
+    ("COUNTBLANK", "CONTAR.VAZIO"),
+    ("COUNTIF", "CONT.SE"),
+    ("COUNTIFS", "CONT.SES"),
+    ("MAX", "MÁXIMO"),
+    ("MAX", "MAXIMO"),
+    ("MIN", "MÍNIMO"),
+    ("MIN", "MINIMO"),
+    ("LARGE", "MAIOR"),
+    ("SMALL", "MENOR"),
+    ("MEDIAN", "MED"),
+    ("MODE", "MODO"),
+    // Logical
+    ("IF", "SE"),
+    ("IFS", "SES"),
+    ("IFERROR", "SEERRO"),
+    ("IFNA", "SENÃODISP"),
+    ("IFNA", "SENAODISP"),
+    ("AND", "E"),
+    ("OR", "OU"),
+    ("NOT", "NÃO"),
+    ("NOT", "NAO"),
+    ("XOR", "OUEXCL"),
+    ("TRUE", "VERDADEIRO"),
+    ("FALSE", "FALSO"),
+    // Text
+    ("CONCAT", "CONCAT"),
+    ("CONCATENATE", "CONCATENAR"),
+    ("TEXT", "TEXTO"),
+    ("TEXTJOIN", "UNIRTEXTO"),
+    ("LEFT", "ESQUERDA"),
+    ("RIGHT", "DIREITA"),
+    ("MID", "EXT.TEXTO"),
+    ("LEN", "NÚM.CARACT"),
+    ("LEN", "NUM.CARACT"),
+    ("TRIM", "ARRUMAR"),
+    ("UPPER", "MAIÚSCULA"),
+    ("UPPER", "MAIUSCULA"),
+    ("LOWER", "MINÚSCULA"),
+    ("LOWER", "MINUSCULA"),
+    ("PROPER", "PRI.MAIÚSCULA"),
+    ("PROPER", "PRI.MAIUSCULA"),
+    ("REPLACE", "MUDAR"),
+    ("SUBSTITUTE", "SUBSTITUIR"),
+    ("FIND", "PROCURAR"),
+    ("SEARCH", "LOCALIZAR"),
+    // Date & Time
+    ("TODAY", "HOJE"),
+    ("NOW", "AGORA"),
+    ("DATE", "DATA"),
+    ("TIME", "TEMPO"),
+    ("YEAR", "ANO"),
+    ("MONTH", "MÊS"),
+    ("MONTH", "MES"),
+    ("DAY", "DIA"),
+    ("HOUR", "HORA"),
+    ("MINUTE", "MINUTO"),
+    ("SECOND", "SEGUNDO"),
+    ("WEEKDAY", "DIA.DA.SEMANA"),
+    ("NETWORKDAYS", "DIATRABALHOTOTAL"),
+    ("EDATE", "DATAM"),
+    ("EOMONTH", "FIMMÊS"),
+    ("EOMONTH", "FIMMES"),
+    // Information
+    ("ISBLANK", "ÉVAZIA"),
+    ("ISBLANK", "EVAZIA"),
+    ("ISERROR", "ÉERRO"),
+    ("ISERROR", "EERRO"),
+    ("ISNUMBER", "ÉNÚM"),
+    ("ISNUMBER", "ENUM"),
+    ("ISTEXT", "ÉTEXTO"),
+    ("ISTEXT", "ETEXTO"),
+    ("ISNA", "É.NÃO.DISP"),
+    ("ISNA", "E.NAO.DISP"),
+    // Dynamic Arrays
+    ("FILTER", "FILTRO"),
+    ("SORT", "CLASSIFICAR"),
+    ("SORTBY", "CLASSIFICARPOR"),
+    ("UNIQUE", "ÚNICO"),
+    ("UNIQUE", "UNICO"),
+    ("SEQUENCE", "SEQUÊNCIA"),
+    ("SEQUENCE", "SEQUENCIA"),
+    ("RANDARRAY", "MATRIZALEATÓRIA"),
+    ("RANDARRAY", "MATRIZALEATORIA"),
+    ("DROP", "DESCARTAR"),
+    ("TAKE", "OBTER"),
+    ("EXPAND", "EXPANDIR"),
+    ("TOCOL", "PARACOL"),
+    ("TOROW", "PARALIN"),
+    ("VSTACK", "EMPILHARV"),
+    ("HSTACK", "EMPILHARH"),
+    ("CHOOSEROWS", "ESCOLHERLINS"),
+    ("CHOOSECOLS", "ESCOLHERCOLS"),
+    ("WRAPROWS", "MOLDARLINS"),
+    ("WRAPCOLS", "MOLDARCOLS"),
+];
+
 impl FormulaLocale {
     pub fn list_separator(self) -> char {
-        if self == Self::Es { ';' } else { ',' }
+        if self == Self::Es || self == Self::PtBr { ';' } else { ',' }
     }
     pub fn decimal_separator(self) -> char {
-        if self == Self::Es { ',' } else { '.' }
+        if self == Self::Es || self == Self::PtBr { ',' } else { '.' }
     }
     pub fn array_column_separator(self) -> char {
-        if self == Self::Es { '\\' } else { ',' }
+        if self == Self::Es || self == Self::PtBr { '\\' } else { ',' }
     }
     pub fn function_name(self, canonical: &str) -> &str {
-        if self == Self::Es {
-            SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, es)| *es).unwrap_or(canonical)
-        } else {
-            canonical
+        match self {
+            Self::Es => SPANISH.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, es)| *es).unwrap_or(canonical),
+            Self::PtBr => PORTUGUESE_BR.iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, pt)| *pt).unwrap_or(canonical),
+            Self::En => canonical,
         }
     }
     pub fn canonical_name(self, localized: &str) -> &str {
-        if self == Self::Es {
-            SPANISH.iter().find(|(_, es)| es.eq_ignore_ascii_case(localized)).map(|(en, _)| *en).unwrap_or(localized)
-        } else {
-            localized
+        match self {
+            Self::Es => SPANISH.iter().find(|(_, es)| crate::same_name(es, localized)).map(|(en, _)| *en).unwrap_or(localized),
+            Self::PtBr => PORTUGUESE_BR.iter().find(|(_, pt)| crate::same_name(pt, localized)).map(|(en, _)| *en).unwrap_or(localized),
+            Self::En => localized,
         }
     }
 }
@@ -60,8 +203,8 @@ impl FormulaLocale {
 /// LET/LAMBDA bindings take precedence over aliases. File and API syntax uses [`crate::parse`].
 pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<Expr, ParseError> {
     let mut expr = parser::parse_syntax(src, locale)?;
-    if locale == FormulaLocale::Es {
-        normalize(&mut expr, &known_name, &mut Bindings::default(), 0, false)?;
+    if locale != FormulaLocale::En {
+        normalize(&mut expr, locale, &known_name, &mut Bindings::default(), 0, false)?;
     }
     Ok(expr)
 }
@@ -96,7 +239,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
         return Ok(crate::print(expr));
     }
     let mut expr = expr.clone();
-    normalize(&mut expr, &known_name, &mut Bindings::default(), 0, true)?;
+    normalize(&mut expr, locale, &known_name, &mut Bindings::default(), 0, true)?;
     let canonical = crate::print(&expr);
     let tokens = crate::lexer::tokenize(&canonical).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let mut out = String::new();
@@ -121,10 +264,15 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     Ok(out)
 }
 
-pub(crate) fn boolean_alias(name: &str) -> Option<bool> {
-    if name.eq_ignore_ascii_case("VERDADERO") {
+pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
+    let (t, f) = match locale {
+        FormulaLocale::En => return None,
+        FormulaLocale::Es => ("VERDADERO", "FALSO"),
+        FormulaLocale::PtBr => ("VERDADEIRO", "FALSO"),
+    };
+    if name.eq_ignore_ascii_case(t) {
         Some(true)
-    } else if name.eq_ignore_ascii_case("FALSO") {
+    } else if name.eq_ignore_ascii_case(f) {
         Some(false)
     } else {
         None
@@ -167,20 +315,34 @@ impl Bindings {
     }
 }
 
-fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut Bindings, depth: usize, display: bool) -> Result<(), ParseError> {
+fn normalize(
+    expr: &mut Expr,
+    locale: FormulaLocale,
+    known_name: &impl Fn(&str) -> bool,
+    bindings: &mut Bindings,
+    depth: usize,
+    display: bool,
+) -> Result<(), ParseError> {
     if depth > parser::MAX_DEPTH {
         return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
     }
     let bound = |name: &str, bindings: &Bindings| bindings.contains(name) || known_name(name);
     match expr {
         Expr::Bool(value) if display => {
-            let alias = if *value { "VERDADERO" } else { "FALSO" };
+            let alias = match (locale, *value) {
+                (FormulaLocale::En, true) => "TRUE",
+                (FormulaLocale::En, false) => "FALSE",
+                (FormulaLocale::Es, true) => "VERDADERO",
+                (FormulaLocale::Es, false) => "FALSO",
+                (FormulaLocale::PtBr, true) => "VERDADEIRO",
+                (FormulaLocale::PtBr, false) => "FALSO",
+            };
             if !bound(alias, bindings) {
                 *expr = Expr::Name(alias.into());
             }
         }
         Expr::Name(name) if !display && !bound(name, bindings) => {
-            if let Some(value) = boolean_alias(name) {
+            if let Some(value) = boolean_alias(name, locale) {
                 *expr = Expr::Bool(value);
             }
         }
@@ -190,13 +352,13 @@ fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut
                 for pair in pairs.chunks_mut(2) {
                     if let [declaration, value] = pair {
                         // The new name is not in scope in its own value expression.
-                        normalize(value, known_name, bindings, depth + 1, display)?;
+                        normalize(value, locale, known_name, bindings, depth + 1, display)?;
                         if let Expr::Name(name) = declaration {
                             bindings.push(name);
                         }
                     }
                 }
-                normalize(body, known_name, bindings, depth + 1, display)?;
+                normalize(body, locale, known_name, bindings, depth + 1, display)?;
             }
             bindings.truncate(saved);
         }
@@ -208,40 +370,40 @@ fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut
                         bindings.push(name);
                     }
                 }
-                normalize(body, known_name, bindings, depth + 1, display)?;
+                normalize(body, locale, known_name, bindings, depth + 1, display)?;
             }
             bindings.truncate(saved);
         }
         Expr::Call(name, args) => {
-            let alias = if display { FormulaLocale::Es.function_name(name) } else { FormulaLocale::Es.canonical_name(name) };
+            let alias = if display { locale.function_name(name) } else { locale.canonical_name(name) };
             if !bound(name, bindings) && (!display || !bound(alias, bindings)) {
                 *name = alias.to_string();
             }
             for arg in args {
-                normalize(arg, known_name, bindings, depth + 1, display)?;
+                normalize(arg, locale, known_name, bindings, depth + 1, display)?;
             }
         }
         Expr::Invoke(callee, args) => {
-            normalize(callee, known_name, bindings, depth + 1, display)?;
+            normalize(callee, locale, known_name, bindings, depth + 1, display)?;
             for arg in args {
-                normalize(arg, known_name, bindings, depth + 1, display)?;
+                normalize(arg, locale, known_name, bindings, depth + 1, display)?;
             }
         }
-        Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, known_name, bindings, depth + 1, display)?,
+        Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, locale, known_name, bindings, depth + 1, display)?,
         Expr::Binary(..) => {
             // Follow the left spine of a flat chain (A1+A2+…) in a loop: it is not nesting.
             // Each call leaves `bindings` as it found them, so the order does not matter.
             let mut node = expr;
             while let Expr::Binary(_, left, right) = node {
-                normalize(right, known_name, bindings, depth + 1, display)?;
+                normalize(right, locale, known_name, bindings, depth + 1, display)?;
                 node = left;
             }
-            normalize(node, known_name, bindings, depth, display)?;
+            normalize(node, locale, known_name, bindings, depth, display)?;
         }
         Expr::Array(rows) if display => {
             for row in rows {
                 for child in row {
-                    normalize(child, known_name, bindings, depth + 1, display)?;
+                    normalize(child, locale, known_name, bindings, depth + 1, display)?;
                 }
             }
         }

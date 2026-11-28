@@ -160,7 +160,7 @@ mod tests {
     /// only when the interface language has them all.
     #[test]
     fn function_help_follows_the_interface_language_and_the_formula_syntax() {
-        use FormulaLocale::{En, Es};
+        use FormulaLocale::{En, Es, PtBr};
         // Spanish help over English formulas: the name and `,` stay as typed; brackets, indexes
         // and `...` survive.
         assert_eq!(sig("IF", En, Language::Es), "IF(prueba_lógica, [valor_si_verdadero], [valor_si_falso])");
@@ -174,6 +174,11 @@ mod tests {
         // Spanish names and separators, from a localized name.
         assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
         assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
+        // Brazilian Portuguese names and separators, including fallback to English arguments.
+        assert_eq!(sig("soma", PtBr, Language::PtBr), "SOMA(número1; [número2]; ...)");
+        assert_eq!(sig("ARRED", PtBr, Language::PtBr), "ARRED(número; núm_dígitos)");
+        assert_eq!(sig("ARRED", PtBr, Language::En), "ARRED(number; num_digits)");
+        assert_eq!(description("SOMA", PtBr, Language::PtBr).as_deref(), Some("Soma todos os números dos argumentos."));
         // An argument list Spanish covers only in part stays English instead of mixing (the name
         // is whatever the Spanish formula table calls SUMIFS).
         let sumifs = sig("SUMIFS", Es, Language::Es);

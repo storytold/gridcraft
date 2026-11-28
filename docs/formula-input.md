@@ -1,30 +1,32 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+for Spanish formula entry and display, or **Português (Brasil)** for Brazilian Portuguese (`pt-BR`)
+formula entry and display. On first run the preference follows the system language. English and the
+other interface languages currently use the English formula table and separators.
 
-| Spanish | Canonical English |
-| --- | --- |
-| `SUMA` | `SUM` |
-| `PROMEDIO` | `AVERAGE` |
-| `SI` | `IF` |
-| `CONTAR` | `COUNT` |
-| `SUMAR.SI` | `SUMIF` |
-| `CONTAR.SI` | `COUNTIF` |
-| `BUSCARV` | `VLOOKUP` |
-| `HOY` | `TODAY` |
-| `VERDADERO`, `FALSO` | `TRUE`, `FALSE` (literals or function calls) |
+| Spanish | Brazilian Portuguese | Canonical English |
+| --- | --- | --- |
+| `SUMA` | `SOMA` | `SUM` |
+| `PROMEDIO` | `MÉDIA` / `MEDIA` | `AVERAGE` |
+| `SI` | `SE` | `IF` |
+| `CONTAR` | `CONT.NUM` | `COUNT` |
+| `SUMAR.SI` | `SOMASE` | `SUMIF` |
+| `CONTAR.SI` | `CONT.SE` | `COUNTIF` |
+| `BUSCARV` | `PROCV` | `VLOOKUP` |
+| `HOY` | `HOJE` | `TODAY` |
+| `VERDADERO`, `FALSO` | `VERDADEIRO`, `FALSO` | `TRUE`, `FALSE` (literals or function calls) |
 
-Names are case-insensitive. Spanish formulas use decimal commas (`1,5`), semicolon arguments
-and reference unions, and backslashes between array columns (`{1\2;3\4}`). For example,
-`=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
-decimal points and comma array columns; it does not silently translate Spanish aliases.
+Names are case-insensitive. Spanish and Brazilian Portuguese formulas use decimal commas (`1,5`),
+semicolon arguments and reference unions, and backslashes between array columns (`{1\2;3\4}`).
+For example, `=SI(VERDADERO;SUMA(1,5;2,25);0)` and `=SE(VERDADEIRO;SOMA(1,5;2,25);0)` both
+evaluate to 3.75. English mode retains comma arguments, decimal points and comma array columns; it
+does not silently translate localized aliases.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
-use the selected formula language. Common Spanish function help is translated; functions
-without a Spanish entry retain their English names/help. General interface labels and errors
-fall back to English where Spanish translations are not provided. An edit captures its language
+use the selected formula language. Common Spanish and Portuguese function help is translated; functions
+without a localized entry retain their English names/help. General interface labels and errors
+fall back to English where translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
 
 Workbook/sheet names, table names, LET bindings and LAMBDA parameters take precedence over

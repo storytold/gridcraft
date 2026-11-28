@@ -183,16 +183,36 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
 }
 
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn portuguese_interface_controls_entry_display_and_xlsx_roundtrip() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
     assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
-    app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
+    assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
     assert!(!enter(&mut app, "=SUMA(1;2)"));
+    assert!(enter(&mut app, "=SE(VERDADEIRO;SOMA(1,5;2,25);PROCV(2;{1\\10;2\\20};2;FALSO))"));
+    let canonical = "IF(TRUE,SUM(1.5,2.25),VLOOKUP(2,{1,10;2,20},2,FALSE))";
+    assert_eq!(formula(&app), canonical);
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(3.75));
+    let bytes = gridcraft_xlsx::write_xlsx(&app.session.active().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert_eq!(reopened.active().unwrap().cell(CellRef::new(0, 0)).unwrap().formula.as_ref().unwrap().text, canonical);
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"pt-br.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SE(VERDADEIRO;SOMA(1,5;2,25);PROCV(2;{1\\10;2\\20};2;FALSO))");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), canonical);
+    assert!(enter(&mut app, "=TEMPO(12;0;0)+HORA(0,5)"));
+    assert_eq!(formula(&app), "TIME(12,0,0)+HOUR(0.5)");
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=TEMPO(12;0;0)+HORA(0,5)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "TIME(12,0,0)+HOUR(0.5)");
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::PtBr);
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=TIME(12,0,0)+HOUR(0.5)");
 }
 
 #[test]
