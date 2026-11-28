@@ -151,33 +151,56 @@ fn close_tag_from(x: &str, from: usize, local: &str) -> Option<usize> {
 // ---------------------------------------------------------------- linked workbooks
 
 /// `wb` as it is saved into the folder `to` (absolute): the relative paths of its linked
-/// workbooks, relative to the folder it was read from, are rewritten relative to `to`, as Excel
-/// does on Save As, or made absolute when no relative path exists (another drive). `None` when
-/// nothing changes.
+/// workbooks and of its cells' hyperlinks to files, relative to the folder it was read from, are
+/// rewritten relative to `to`, as Excel does on Save As, or made absolute when no relative path
+/// exists (another drive). `None` when nothing changes.
 pub fn rebase_links(wb: &Workbook, to: &Path) -> Option<Workbook> {
-    let p = wb.preserved.as_deref()?;
     let from = Folder::of(wb.source_dir.as_deref()?)?;
     let to = Folder::of(to)?;
     if from == to {
         return None;
     }
-    let mut parts = p.parts.clone();
-    let mut changed = false;
-    for r in parts.iter_mut().flat_map(|part| part.rels.iter_mut()) {
-        if r.external
-            && is_kind(r, &["externalLinkPath"])
-            && let Some(target) = rebase(&r.target, &from, &to)
-        {
-            r.target = target;
-            changed = true;
+    let mut out: Option<Workbook> = None;
+    if let Some(p) = wb.preserved.as_deref() {
+        let mut parts = p.parts.clone();
+        let mut changed = false;
+        for r in parts.iter_mut().flat_map(|part| part.rels.iter_mut()) {
+            if r.external
+                && is_kind(r, &["externalLinkPath"])
+                && let Some(target) = rebase(&r.target, &from, &to)
+            {
+                r.target = target;
+                changed = true;
+            }
+        }
+        if changed {
+            out.get_or_insert_with(|| wb.clone()).preserved = Some(Arc::new(Preserved { parts, ..p.clone() }));
         }
     }
-    if !changed {
-        return None;
+    // A cell's link to a file (Insert › Link, "Existing File"): its path, before any `#` location
+    // in that file, names the same file from the new folder (#4362). Links within the workbook
+    // aren't external, and URLs and absolute paths are kept as they are.
+    for (i, sheet) in wb.sheets.iter().enumerate() {
+        for (cell, link) in &sheet.hyperlinks {
+            let target = link.target.trim();
+            let (path, location) = match target.split_once('#') {
+                Some((p, l)) if !p.is_empty() => (p, Some(l)),
+                _ => (target, None),
+            };
+            if !link.external || path.starts_with('#') {
+                continue;
+            }
+            let Some(rebased) = rebase(path, &from, &to) else { continue };
+            let rebased = match location {
+                Some(l) => format!("{rebased}#{l}"),
+                None => rebased,
+            };
+            if let Some(l) = out.get_or_insert_with(|| wb.clone()).sheet_mut(i).and_then(|s| s.hyperlinks.get_mut(cell)) {
+                l.target = rebased;
+            }
+        }
     }
-    let mut out = wb.clone();
-    out.preserved = Some(Arc::new(Preserved { parts, ..p.clone() }));
-    Some(out)
+    out
 }
 
 /// An absolute folder, lexically normalized.

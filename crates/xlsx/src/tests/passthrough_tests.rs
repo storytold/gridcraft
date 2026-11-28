@@ -619,6 +619,47 @@ fn saving_into_another_folder_rebases_relative_links_to_workbooks() {
     assert!(crate::rebase_links(&wb, std::path::Path::new("/elsewhere")).is_none());
 }
 
+/// #4362: a cell's link to a file by a relative path names the same file after Save As into
+/// another folder, as in Excel; links within the workbook, URLs and absolute paths are kept.
+#[test]
+#[cfg(unix)]
+fn saving_into_another_folder_rebases_cell_links_to_files() {
+    let link = |target: &str, external: bool| gridcraft_model::Hyperlink { target: target.into(), tooltip: None, external };
+    let cell_at = |a: &str| gridcraft_core::CellRef::parse(a).unwrap();
+    let mut wb = gridcraft_model::Workbook::new();
+    let cells = [
+        ("A1", link("target%20note.txt", true)),
+        ("A2", link("sub/Book.xlsx#Sheet1!B2", true)),
+        ("A3", link("https://example.com/a.txt", true)),
+        ("A4", link("Sheet2!A1", false)),
+        ("A5", link("/abs/notes.txt", true)),
+        ("A6", link("../../../../x.txt", true)),
+        ("A7", link("mailto:someone@example.com", true)),
+    ];
+    for (a, l) in &cells {
+        wb.sheet_mut(0).unwrap().hyperlinks.insert(cell_at(a), l.clone());
+    }
+    wb.source_dir = Some("/work/source".into());
+    let out = crate::rebase_links(&wb, std::path::Path::new("/work/copy")).expect("the relative links change");
+    let target = |a: &str| out.sheet(0).unwrap().hyperlinks[&cell_at(a)].target.clone();
+    assert_eq!(target("A1"), "../source/target%20note.txt");
+    assert_eq!(target("A2"), "../source/sub/Book.xlsx#Sheet1!B2", "the location in the file is kept");
+    for (a, l) in &cells[2..] {
+        assert_eq!(target(a), l.target, "{a} is kept");
+    }
+    // The workbook being saved is untouched: the document keeps its links as read.
+    assert_eq!(wb.sheet(0).unwrap().hyperlinks[&cell_at("A1")].target, "target%20note.txt");
+    // Into a subfolder, and back into the same folder (nothing to change).
+    let out = crate::rebase_links(&wb, std::path::Path::new("/work/source/deeper")).unwrap();
+    assert_eq!(out.sheet(0).unwrap().hyperlinks[&cell_at("A1")].target, "../target%20note.txt");
+    assert!(crate::rebase_links(&wb, std::path::Path::new("/work/source/")).is_none());
+    // Only links that stay as they are: nothing changes.
+    let mut kept = gridcraft_model::Workbook::new();
+    kept.sheet_mut(0).unwrap().hyperlinks.insert(gridcraft_core::CellRef::new(0, 0), link("https://example.com", true));
+    kept.source_dir = Some("/work/source".into());
+    assert!(crate::rebase_links(&kept, std::path::Path::new("/work/copy")).is_none());
+}
+
 // ------------------------------------------------------------------ chart sheets (#727)
 
 const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
