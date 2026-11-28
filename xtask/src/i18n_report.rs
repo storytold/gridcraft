@@ -1,10 +1,10 @@
 //! `cargo xtask i18n-report`: the interface strings each language doesn't translate yet, read from
-//! the catalogs in `crates/ui-egui/src/i18n/`. A string a catalog lacks shows in English, so the
-//! report always succeeds; `cargo xtask ci` runs it first so the list shows in the gate log.
+//! the catalogs in `crates/ui-egui/src/i18n/`. A string a catalog lacks shows in English, so
+//! missing translations do not fail the report; `cargo xtask ci` runs it first.
 //!
-//! The reference set is every key any catalog translates. A catalog is a source file with a
-//! `fn translate`; its keys are the string literals that start a match arm (`"key" => …`) or open a
-//! table row (`("key", …)`). With the `engine` feature it also lists function help rows keyed by
+//! The reference set comes from `keys.rs`, plus any existing catalog key the inventory has not yet
+//! recorded. A catalog is a source file with a `fn translate`; its keys are the string literals
+//! that start a match arm (`"key" => …`) or open a table row (`("key", …)`). With the `engine` feature it also lists function help rows keyed by
 //! English the function catalog no longer has: those show the English help.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +18,9 @@ pub fn run(root: &Path) -> Result<(), String> {
     let dir = root.join("crates/ui-egui/src/i18n");
     let mut catalogs = BTreeMap::new();
     let mut help = BTreeMap::new();
+    let inventory_path = dir.join("keys.rs");
+    let source = std::fs::read_to_string(&inventory_path).map_err(|e| format!("can't read {}: {e}", inventory_path.display()))?;
+    let inventory = inventory_keys(&source).map_err(|e| format!("{}: {e}", inventory_path.display()))?;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -38,22 +41,31 @@ pub fn run(root: &Path) -> Result<(), String> {
             catalogs.insert(stem, catalog_keys(&source));
         }
     }
-    print!("{}", render(&catalogs));
+    print!("{}", render(&catalogs, &inventory));
     print!("{}", function_help(&help));
     Ok(())
 }
 
 /// Per language: how many reference keys it lacks, then the first [`LIST_CAP`] of them.
-pub fn render(catalogs: &BTreeMap<String, BTreeSet<String>>) -> String {
-    let reference: BTreeSet<&String> = catalogs.values().flatten().collect();
+pub fn render(catalogs: &BTreeMap<String, BTreeSet<String>>, inventory: &BTreeSet<String>) -> String {
+    let mut reference = inventory.clone();
+    reference.extend(catalogs.values().flatten().cloned());
     let mut out =
         format!("i18n-report: {} interface strings across {} catalogs; a string a catalog lacks shows in English\n", reference.len(), catalogs.len());
     for (language, keys) in catalogs {
-        let missing: Vec<&&String> = reference.iter().filter(|key| !keys.contains(key.as_str())).collect();
+        let missing: Vec<&String> = reference.iter().filter(|key| !keys.contains(key.as_str())).collect();
         let _ = writeln!(out, "  {language}: {} missing", missing.len());
         list(&mut out, missing.iter().map(|key| key.as_str()), missing.len());
     }
     out
+}
+
+/// The explicit interface inventory, rather than a catalog implementation. It lets the report
+/// include UI strings that already call `Language::tr` but do not have a translation yet.
+fn inventory_keys(source: &str) -> Result<BTreeSet<String>, String> {
+    let (_, source) = source.split_once("pub(super) const INTERFACE: &[&str] = &[").ok_or("INTERFACE initializer not recognized")?;
+    let (source, _) = source.split_once("];").ok_or("INTERFACE initializer not terminated")?;
+    Ok(literals(source).into_iter().map(|(value, _, _)| value).collect())
 }
 
 fn list<'a>(out: &mut String, keys: impl Iterator<Item = &'a str>, count: usize) {
@@ -222,9 +234,22 @@ pub(super) fn translate(text: &str) -> Option<&'static str> { None }
         let ja = catalog_keys(table);
         assert_eq!(ja.iter().map(String::as_str).collect::<Vec<_>>(), ["Long …", "Paste"]);
 
-        let report = render(&BTreeMap::from([("de".to_owned(), de), ("ja".to_owned(), ja)]));
+        let report = render(&BTreeMap::from([("de".to_owned(), de), ("ja".to_owned(), ja)]), &BTreeSet::new());
         assert!(report.starts_with("i18n-report: 3 interface strings across 2 catalogs"), "{report}");
         assert!(report.contains("  de: 1 missing\n      \"Long …\"\n"), "{report}");
         assert!(report.contains("  ja: 1 missing\n      \"Line\\nbreak \\\"quoted\\\"\"\n"), "{report}");
+    }
+
+    #[test]
+    fn inventory_keys_reads_the_explicit_interface_list() {
+        let source = r#"
+pub(super) const INTERFACE: &[&str] = &[
+    "Paste",
+    "Long \u{2026}",
+];
+"#;
+        assert_eq!(inventory_keys(source).unwrap().iter().map(String::as_str).collect::<Vec<_>>(), ["Long …", "Paste"]);
+        assert_eq!(inventory_keys(&format!("{source}\nconst OTHER: &[&str] = &[\"Not an interface key\"];\n")).unwrap().len(), 2);
+        assert!(inventory_keys("pub(super) const INTERFACE: &[&str] = something_else;").is_err());
     }
 }
