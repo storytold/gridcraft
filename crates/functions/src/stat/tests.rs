@@ -649,6 +649,26 @@ fn frequency_prob() {
 }
 
 #[test]
+fn frequency_skips_error_bins_and_counts_against_zero_without_bins() {
+    let col = |v: Vec<Value>| rf(arr(v.into_iter().map(|x| vec![x]).collect()));
+    let counts = |f: Value| rows_of(&f).into_iter().flatten().collect::<Vec<_>>();
+    let data = || c(&[-1.0, 0.0, 1.0]);
+    // Native Excel (#4282): blank bins, or only text, count against a single bin of 0.
+    for bins in [vec![Value::Empty, Value::Empty], vec![tv("a"), tv("")]] {
+        assert_eq!(counts(ev("FREQUENCY", vec![data(), col(bins)])), vec![nv(2.0), nv(1.0)]);
+    }
+    assert_eq!(counts(ev("FREQUENCY", vec![data(), col(vec![nv(0.0), Value::Empty])])), vec![nv(2.0), nv(1.0)]);
+    // Native Excel (#4283): an error among the bins is left out, like text.
+    let bins = col(vec![nv(0.0), Value::Error(CellError::NA)]);
+    assert_eq!(counts(ev("FREQUENCY", vec![data(), bins])), vec![nv(2.0), nv(1.0)]);
+    let bins = col(vec![nv(-1.0), Value::Error(CellError::Div0), nv(4.0)]);
+    assert_eq!(counts(ev("FREQUENCY", vec![c(&[-1.0, 1.0, 4.0, 8.0]), bins])), vec![nv(1.0), nv(2.0), nv(1.0)]);
+    // An error in the data still propagates.
+    let data = col(vec![nv(-1.0), Value::Error(CellError::NA), nv(1.0)]);
+    is_err(ev("FREQUENCY", vec![data, c(&[0.0])]), CellError::NA);
+}
+
+#[test]
 fn normal() {
     close_tol(ev("NORM.DIST", vec![n(42.0), n(40.0), n(1.5), b(true)]), 0.9087888, D7);
     close_tol(ev("NORM.DIST", vec![n(42.0), n(40.0), n(1.5), b(false)]), 0.10934005, D7);
