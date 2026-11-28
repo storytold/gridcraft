@@ -1020,13 +1020,7 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
-    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
-    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
-    // O_NONBLOCK when the crate takes a libc dependency.
-    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
-        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
-    }
-    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let f = crate::file_access::open_read(path).map_err(EngineError::Other)?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
     if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
@@ -1049,81 +1043,113 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
     script_sandbox_check(path)?;
-    // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
-    // The temporary file is created exclusively, so an existing file or symlink at that
-    // path (planted by another local user) makes the save fail instead of truncating the
-    // link's target; and it inherits the destination's access restrictions, so saving a
-    // private workbook doesn't widen who can read it.
-    let tmp = format!("{path}.sctmp");
-    let prior_meta = std::fs::metadata(path).ok();
-    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
-    let mut opts = std::fs::OpenOptions::new();
+    let roots = crate::file_access::current();
+    let (dir, name) = crate::file_access::write_parent(path, roots.as_deref()).map_err(EngineError::Other)?;
+    let metadata = dir.metadata(&name).or_else(|err| {
+        // A desktop save may replace a symlink to a file outside its immediate parent.
+        // Only follow that link with ambient authority when no automation roots are active.
+        if roots.is_none() && dir.symlink_metadata(&name).is_ok_and(|m| m.file_type().is_symlink()) {
+            std::fs::metadata(path).map(cap_std::fs::Metadata::from_just_metadata)
+        } else {
+            Err(err)
+        }
+    });
+    atomic_write(&dir, &name, bytes, metadata).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+}
+
+/// Each save owns an exclusively created, unpredictable temporary name. A stale temporary
+/// file never blocks a later save; creation, cleanup and rename stay on the pinned directory.
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_write(
+    dir: &cap_std::fs::Dir,
+    name: &std::ffi::OsStr,
+    bytes: &[u8],
+    metadata: std::io::Result<cap_std::fs::Metadata>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let prior_meta = match metadata {
+        Ok(meta) => Some(meta),
+        // Only an absent leaf is new. A dangling or unresolvable symlink is not permission
+        // to replace an existing destination with the ordinary creation mode.
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && dir.symlink_metadata(name).is_err_and(|leaf| leaf.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            None
+        }
+        Err(e) => return Err(e),
+    };
+    #[cfg(not(unix))]
+    let prior = prior_meta.as_ref().map(|m| m.permissions());
+    let mut opts = cap_std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     // Over an existing file the replacement starts owner-only, whatever the umask: its group is
     // still the saving user's primary one until it is changed below, and a member of that group
     // must not be able to open it (and keep the descriptor) before then.
     #[cfg(unix)]
-    if prior.is_some() {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    // A brand-new file gets the restrictive default: no group/other write, whatever the umask.
-    #[cfg(unix)]
-    if prior.is_none() {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o644);
-    }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    // The replacement belongs to the saving user's primary group: restore the old file's group and
-    // then its mode. When the group can't be restored its access is dropped rather than handed to a
-    // different group; failing to read that back is a failed save.
-    #[cfg(unix)]
-    if let Some(m) = &prior_meta {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
-        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            EngineError::Other(format!("{path}: {e}"))
-        })?;
-        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
-        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
-        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
-    }
-    #[cfg(not(unix))]
-    if let Some(p) = &prior {
-        let _ = f.set_permissions(p.clone());
-    }
-    // `sync_all` before the rename: without it a power loss right after the rename can leave
-    // the new name pointing at an empty or truncated file while the old workbook is gone.
-    // A file system that cannot flush at all (some network mounts; on Apple targets std asks
-    // for F_FULLFSYNC, which they refuse) keeps the old behaviour: skip the flush, still rename.
-    let synced = |f: &std::fs::File| f.sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) });
-    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| synced(&f)).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    drop(f);
-    std::fs::rename(&tmp, path).map_err(|e| {
-        // A write or rename that fails (full disk, the workbook locked by another app) leaves
-        // no temporary file beside the user's workbook.
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
-    // Make the rename itself durable. Best effort: the workbook is already in place, so a
-    // directory that can't be opened or synced (some file systems) is not a failed save.
-    #[cfg(unix)]
     {
-        let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
-        if let Ok(d) = std::fs::File::open(dir) {
-            let _ = d.sync_all();
+        use cap_std::fs::OpenOptionsExt;
+        opts.mode(if prior_meta.is_some() { 0o600 } else { 0o644 });
+    }
+    let mut created = None;
+    for _ in 0..32 {
+        let mut random = [0u8; 16];
+        getrandom::fill(&mut random).map_err(std::io::Error::other)?;
+        let suffix = u128::from_le_bytes(random);
+        let tmp = format!(".gridcraft-{suffix:032x}.sctmp");
+        match dir.open_with(&tmp, &opts) {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
         }
     }
-    Ok(())
+    let (tmp, file) = created.ok_or_else(|| std::io::Error::new(std::io::ErrorKind::AlreadyExists, "cannot create a unique save file"))?;
+    #[cfg(unix)]
+    let mut file = file.into_std();
+    // Restore the old group before its mode; a failed group restore must not grant access to
+    // the saving user's different group. The temporary file starts owner-only until this point.
+    #[cfg(unix)]
+    if let Some(m) = &prior_meta {
+        use cap_std::fs::MetadataExt as _;
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let _ = std::os::unix::fs::fchown(&file, None, Some(m.gid()));
+        let group_kept = file.metadata().map(|now| now.gid() == m.gid()).inspect_err(|_| {
+            let _ = dir.remove_file(&tmp);
+        })?;
+        if let Some(mode) = restored_mode(m.mode(), group_kept) {
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(mode));
+        }
+    }
+
+    #[cfg(not(unix))]
+    let mut file = file;
+    #[cfg(not(unix))]
+    if let Some(p) = prior {
+        let _ = file.set_permissions(p);
+    }
+    // Flush before rename, preserving the unsupported-filesystem fallback.
+    let result = file
+        .write_all(bytes)
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) }));
+    // Close before rename, including on Windows; no other attempt ever owns this name.
+    drop(file);
+    let result = result.and_then(|()| dir.rename(&tmp, dir, name));
+    if result.is_err() {
+        let _ = dir.remove_file(&tmp);
+    }
+    // The held directory remains the authority for the best-effort directory flush.
+    #[cfg(unix)]
+    if result.is_ok()
+        && let Ok(directory) = dir.open(".")
+    {
+        let _ = directory.sync_all();
+    }
+    result
 }
 
 /// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
@@ -1144,11 +1170,11 @@ fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
     (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
-/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
-/// restored; without the group, the owner and other bits only.
+/// Restore the saved mode only when the old group is kept. Otherwise leave the temporary
+/// file's restrictive permissions unchanged: old group members could now match the other class.
 #[cfg(unix)]
-fn restored_mode(old: u32, group_kept: bool) -> u32 {
-    if group_kept { old & 0o7777 } else { old & 0o707 }
+fn restored_mode(old: u32, group_kept: bool) -> Option<u32> {
+    group_kept.then_some(old & 0o7777)
 }
 
 #[cfg(target_arch = "wasm32")]

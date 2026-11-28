@@ -18,23 +18,106 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+/// Isolate each native save fixture and clean it on normal return or unwinding. Set
+/// `GRIDCRAFT_RETAIN_TEST_FIXTURES` to retain diagnostics on workstations that forbid cleanup.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_fixture(label: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("gridcraft-save-{label}-"))
+        .disable_cleanup(std::env::var_os("GRIDCRAFT_RETAIN_TEST_FIXTURES").is_some())
+        .tempdir()
+        .unwrap()
+}
+
+/// New saves inherit the process umask just like an ordinary newly created file.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn new_workbook_save_keeps_default_creation_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = save_fixture("new-permissions");
+    let reference = fixture.path().join("ordinary.txt");
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&reference).unwrap();
+    let saved = fixture.path().join("synthetic.xlsx");
+    write_file(saved.to_str().unwrap(), b"synthetic workbook bytes").unwrap();
+    let expected = std::fs::metadata(&reference).unwrap().permissions().mode() & 0o777;
+    let actual = std::fs::metadata(&saved).unwrap().permissions().mode() & 0o777;
+    assert_eq!(actual, expected, "a new save must use the ordinary creation mode after umask");
+    assert_eq!(std::fs::read(saved).unwrap(), b"synthetic workbook bytes");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn save_fails_upfront_when_the_temp_name_is_taken() {
-    // Another local user who can write the directory must not be able to point the
-    // save's predictable temporary name at their own file: creation is exclusive.
-    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn stale_temporary_file_does_not_block_save_or_get_removed() {
+    let fixture = save_fixture("stale");
+    let dir = fixture.path();
+    let stale = dir.join("book.xlsx.sctmp");
+    std::fs::write(&stale, b"stale contents").unwrap();
+    let dest = dir.join("book.xlsx");
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+    assert_eq!(std::fs::read(stale).unwrap(), b"stale contents");
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn planted_temporary_symlink_does_not_block_save_or_modify_its_target() {
+    let fixture = save_fixture("planted");
+    let dir = fixture.path();
     let victim = dir.join("victim.txt");
     std::fs::write(&victim, b"original").unwrap();
     let dest = dir.join("book.xlsx");
-    std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
-    let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-    assert!(!dir.join("book.xlsx").exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
+    let planted = dir.join("book.xlsx.sctmp");
+    std::os::unix::fs::symlink(&victim, &planted).unwrap();
+    write_file(dest.to_str().unwrap(), b"new").unwrap();
+    assert_eq!(std::fs::read(victim).unwrap(), b"original");
+    assert_eq!(std::fs::read(dest).unwrap(), b"new");
+    assert!(std::fs::symlink_metadata(planted).unwrap().file_type().is_symlink());
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn atomic_save_uses_the_pinned_parent_after_a_directory_swap() {
+    let fixture = save_fixture("parent-swap");
+    let dir = fixture.path();
+    for sub in ["allowed/sub", "outside"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+    }
+    std::fs::write(dir.join("outside/book.xlsx"), b"outside sentinel").unwrap();
+    let roots = crate::file_access::AutomationRoots::new(None, Some(&dir.join("allowed"))).unwrap();
+    let dest = dir.join("allowed/sub/book.xlsx");
+    let (parent, name) = crate::file_access::write_parent(dest.to_str().unwrap(), roots.as_deref()).unwrap();
+    std::fs::rename(dir.join("allowed/sub"), dir.join("allowed/retained-sub")).unwrap();
+    std::os::unix::fs::symlink(dir.join("outside"), dir.join("allowed/sub")).unwrap();
+    atomic_write(&parent, &name, b"inside saved", parent.metadata(&name)).unwrap();
+    assert_eq!(std::fs::read(dir.join("outside/book.xlsx")).unwrap(), b"outside sentinel");
+    assert_eq!(std::fs::read(dir.join("allowed/retained-sub/book.xlsx")).unwrap(), b"inside saved");
+    assert_eq!(std::fs::read_dir(dir.join("outside")).unwrap().count(), 1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn simultaneous_atomic_saves_do_not_share_temporary_names() {
+    let fixture = save_fixture("parallel");
+    let dir = fixture.path();
+    let destination = dir.join("book.xlsx");
+    let barrier = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for n in 0..8u8 {
+            let destination = &destination;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                write_file(destination.to_str().unwrap(), &[n; 64]).unwrap();
+            });
+        }
+    });
+    let saved = std::fs::read(destination).unwrap();
+    assert_eq!(saved.len(), 64);
+    assert!(saved.iter().all(|v| *v == saved[0]));
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 1);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -67,15 +150,17 @@ fn save_keeps_the_destination_access_restrictions() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
+/// Without the old group, a saved file keeps the restrictive temporary mode.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
-    assert_eq!(super::restored_mode(0o100_664, true), 0o664);
-    assert_eq!(super::restored_mode(0o100_664, false), 0o604);
-    assert_eq!(super::restored_mode(0o102_444, false), 0o404, "an original read-only file stays read-only, setgid is dropped");
-    assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
+fn restored_mode_keeps_restrictive_permissions_when_the_group_is_lost() {
+    assert_eq!(super::restored_mode(0o100_664, true), Some(0o664));
+    assert_eq!(super::restored_mode(0o100_664, false), None);
+    assert_eq!(super::restored_mode(0o102_444, false), None, "leave the restrictive temporary mode; do not copy setgid");
+    assert_eq!(super::restored_mode(0o104_755, false), None, "do not copy setuid or other-class access");
+    assert_eq!(super::restored_mode(0o100_604, false), None, "members of a lost group must not gain the old other-class read access");
+    assert_eq!(super::restored_mode(0o100_604, true), Some(0o604));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1099,6 +1184,66 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn desktop_save_rejects_file_names_spelled_as_directories() {
+    let fixture = save_fixture("trailing-separator");
+    let file = fixture.path().join("book.xlsx");
+    std::fs::write(&file, b"original").unwrap();
+    for suffix in ["", ".", ".."] {
+        let spelling = format!("{}{}{suffix}", file.display(), std::path::MAIN_SEPARATOR);
+        assert!(crate::file_access::unconfined(|| write_file(&spelling, b"new")).is_err());
+    }
+    assert_eq!(std::fs::read(file).unwrap(), b"original");
+}
+
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn desktop_save_replaces_a_valid_relative_symlink_and_keeps_the_target_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = save_fixture("desktop-alias");
+    let parent = fixture.path().join("sub");
+    std::fs::create_dir(&parent).unwrap();
+    let target = fixture.path().join("original.xlsx");
+    std::fs::write(&target, b"original").unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let alias = parent.join("book.xlsx");
+    std::os::unix::fs::symlink("../original.xlsx", &alias).unwrap();
+    crate::file_access::unconfined(|| write_file(alias.to_str().unwrap(), b"new")).unwrap();
+    assert!(std::fs::symlink_metadata(&alias).unwrap().is_file());
+    assert_eq!(std::fs::read(&alias).unwrap(), b"new");
+    assert_eq!(std::fs::metadata(alias).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read(target).unwrap(), b"original");
+}
+
+/// A target inside the write root can still be outside a narrower retained parent handle.
+/// Metadata refusal must not replace its symlink with a more widely readable saved copy.
+#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[test]
+fn failed_destination_metadata_does_not_widen_a_saved_copy() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = save_fixture("metadata-refused");
+    let selected = fixture.path().join("selected");
+    std::fs::create_dir_all(selected.join("sub")).unwrap();
+    let private = selected.join("private.xlsx");
+    std::fs::write(&private, b"private sentinel").unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let alias = selected.join("sub/book.xlsx");
+    std::os::unix::fs::symlink("../private.xlsx", &alias).unwrap();
+    let roots = crate::file_access::AutomationRoots::new(None, Some(&selected)).unwrap();
+    let result = crate::file_access::confine(roots.as_ref(), || write_file(alias.to_str().unwrap(), b"new saved copy"));
+    assert!(result.is_err(), "a refused metadata lookup cannot be treated as a new file");
+    assert!(std::fs::symlink_metadata(&alias).unwrap().file_type().is_symlink());
+    assert_eq!(std::fs::read(&private).unwrap(), b"private sentinel");
+    assert_eq!(std::fs::metadata(&private).unwrap().permissions().mode() & 0o777, 0o600);
+    // Also refuse a leaf whose target disappeared after an earlier path check.
+    let dangling = selected.join("sub/lost.xlsx");
+    std::os::unix::fs::symlink("missing.xlsx", &dangling).unwrap();
+    let dir = cap_std::fs::Dir::open_ambient_dir(selected.join("sub"), cap_std::ambient_authority()).unwrap();
+    assert!(atomic_write(&dir, std::ffi::OsStr::new("lost.xlsx"), b"new saved copy", dir.metadata("lost.xlsx")).is_err());
+    assert!(std::fs::symlink_metadata(dangling).unwrap().file_type().is_symlink());
 }
 
 #[test]
