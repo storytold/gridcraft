@@ -1,5 +1,6 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
+use crate::widgets::tr;
 
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
@@ -7,10 +8,10 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     let selected = names.get(d.list_index).cloned();
     let field = |n: &Json, k: &str| n.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        if ui.button("New…").clicked() {
+        if ui.button(tr(ui, "New…")).clicked() {
             app.open_dialog("defineName", json!({}));
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Edit…")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(tr(ui, "Edit…"))).clicked()
             && let Some(n) = &selected
         {
             app.open_dialog(
@@ -21,7 +22,7 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 }),
             );
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Delete")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(tr(ui, "Delete"))).clicked()
             && let Some(n) = &selected
         {
             app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": field(n, "scope")}));
@@ -36,7 +37,7 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             ui.strong("Scope");
             ui.end_row();
             if names.is_empty() {
-                ui.label(egui::RichText::new("No names defined").italics());
+                ui.label(egui::RichText::new(tr(ui, "No names defined")).italics());
                 ui.end_row();
             }
             for (i, n) in names.iter().enumerate() {

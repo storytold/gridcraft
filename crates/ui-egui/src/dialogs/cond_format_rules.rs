@@ -3,6 +3,7 @@
 
 use super::show::{ok_cancel_enabled, track_pick};
 use super::{Dialog, Json, RefPick, SheetApp, json};
+use crate::widgets::tr;
 use egui::{Color32, Sense, Stroke, StrokeKind, vec2};
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::{CfRule, CfValueKind, Color as CellColor, Theme};
@@ -17,7 +18,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     // serialised every rule and journaled a step 60 times a second.
     let count = app.session.active().and_then(|d| d.wb.active()).map_or(0, |sh| sh.cond_formats.len());
     if count == 0 {
-        ui.label("There are no conditional formatting rules on this sheet.");
+        ui.label(tr(ui, "There are no conditional formatting rules on this sheet."));
         return;
     }
     let mut action: Option<Json> = None;
@@ -41,7 +42,7 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
                 if ui.small_button("▼").clicked() {
                     action = Some(json!({"moveDown": i}));
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui.small_button(tr(ui, "Delete")).clicked() {
                     action = Some(json!({"delete": i}));
                 }
             });

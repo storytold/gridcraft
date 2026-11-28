@@ -2,6 +2,7 @@ use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
+use crate::widgets::tr;
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -51,11 +52,11 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            ui.label(egui::RichText::new(tr(ui, "Filter")).strong());
             let mut checks = app.grid.filter_checks.clone().unwrap_or_else(|| gridcraft_engine::cmd::data::filter_choices(&wb, si, col));
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search = app.grid.filter_search.clone();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(tr(ui, "Search")).desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }
@@ -88,14 +89,14 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 .collect();
             ui.separator();
             ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
+                let clear = ui.button(tr(ui, "Clear Filter"));
                 if clear.clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
                 let any = visible_checks.iter().any(|c| c.checked);
-                let apply = ui.button("Apply");
+                let apply = ui.button(tr(ui, "Apply"));
                 app.grid.filter_buttons = vec![ascending.id, descending.id, clear.id, apply.id];
                 if apply.clicked() || (enter && any) {
                     let mut merged = gridcraft_engine::cmd::data::filter_choices_selection(&wb, si, col, &visible_checks);
