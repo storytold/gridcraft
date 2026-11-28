@@ -1,0 +1,295 @@
+//! Read the workbook the user can see. Do not send the document's path, hidden sheets,
+//! invisible names, protected formula sources, embedded pictures, or an entire workbook dump.
+
+use crate::SheetApp;
+use gridcraft_engine::DocState;
+use gridcraft_engine::core::{CellRef, RangeRef, Value, col_to_letters, letters_to_col};
+use gridcraft_engine::model::{Comment, Sheet, Visibility};
+use serde_json::{Value as Json, json};
+
+pub(in crate::wingman) const MENTIONS: &[&str] =
+    &["@selection", "@read", "@cell", "@editor", "@sheet", "@workbook", "@charts", "@comments", "@vba", "@macro"];
+
+pub(super) fn sheet<'a>(d: &'a DocState, args: &Json) -> Result<&'a Sheet, String> {
+    let i = match args["sheet"].as_str() {
+        Some(s) => d.wb.sheet_index(s).ok_or("No such worksheet")?,
+        None => d.wb.active_sheet(),
+    };
+    d.wb.sheet(i).filter(|sh| sh.visibility == Visibility::Visible).ok_or_else(|| "Worksheet is not visible".into())
+}
+
+pub(super) fn clip(s: &str, chars: usize) -> String {
+    clipped(s, chars).0
+}
+
+fn clipped(s: &str, chars: usize) -> (String, bool) {
+    match s.char_indices().nth(chars) {
+        Some((end, _)) => (format!("{}…", &s[..end]), true),
+        None => (s.to_owned(), false),
+    }
+}
+
+pub(super) fn cell_data(d: &DocState, sh: &Sheet, c: CellRef, detail: bool) -> Json {
+    if detail {
+        // JSON-escaped control characters and multi-byte text cost more than their character
+        // counts suggest. Budget the *whole* receipt, retaining a preview of every field.
+        for scale in [1, 2, 4] {
+            let out = cell_preview(d, sh, c, true, scale);
+            if out.to_string().len() <= super::MAX_RESULT {
+                return out;
+            }
+        }
+        // At 1/8, even six-byte escapes in every preview leave room for style and thread metadata.
+        return cell_preview(d, sh, c, true, 8);
+    }
+    cell_preview(d, sh, c, false, 1)
+}
+
+fn cell_preview(d: &DocState, sh: &Sheet, c: CellRef, detail: bool, scale: usize) -> Json {
+    let entry = sh.cell(c);
+    let style = d.wb.styles.get(sh.style_id(c));
+    let hidden = sh.is_protected() && style.protection.hidden;
+    let limit = if detail { 4096 / scale } else { 768 };
+    let mut cut = false;
+    let value = match sh.value_ref(c) {
+        None | Some(Value::Empty) => Json::Null,
+        Some(Value::Text(t)) => {
+            let (v, truncated) = clipped(t, limit);
+            cut = truncated;
+            json!(v)
+        }
+        Some(Value::Number(n)) => json!(n),
+        Some(Value::Bool(b)) => json!(b),
+        Some(Value::Error(e)) => json!({"error":e.as_str()}),
+        Some(Value::Array(a)) => json!({"arrayRows":a.rows,"arrayColumns":a.cols}),
+    };
+    let mut out = json!({"cell":c.a1(),"value":value});
+    if cut {
+        out["valueTruncated"] = true.into();
+    }
+    if let Some(f) = entry.and_then(|x| x.formula.as_ref()) {
+        if hidden {
+            out["formulaHidden"] = json!(true);
+        } else {
+            let (v, truncated) = clipped(&f.text, limit);
+            out["formula"] = json!(format!("={v}"));
+            if truncated {
+                out["formulaTruncated"] = true.into();
+            }
+        }
+    }
+    if detail {
+        out["style"] = json!({"font":clip(&style.font.name,128),"size":style.font.size,"bold":style.font.bold,"italic":style.font.italic,
+            "strike":style.font.strike,"color":style.font.color.hex(&d.wb.theme),"fill":style.fill,"align":style.align,
+            "numFmt":clip(style.num_fmt.as_str(),255)});
+        out["comment"] = sh.comments.get(&c).map_or(Json::Null, |v| comment_preview(v, true, scale));
+        if let Some(py) = entry.and_then(|x| x.py.as_deref()) {
+            out["python"] = if hidden {
+                json!({"hidden":true})
+            } else {
+                let (code, truncated) = clipped(&py.code, limit);
+                json!({"code":code,"codeTruncated":truncated,"stale":py.stale})
+            };
+        }
+        if let Some(p) = sh.cell_pictures.get(&c) {
+            out["picture"] = json!({"alt":clip(&p.alt,256),"mime":clip(&p.mime,80)});
+        }
+    }
+    out
+}
+
+fn comment(c: &Comment, detail: bool) -> Json {
+    comment_preview(c, detail, 1)
+}
+
+fn comment_preview(c: &Comment, detail: bool, scale: usize) -> Json {
+    let message = |author: &str, text: &str, limit| {
+        let (author, author_cut) = clipped(author, 128 / scale);
+        let (text, text_cut) = clipped(text, limit / scale);
+        json!({"author":author,"authorTruncated":author_cut,"text":text,"textTruncated":text_cut})
+    };
+    let mut out = message(&c.author, &c.text, if detail { 2048 } else { 256 });
+    out["threaded"] = json!(c.threaded);
+    out["resolved"] = json!(c.resolved);
+    out["replyCount"] = json!(c.replies.len());
+    let limit = if detail { 8 } else { 0 };
+    out["repliesTruncated"] = json!(c.replies.len() > limit);
+    if detail {
+        out["replies"] = json!(c.replies.iter().take(limit).map(|(by, msg)| message(by, msg, 256)).collect::<Vec<_>>());
+    }
+    out
+}
+
+fn sheet_info(sh: &Sheet) -> Json {
+    json!({"sheet":clip(&sh.name,128),"cells":sh.cells.len(),"charts":sh.charts.len(),
+        "comments":sh.comments.len(),"tables":sh.tables.len(),"protected":sh.is_protected(),
+        "autoFilter":sh.autofilter.as_ref().map(|af|af.range.a1()),"conditionalFormats":sh.cond_formats.len()})
+}
+
+/// Entries are bounded before they enter JSON. Pagination also enforces a byte budget for a
+/// workbook full of long non-ASCII strings; the next offset counts only entries actually sent.
+pub(super) fn page(items: impl Iterator<Item = Json>, offset: usize, limit: usize) -> Json {
+    let mut collected = Vec::new();
+    let mut bytes = 0;
+    let mut more = false;
+    for mut item in items.take(limit + 1) {
+        let mut size = item.to_string().len();
+        if size > 26 * 1024 {
+            item = json!({"itemOmitted":"Entry exceeds the page size","bytes":size});
+            size = item.to_string().len();
+        }
+        if collected.len() == limit || size + bytes > 26 * 1024 {
+            more = true;
+            break;
+        }
+        bytes += size;
+        collected.push(item);
+    }
+    let next = more.then_some(offset.saturating_add(collected.len()));
+    json!({"items":collected, "nextOffset":next})
+}
+
+fn info(d: &DocState, offset: usize) -> Json {
+    let sheets = d.wb.sheets.iter().filter(|s| s.visibility == Visibility::Visible).skip(offset).map(|s| sheet_info(s));
+    json!({"workbook":clip(&d.display_title(),128),"sheets":page(sheets,offset,32),"activeSheet":d.wb.active().map(|s|clip(&s.name,128)),
+        "activeCell":d.selection.active.a1(),"readOnly":d.read_only_source.is_some(),"protectedStructure":d.wb.protected_structure})
+}
+
+fn objects(d: &DocState, sh: &Sheet, kind: &str, column: Option<&str>, search: Option<&str>, offset: usize) -> Result<Json, String> {
+    let column = match (kind, column) {
+        ("comments", Some(name)) => Some(letters_to_col(name).ok_or("Use worksheet column letters A through XFD.")?),
+        (_, Some(_)) => return Err("The column filter is only available for comments.".into()),
+        (_, None) => None,
+    };
+    let search = search.filter(|s| !s.is_empty());
+    if kind == "comments" && search.is_some() {
+        return Err("To search comment text, use grep with searchIn=comment.".into());
+    }
+    // Compile a Unicode case-insensitive *literal* once; scan borrowed names without copying each one.
+    let pattern = search
+        .map(|s| regex::RegexBuilder::new(&regex::escape(s)).case_insensitive(true).build())
+        .transpose()
+        .map_err(|_| "Invalid object search.")?;
+    let matches = |s: &str| pattern.as_ref().is_none_or(|p| p.is_match(s));
+    let chart_id = search.and_then(|s| s.parse::<u32>().ok());
+    let data = match kind {
+        "charts" => page(sh.charts.iter().filter(|c| matches(c.title.as_deref().unwrap_or_default()) || Some(c.id)==chart_id).skip(offset).map(|c|json!({"id":c.id,"type":format!("{:?}",c.kind),
+            "title":c.title.as_deref().map(|s|clip(s,128)),"at":c.anchor.cell.a1(),"source":super::analysis::visible_ref(&d.wb,c.source.as_deref()).map(|s|clip(s,240)),
+            "series":c.series.len(),"xTitle":c.x_title.as_deref().map(|s|clip(s,128)),"yTitle":c.y_title.as_deref().map(|s|clip(s,128)),
+            "legend":format!("{:?}",c.legend),"dataLabels":c.data_labels,"gridlines":c.gridlines})),offset,32),
+        // Iterate stored notes/threads in address order, not every cell in a whole-column range.
+        "comments" => page(sh.comments.iter().filter(|(cell,_)| column.is_none_or(|col| col == cell.col)).skip(offset)
+            .map(|(cell,c)| json!({"cell":cell.a1(),"comment":comment(c,false)})),offset,32),
+        "tables" => page(sh.tables.iter().filter(|t|matches(&t.name)).skip(offset).map(|t|json!({"name":clip(&t.name,255),"range":t.range.a1(),"columns":t.columns.len()})),offset,32),
+        "names" => page(d.wb.names.iter().filter(|n| !n.hidden && n.scope.is_none_or(|i|d.wb.sheet(i).is_some_and(|s|s.visibility==Visibility::Visible)) && matches(&n.name))
+            .skip(offset).map(|n|json!({"name":clip(&n.name,255),"refersTo":clip(&n.formula,256),"scope":n.scope.and_then(|i|d.wb.sheet(i)).map(|s|clip(&s.name,128))})),offset,32),
+        _ => return Err("Unknown object category".into()),
+    };
+    let mut out = json!({"sheet":clip(&sh.name,128),"kind":kind,"page":data});
+    if let Some(col) = column {
+        out["column"] = json!(col_to_letters(col));
+    }
+    Ok(out)
+}
+
+fn cells(d: &DocState, sh: &Sheet, range: RangeRef, offset: usize) -> Json {
+    json!({"sheet":clip(&sh.name,128),"range":range.a1(),"page":page(range.iter().skip(offset).map(|c|cell_data(d,sh,c,false)),offset,256)})
+}
+
+pub(super) fn query(app: &SheetApp, name: &str, args: &Json) -> Result<Json, String> {
+    let d = app.session.active().ok_or("No open workbook")?;
+    let sh = sheet(d, args)?;
+    let offset = args["offset"].as_u64().unwrap_or(0) as usize;
+    match name {
+        "workbook_info" => Ok(info(d, offset)),
+        "inspect_cell" => Ok(cell_data(d, sh, args["cell"].as_str().and_then(CellRef::parse).ok_or("Invalid cell address")?, true)),
+        "read_range" => Ok(cells(d, sh, super::limited_range(args["range"].as_str().ok_or("Missing range")?)?, offset)),
+        "list_objects" => {
+            objects(d, sh, args["kind"].as_str().ok_or("Missing object category")?, args["column"].as_str(), args["search"].as_str(), offset)
+        }
+        _ => Err("Unknown inspection tool".into()),
+    }
+}
+
+pub(in crate::wingman) fn mention(app: &SheetApp, token: &str) -> Result<Json, String> {
+    let d = app.session.active().ok_or("No open workbook")?;
+    let sh = sheet(d, &Json::Null)?;
+    match token.trim_start_matches('@') {
+        "selection" | "read" => {
+            // Capture only the explicitly selected cells, never the bounding rectangle between
+            // disjoint areas. A whole-column selection still costs at most one page.
+            let areas = d.selection.ranges.iter().take(32).map(RangeRef::a1).collect::<Vec<_>>();
+            let items = d.selection.ranges.iter().flat_map(RangeRef::iter).map(|c| cell_data(d, sh, c, false));
+            let preview = page(items, 0, 128);
+            let truncated = preview["nextOffset"].is_number();
+            Ok(
+                json!({"sheet":clip(&sh.name,128),"activeCell":d.selection.active.a1(),"areas":areas,"areaCount":d.selection.ranges.len(),"preview":preview["items"],"truncated":truncated}),
+            )
+        }
+        "cell" => Ok(cell_data(d, sh, d.selection.active, true)),
+        "macro" => super::super::script_editor::inspect(app, &json!({})),
+        "editor" if super::super::script_editor::owner(app).is_some() => super::super::script_editor::inspect(app, &json!({})),
+        "sheet" | "editor" => {
+            // Computing the used rectangle scans occupied rows. Limit this to one explicitly
+            // requested worksheet, rather than scanning every tab for a workbook summary.
+            let mut info = sheet_info(sh);
+            info["usedRange"] = json!(sh.used_range().map(|r| r.a1()));
+            Ok(info)
+        }
+        "workbook" => Ok(info(d, 0)),
+        "charts" => objects(d, sh, "charts", None, None, 0),
+        "comments" => objects(d, sh, "comments", None, None, 0),
+        "vba" => Ok(json!({"embeddedVbaBytes":d.wb.vba_project.as_ref().map(|b|b.len()),
+            "capability":"GridCraft preserves an embedded VBA project as opaque bytes. Paste module text for review or formatting; binary modules cannot be read, rewritten or run by Wingman."})),
+        _ => {
+            let (on_sheet, address) = crate::wingman::composer::read_target(token)?;
+            let target = match on_sheet {
+                Some(name) => sheet(d, &json!({"sheet":name}))?,
+                None => sh,
+            };
+            Ok(cells(d, target, super::limited_range(&address)?, 0))
+        }
+    }
+}
+
+#[cfg(test)]
+mod object_search_tests {
+    use super::*;
+    use gridcraft_engine::{Session, model::DefinedName};
+    use std::sync::Arc;
+
+    #[test]
+    fn inspection_preserves_multibyte_values_and_escaped_thread_previews_together() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell":"A1","input":"😀".repeat(4096)})).unwrap();
+        s.execute("review.newComment", json!({"cell":"A1","author":"A","text":"😀".repeat(2048)})).unwrap();
+        for _ in 0..8 {
+            s.execute("review.replyComment", json!({"cell":"A1","author":"A","text":"\u{0001}".repeat(256)})).unwrap();
+        }
+        let app = SheetApp::new(s, Default::default());
+        let receipt = query(&app, "inspect_cell", &json!({"cell":"A1"})).unwrap();
+        assert!(receipt.to_string().len() <= super::super::MAX_RESULT);
+        assert_eq!(receipt["valueTruncated"], true);
+        assert_eq!(receipt["comment"]["replyCount"], 8);
+        assert_eq!(receipt["comment"]["textTruncated"], true);
+    }
+
+    #[test]
+    fn name_search_is_literal_and_pages_visible_matches() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let mut app = SheetApp::new(s, Default::default());
+        let wb = Arc::make_mut(&mut app.session.active_mut().unwrap().wb);
+        for i in 0..36 {
+            wb.names.push(DefinedName { name: format!("Ö_Fee.{i:02}"), formula: "1".into(), scope: None, comment: String::new(), hidden: i == 3 });
+        }
+        let find = |q: &str, offset| query(&app, "list_objects", &json!({"kind":"names","search":q,"offset":offset})).unwrap()["page"].clone();
+        assert_eq!(find("ö_fEE.", 0)["nextOffset"], 32);
+        let end = find("ö_fEE.", 32);
+        assert_eq!(end["items"][0]["name"], "Ö_Fee.33");
+        assert!(end["nextOffset"].is_null());
+        assert_eq!(find("Fee.*", 0)["items"], json!([]));
+        assert!(query(&app, "list_objects", &json!({"kind":"comments","search":"fee"})).unwrap_err().contains("grep"));
+    }
+}

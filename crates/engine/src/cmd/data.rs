@@ -31,15 +31,14 @@ use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 pub use sort::sort_context;
 use sort::{quick_sort, sort};
-#[cfg(test)]
-use tools::split_delimited;
+pub(super) use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
 pub use validation::{
     LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
     search_term,
 };
 use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
-pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
+pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells, transpose_rule_formula};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![

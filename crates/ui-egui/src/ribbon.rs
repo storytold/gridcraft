@@ -62,23 +62,38 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
+            #[cfg(not(target_arch = "wasm32"))]
+            let tabs_rect = if collapsed { crate::wingman::ribbon_tile(app, ui, tabs_rect, true) } else { tabs_rect };
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                let lang = app.ui.language;
+                let ctx_tabs = contextual_tabs(app);
+                let font = theme::ui_font(13.5);
+                let width = |label: &str| ui.painter().layout_no_wrap(label.to_owned(), font.clone(), t.text).size().x;
+                let file_width =
+                    if app.chrome.file_tab { (width(lang.tr("File")) + 2.0 * ui.spacing().button_padding.x).max(46.0) + 2.0 } else { 0.0 };
+                let tabs: Vec<_> = TABS.iter().chain(&ctx_tabs).map(|&tab| (tab, lang.tr_tab(tab), width(lang.tr_tab(tab)))).collect();
+                let overflow = 8.0 + file_width + tabs.iter().map(|(_, _, tw)| tw + 24.0).sum::<f32>() > tabs_rect.width();
+                let right = tabs_rect.right() - if overflow { 32.0 } else { 0.0 };
+                let file_in_menu = overflow && tabs_rect.left() + 8.0 + file_width > right;
+                let mut first_hidden = tabs.len();
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
-                    if app.chrome.file_tab {
+                    if app.chrome.file_tab && !file_in_menu {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
+                    for (i, &(tab, label, tw)) in tabs.iter().enumerate() {
+                        if overflow && ui.cursor().left() + tw + 22.0 > right {
+                            first_hidden = i;
+                            break;
+                        }
                         let active = app.ui.ribbon_tab == tab;
                         let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr_tab(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
                         let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
+                        if resp.has_focus() {
+                            ui.painter().rect_stroke(r.shrink(1.5), 4.0, ui.visuals().selection.stroke, StrokeKind::Inside);
+                        }
                         if resp.hovered() && !active {
                             ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
                         }
@@ -89,7 +104,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         } else {
                             t.text_dim
                         };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font.clone() }, color);
                         if active {
                             let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
                             ui.painter().rect_filled(ul, 1.5, t.accent);
@@ -112,6 +127,24 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     }
                 });
+                if overflow {
+                    let rect = Rect::from_min_max(pos2(right.max(tabs_rect.left()), tabs_rect.top()), tabs_rect.max);
+                    let more = ui.put(rect, egui::Button::new("…").frame(false)).on_hover_text(lang.tr("More tabs"));
+                    more.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("More tabs")));
+                    egui::Popup::menu(&more).show(|ui| {
+                        if file_in_menu && app.chrome.file_tab && ui.button(lang.tr("File")).clicked() {
+                            app.open_backstage(crate::backstage::Page::Home);
+                            ui.close();
+                        }
+                        for &(tab, label, _) in &tabs[first_hidden..] {
+                            if ui.selectable_label(app.ui.ribbon_tab == tab, label).clicked() {
+                                app.ui.ribbon_tab = tab.to_string();
+                                app.ui.ribbon_collapsed = false;
+                                ui.close();
+                            }
+                        }
+                    });
+                }
             });
             if collapsed {
                 return;
@@ -123,6 +156,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
             let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            #[cfg(not(target_arch = "wasm32"))]
+            let card = crate::wingman::ribbon_tile(app, ui, card, false);
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));

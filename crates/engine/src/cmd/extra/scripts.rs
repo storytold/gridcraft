@@ -48,6 +48,15 @@ pub(super) fn all_scripts(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(Json::Array(list))
 }
 
+/// Return only the named script's stored steps, without invoking the runner or changing trust.
+pub(super) fn get_script(s: &mut Session, p: &Json) -> Result<Json> {
+    let name = str_param(p, "name").ok_or_else(|| bad("automate.getScript", "missing `name`"))?;
+    let mut all = stash_map(&s.doc()?.wb, SCRIPTS_NAME);
+    let commands =
+        all.as_object_mut().and_then(|scripts| scripts.remove(name)).ok_or_else(|| bad("automate.getScript", "no such Automate script"))?;
+    Ok(json!({"name": name, "commands": commands}))
+}
+
 /// Whether `wb` carries GridCraft scripts (a workbook opened with them starts untrusted).
 pub(crate) fn has_scripts(wb: &Workbook) -> bool {
     stash_map(wb, SCRIPTS_NAME).as_object().is_some_and(|o| !o.is_empty())

@@ -405,6 +405,7 @@ fn border_style(name: &str) -> BorderStyle {
         "dashDot" => BorderStyle::DashDot,
         "mediumDashDot" => BorderStyle::MediumDashDot,
         "dashDotDot" => BorderStyle::DashDotDot,
+        "mediumDashDotDot" => BorderStyle::MediumDashDotDot,
         "slantDashDot" => BorderStyle::SlantDashDot,
         "none" => BorderStyle::None,
         _ => BorderStyle::Thin,

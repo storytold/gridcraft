@@ -44,8 +44,15 @@ pub fn shift_relative_wrapping(e: Expr, dr: i64, dc: i64) -> Expr {
 /// stands, a whole-row or whole-column reference comes back as a cell range whose open side runs
 /// from the transposed far edge of the sheet, and a result that falls off the grid becomes `#REF!`.
 pub fn transpose_relative(e: Expr, src: CellRef, dest: CellRef) -> Expr {
+    transpose_relative_from(e, src, src, dest)
+}
+
+/// Transpose a formula written at `first` but copied from `src` (e.g. a validation area).
+/// For a relative cell, its offset from `first` is also its offset from `src` after rebasing;
+/// rotating that offset directly avoids rejecting an intermediate, off-grid coordinate.
+pub fn transpose_relative_from(e: Expr, first: CellRef, src: CellRef, dest: CellRef) -> Expr {
     e.map(&mut |x| match x {
-        Expr::Ref(r) if !has_absolute(&r) => match transpose_ref(&r, src, dest) {
+        Expr::Ref(r) => match transpose_ref(r, first, src, dest) {
             Some(r) => Expr::Ref(r),
             None => Expr::Error(CellError::Ref),
         },
@@ -70,41 +77,55 @@ fn transpose_anchor(a: &Anchor, src: CellRef, dest: CellRef) -> Option<(u32, u32
 
 /// Turns one reference with `src` → `dest`: `None` when an end falls outside the sheet, which
 /// the caller turns into `#REF!`.
-fn transpose_ref(r: &Reference, src: CellRef, dest: CellRef) -> Option<Reference> {
+fn transpose_ref(r: Reference, first: CellRef, src: CellRef, dest: CellRef) -> Option<Reference> {
+    if has_absolute(&r) {
+        // Pinned references are read as seen at the copied cell, with no rotation.
+        return if first == src { Some(r) } else { shift_ref(r, src.row as i64 - first.row as i64, src.col as i64 - first.col as i64) };
+    }
     let kind = match &r.kind {
         RefKind::Cell(a) => {
-            let (row, col) = transpose_anchor(a, src, dest)?;
+            let (row, col) = transpose_anchor(a, first, dest)?;
             RefKind::Cell(Anchor { row, col, ..*a })
         }
         RefKind::Range(a, b) => {
-            let (row, col) = transpose_anchor(a, src, dest)?;
-            let (row2, col2) = transpose_anchor(b, src, dest)?;
+            let (row, col) = transpose_anchor(a, first, dest)?;
+            let (row2, col2) = transpose_anchor(b, first, dest)?;
             RefKind::Range(Anchor { row, col, ..*a }, Anchor { row: row2, col: col2, ..*b })
         }
         // A whole row turns into a cell range: its rows become columns, while its open columns
         // become rows pinned with `$` — from the transposed first column down to the last row.
         RefKind::Rows(r0, _, r1, _) => {
-            let (row, col) = clamp_anchor(dest.row as i64 - src.col as i64, dest.col as i64 + *r0 as i64 - src.row as i64)?;
-            let (row2, col2) = clamp_anchor(MAX_ROWS as i64 - 1, dest.col as i64 + *r1 as i64 - src.row as i64)?;
+            let (row, col) = clamp_anchor(dest.row as i64 - src.col as i64, dest.col as i64 + *r0 as i64 - first.row as i64)?;
+            let (row2, col2) = clamp_anchor(MAX_ROWS as i64 - 1, dest.col as i64 + *r1 as i64 - first.row as i64)?;
             RefKind::Range(Anchor { row, col, row_abs: true, col_abs: false }, Anchor { row: row2, col: col2, row_abs: true, col_abs: false })
         }
         // A whole column likewise: its columns become rows, its open rows become columns up to XFD.
         RefKind::Cols(c0, _, c1, _) => {
-            let (row, col) = clamp_anchor(dest.row as i64 + *c0 as i64 - src.col as i64, dest.col as i64 - src.row as i64)?;
-            let (row2, col2) = clamp_anchor(dest.row as i64 + *c1 as i64 - src.col as i64, MAX_COLS as i64 - 1)?;
+            let (row, col) = clamp_anchor(dest.row as i64 + *c0 as i64 - first.col as i64, dest.col as i64 - src.row as i64)?;
+            let (row2, col2) = clamp_anchor(dest.row as i64 + *c1 as i64 - first.col as i64, MAX_COLS as i64 - 1)?;
             RefKind::Range(Anchor { row, col, row_abs: false, col_abs: true }, Anchor { row: row2, col: col2, row_abs: false, col_abs: true })
         }
     };
-    Some(Reference { sheet: r.sheet.clone(), kind })
+    Some(Reference { sheet: r.sheet, kind })
 }
 
 /// Whether the formula has a relative (no `$`) row or column anywhere.
 pub fn has_relative_refs(e: &Expr) -> bool {
-    e.references().iter().any(|r| match r.kind {
+    e.references().into_iter().any(has_relative)
+}
+
+/// A pinned reference that still has a relative coordinate is not rotated by
+/// transpose, but its relative coordinate still varies with the *source* cell.
+pub fn has_mixed_transpose_refs(e: &Expr) -> bool {
+    e.references().into_iter().any(|r| has_absolute(r) && has_relative(r))
+}
+
+fn has_relative(r: &Reference) -> bool {
+    match r.kind {
         RefKind::Cell(a) => !a.row_abs || !a.col_abs,
         RefKind::Range(a, b) => !a.row_abs || !a.col_abs || !b.row_abs || !b.col_abs,
         RefKind::Rows(_, a0, _, a1) | RefKind::Cols(_, a0, _, a1) => !a0 || !a1,
-    })
+    }
 }
 
 fn shift_anchor(a: &Anchor, dr: i64, dc: i64) -> Option<Anchor> {

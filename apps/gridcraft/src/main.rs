@@ -480,6 +480,9 @@ fn main() -> eframe::Result<()> {
     {
         log::warn!("sample {s}: {e}");
     }
+    if let Some(dir) = config_dir() {
+        gridcraft_ui_egui::wingman::set_config_dir(dir);
+    }
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
     // The updater is a stable-only service: a nightly is installed, replaced and updated by the

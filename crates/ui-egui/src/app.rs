@@ -29,6 +29,8 @@ impl SheetApp {
     /// Constructs a `SheetApp` with default UI, grid, printing, control and screenshot state and the caller's session and services.
     pub fn new(session: Session, services: Services) -> SheetApp {
         SheetApp {
+            #[cfg(not(target_arch = "wasm32"))]
+            wingman: Default::default(),
             session,
             ui: UiState::default(),
             chrome: Chrome::default(),
@@ -241,6 +243,8 @@ impl SheetApp {
                 tabs::status_bar(self, ui);
             }
             tabs::sheet_tabs(self, ui);
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::wingman::show(self, ui);
             pivot_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {

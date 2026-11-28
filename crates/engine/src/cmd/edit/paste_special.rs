@@ -4,9 +4,19 @@ use super::{
     target_sheet,
 };
 
-#[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
+    let consume = clip.cut && s.doc()?.uid == clip.doc_uid;
+    let result = paste_snapshot(s, p, &clip, None)?;
+    if consume {
+        s.clipboard = None;
+    }
+    Ok(result)
+}
+
+/// Apply an explicit snapshot without consulting or changing a pending user copy/cut.
+#[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
+pub(super) fn paste_snapshot(s: &mut Session, p: &Json, clip: &crate::Clipboard, replace_sidecars: Option<RangeRef>) -> Result<Json> {
     let what = match str_param(p, "what").unwrap_or("all") {
         "all" => What::All,
         "formulas" => What::Formulas,
@@ -24,6 +34,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let skip_blanks = bool_param(p, "skipBlanks").unwrap_or(false);
     let transpose = bool_param(p, "transpose").unwrap_or(false);
     let link = bool_param(p, "link").unwrap_or(false);
+    let keep_references = match p.get("keepReferences") {
+        None => false,
+        Some(value) => value.as_bool().ok_or_else(|| bad("edit.pasteSpecial", "keepReferences must be true or false."))?,
+    };
+    if keep_references
+        && (link || !matches!(what, What::All | What::AllExceptBorders | What::Formulas | What::FormulasAndNumberFormats | What::Validation))
+    {
+        return Err(bad("edit.pasteSpecial", "Keep references requires a copy of formulas or validation rules, not values, formatting or links."));
+    }
     if link && !clip.areas.is_empty() {
         return Err(EngineError::Other("This action won't work on multiple selections.".into()));
     }
@@ -84,7 +103,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     // cut stays pending.
     let cut_move = clip.cut && same_doc;
     if cut_move {
-        let plain = what == What::All && !link && !skip_blanks && !transpose && op == "none";
+        let plain = what == What::All && !link && !skip_blanks && !transpose && !keep_references && op == "none";
         if !plain {
             return Err(EngineError::Other("Cut cells can only be pasted with Paste. To use Paste Special, copy them instead.".into()));
         }
@@ -106,6 +125,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
+    if keep_references && what != What::Validation && src_sheet.cells.legacy_array_intersects(src) {
+        return Err(bad("edit.pasteSpecial", "Cannot copy a legacy array with unchanged references."));
+    }
     // The source sheet's name now: a cut whose sheet was renamed after it moves its cells,
     // rules and the references to them on the sheet as it is named, not as the clipboard saw it.
     let src_sheet_name = match s.doc()?.wb.sheet(clip.sheet) {
@@ -133,6 +155,28 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         // A cut moves the rules its cells hold now, not the clipboard's: rules cleared or added
         // since the cut would otherwise come back or be lost.
         let live_source = if cut_move { cx.wb.sheet(clip.sheet).cloned() } else { None };
+        if let Some(dest) = replace_sidecars {
+            // The agent explicitly approved replacing this whole block, including blank
+            // source positions. Reads below use clip.wb, independent of this COW mutation.
+            let sh = cx.sheet_mut(dest_sheet)?;
+            if !cut_move {
+                crate::cmd::data::remove_rule_cells(&mut sh.cond_formats, &[dest]);
+            }
+            let cleared: std::collections::BTreeSet<_> = sh
+                .comments
+                .range(dest.start..=dest.end)
+                .map(|(c, _)| *c)
+                .chain(sh.hyperlinks.range(dest.start..=dest.end).map(|(c, _)| *c))
+                .filter(|c| dest.contains(*c))
+                .collect();
+            for at in &cleared {
+                sh.comments.remove(at);
+                sh.hyperlinks.remove(at);
+            }
+            for at in cleared {
+                cx.touch(dest_sheet, at);
+            }
+        }
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
@@ -213,6 +257,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let mut new = old.clone();
                     let shift = |cell: &Cell| -> Option<std::sync::Arc<Formula>> {
                         let f = cell.formula.as_ref()?;
+                        if keep_references {
+                            return Some(f.clone());
+                        }
                         let e = f.expr()?;
                         if cut_move {
                             // A moved formula still reads cells on its original sheet. Qualify
@@ -395,7 +442,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         // A cut takes its rules along itself (`move_cut_rules`, below).
         if !link && !cut_move && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, keep_references, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -456,9 +503,6 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         let d = s.doc_mut()?;
         d.trust = d.trust.receive(clip.trust);
     }
-    if cut_move {
-        s.clipboard = None;
-    }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
 }
 
@@ -474,6 +518,7 @@ const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 #[derive(Clone, Copy)]
 struct PasteMode<'a> {
     transpose: bool,
+    keep_references: bool,
     skip_blanks: bool,
     skip_rows: &'a std::collections::BTreeSet<u32>,
 }
@@ -506,7 +551,7 @@ fn paste_validations(
     pasted: RangeRef,
     mode: PasteMode<'_>,
 ) -> Result<()> {
-    let PasteMode { transpose, skip_blanks, skip_rows } = mode;
+    let PasteMode { transpose, keep_references, skip_blanks, skip_rows } = mode;
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
@@ -564,9 +609,10 @@ fn paste_validations(
         }
     }
     let mut total = 0usize;
+    let mut copied_rule_bytes = 0u64;
     for dv in &src_sheet.validations {
         let parts: Vec<RangeRef> = dv.ranges.iter().filter_map(|r| r.intersection(&src)).collect();
-        let Some(first) = dv.ranges.first().map(|r| r.start) else { continue };
+        let Some(first) = RangeRef::top_left(&dv.ranges) else { continue };
         if parts.is_empty() {
             continue;
         }
@@ -574,8 +620,8 @@ fn paste_validations(
         if parts.contains(&src) {
             ranges.push(pasted);
         } else {
-            total = total.saturating_add(parts.len().saturating_mul(tiles_r as usize).saturating_mul(tiles_c as usize));
-            if total > MAX_PASTE_VALIDATION_RANGES {
+            let n = parts.len().saturating_mul(tiles_r as usize).saturating_mul(tiles_c as usize);
+            if n > MAX_PASTE_VALIDATION_RANGES - total {
                 return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
             }
             for tr in 0..tiles_r {
@@ -594,21 +640,63 @@ fn paste_validations(
         }
         // The rows a filter hides keep what they have.
         let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
-        let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
-        let mut rule = dv.clone();
-        // Relative references move with the rule, as pasted formulas do: they are written for the
-        // rule's first cell.
-        rule.f1 = super::super::data::move_rule_formula(&dv.f1, first, anchor);
-        rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, first, anchor));
-        rule.ranges = ranges;
-        rules.push(rule);
+        let Some(anchor) = RangeRef::top_left(&ranges) else { continue };
+        let split = transpose
+            && !keep_references
+            && dv.formulas().iter().any(|f| {
+                f.contains('$')
+                    && gridcraft_formula::parse(f.trim_start_matches('=')).is_ok_and(|e| gridcraft_formula::adjust::has_mixed_transpose_refs(&e))
+            });
+        let n = if split { ranges.iter().map(RangeRef::count).sum::<u64>() } else { ranges.len() as u64 };
+        if n > (MAX_PASTE_VALIDATION_RANGES - total) as u64 {
+            return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
+        }
+        total += n as usize;
+        if skip_blanks && dest_rules {
+            if cleared.len().saturating_add(ranges.len()) > MAX_PASTE_VALIDATION_RANGES {
+                return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
+            }
+            cleared.extend_from_slice(&ranges);
+        }
+        let mut template = dv.clone();
+        template.ranges.clear();
+        let mut push = |anchor: CellRef, areas| {
+            let mut rule = template.clone();
+            if !keep_references {
+                for f in rule.formulas_mut() {
+                    *f = if transpose {
+                        let sc =
+                            CellRef::new(src.start.row + (anchor.col - pasted.start.col) % w, src.start.col + (anchor.row - pasted.start.row) % h);
+                        super::super::data::transpose_rule_formula(f, first, sc, anchor)
+                    } else {
+                        super::super::data::move_rule_formula(f, first, anchor)
+                    };
+                }
+            }
+            rule.ranges = areas;
+            rules.push(rule);
+        };
+        if split {
+            // In a transposed rectangle a source row advances along destination columns.
+            // A shared mixed rule would instead advance its unpinned row down the sheet.
+            let strings = [&dv.f1, &dv.input_title, &dv.input_message, &dv.error_title, &dv.error_message];
+            let bytes = strings.iter().map(|s| s.len()).sum::<usize>() + dv.f2.as_ref().map_or(0, String::len) + std::mem::size_of_val(dv);
+            copied_rule_bytes = copied_rule_bytes.saturating_add(n.saturating_mul(bytes as u64));
+            if copied_rule_bytes > 32 * 1024 * 1024 {
+                return Err(EngineError::Other("The transposed validation rules are too large to paste at once.".into()));
+            }
+            for cell in ranges.iter().flat_map(RangeRef::iter) {
+                push(cell, vec![RangeRef::cell(cell)]);
+            }
+        } else {
+            push(anchor, ranges);
+        }
     }
     if cleared.len() > MAX_PASTE_VALIDATION_RANGES {
         return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
     }
     let sh = cx.sheet_mut(dest_sheet)?;
     if skip_blanks {
-        cleared.extend(rules.iter().flat_map(|r| r.ranges.iter().copied()));
         super::super::data::remove_validation_cells(&mut sh.validations, &cleared);
     } else {
         super::super::data::remove_validation_cells(&mut sh.validations, &without_rows(pasted, skip_rows));

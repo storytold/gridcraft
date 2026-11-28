@@ -139,6 +139,9 @@ impl Dialog {
             }
         }
         self.values.insert(key.into(), value);
+        if self.name == "pasteSpecial" && !paste::can_keep_references(self) {
+            self.values.remove("keepReferences");
+        }
     }
 
     /// The reference box the dialog is collapsed to, if any.
@@ -541,6 +544,7 @@ impl Dialog {
                     },
                     Check { key: "skipBlanks", label: "Skip blanks" },
                     Check { key: "transpose", label: "Transpose (E)" },
+                    Check { key: "keepReferences", label: "Keep formula references unchanged" },
                     Check { key: "link", label: "Paste Link" },
                 ],
                 json!({"what": "all", "operation": "none"}),

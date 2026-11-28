@@ -325,21 +325,7 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
         .filter(|v| v.is_finite())
         .ok_or_else(|| bad(CMD, "`to` must be a number"))?;
     let d = s.doc()?;
-    let has_formula = |si: usize, c: CellRef| d.wb.sheet(si).and_then(|sh| sh.cell(c)).is_some_and(|c| c.formula.is_some());
-    if !has_formula(ssi, set) {
-        return Err(EngineError::Other("Cell must contain a formula.".into()));
-    }
-    // A Python cell is a formula to Excel (`=PY(…)`): writing a number over it would lose its code.
-    if has_formula(csi, chg) || d.wb.sheet(csi).and_then(|sh| sh.cell(chg)).is_some_and(|c| c.py.is_some()) {
-        return Err(EngineError::Other("Cell must contain a value.".into()));
-    }
-    let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let (max_iter, tol) = (d.wb.calc.max_iterations, d.wb.calc.max_change);
-    let mut trial = Trial::new(d);
-    let mut f = |x: f64| -> f64 {
-        trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
-    };
-    let r = seek(x0, &mut f, max_iter, tol);
+    let r = goal_seek_trial(d, ssi, set, csi, chg, target, d.wb.calc.max_iterations)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
@@ -349,6 +335,37 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let result = s.doc()?.wb.sheet(ssi).map(|sh| sh.value(set)).unwrap_or_default();
     Ok(json!({"value": r.x, "result": value_json(&result), "iterations": r.iterations, "converged": r.converged}))
+}
+
+/// Run the native solver on temporary workbook data and return its candidate without
+/// committing it. A caller with a UI latency budget can cap the workbook's iteration count.
+pub fn preview_goal_seek(d: &DocState, sheet: usize, set: CellRef, changing: CellRef, target: f64, max_iterations: u32) -> Result<Json> {
+    if !target.is_finite() {
+        return Err(bad("data.goalSeek", "target must be a finite number"));
+    }
+    let limit = d.wb.calc.max_iterations.min(max_iterations);
+    if limit == 0 {
+        return Err(bad("data.goalSeek", "Goal Seek preview needs at least one iteration."));
+    }
+    let r = goal_seek_trial(d, sheet, set, sheet, changing, target, limit)?;
+    Ok(json!({"value":r.x,"residual":r.fx.is_finite().then_some(r.fx),"iterations":r.iterations,"converged":r.converged}))
+}
+
+fn goal_seek_trial(d: &DocState, ssi: usize, set: CellRef, csi: usize, chg: CellRef, target: f64, max_iter: u32) -> Result<Seek> {
+    let has_formula = |si: usize, c: CellRef| d.wb.sheet(si).and_then(|sh| sh.cell(c)).is_some_and(|c| c.formula.is_some());
+    if !has_formula(ssi, set) {
+        return Err(EngineError::Other("Cell must contain a formula.".into()));
+    }
+    // A Python cell is a formula to Excel (`=PY(…)`): writing a number over it would lose its code.
+    if has_formula(csi, chg) || d.wb.sheet(csi).and_then(|sh| sh.cell(chg)).is_some_and(|c| c.py.is_some()) {
+        return Err(EngineError::Other("Cell must contain a value.".into()));
+    }
+    let x0 = d.wb.sheet(csi).map(|sh| sh.value(chg)).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let mut trial = Trial::new(d);
+    let mut f = |x: f64| -> f64 {
+        trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
+    };
+    Ok(seek(x0, &mut f, max_iter, d.wb.calc.max_change))
 }
 
 // ---------------------------------------------------------------- data tables

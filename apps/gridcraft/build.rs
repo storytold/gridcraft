@@ -32,6 +32,7 @@ fn main() {
     };
     println!("cargo:rerun-if-changed=../../assets/app-icon/gridcraft.ico");
     println!("cargo:rerun-if-changed=../../assets/app-icon/gridcraft-nightly.ico");
+    println!("cargo:rerun-if-changed=../../assets/wingman/artcraft-ai.ico");
     println!("cargo:rerun-if-env-changed=GRIDCRAFT_REQUIRE_WINRES");
     println!("cargo:rerun-if-env-changed=GRIDCRAFT_VERSION");
     let built_version = if nightly {
@@ -52,6 +53,7 @@ fn main() {
     }
     let mut res = winresource::WindowsResource::new();
     res.set_icon(build_channel::windows_icon_path(nightly))
+        .set_icon_with_id("../../assets/wingman/artcraft-ai.ico", "2")
         .set("ProductName", if nightly { "GridCraft Nightly" } else { "GridCraft" })
         .set("FileDescription", if nightly { "GridCraft Nightly spreadsheet" } else { "GridCraft spreadsheet" })
         .set("CompanyName", "Learning Machines LLC")

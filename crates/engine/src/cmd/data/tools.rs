@@ -177,7 +177,7 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     ok()
 }
 
-pub(super) fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) -> Vec<String> {
+pub(in crate::cmd) fn split_delimited(text: &str, delims: &[char], consecutive: bool, quote: char) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut in_q = false;
