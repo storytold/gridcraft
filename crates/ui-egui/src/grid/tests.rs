@@ -530,3 +530,58 @@ fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
     assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
     check_cf(&mut app);
 }
+
+#[test]
+fn fast_keyboard_burst_keeps_every_character_before_editor_focus() {
+    use gridcraft_engine::core::{CellRef, Value};
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = crate::SheetApp::new(session, Default::default());
+    let ctx = egui::Context::default();
+    let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
+    let mut step = |events: Vec<egui::Event>| {
+        let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| super::show(&mut app, ui));
+        out.textures_delta.clear();
+    };
+    let key_events = |key: egui::Key| {
+        vec![
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+            egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE },
+        ]
+    };
+    // Warm up so the grid holds keyboard focus on A1.
+    step(vec![]);
+    step(vec![]);
+
+    // Burst 1: 10 characters split across frame 1 (before the in-cell TextEdit has focus)
+    // and frame 2 (after focus arrives), followed by Enter.
+    step("12345".chars().map(|c| egui::Event::Text(c.to_string())).collect());
+    let mut frame2: Vec<egui::Event> = "67890".chars().map(|c| egui::Event::Text(c.to_string())).collect();
+    frame2.extend(key_events(egui::Key::Enter));
+    step(frame2);
+    step(vec![]);
+
+    // Burst 2: all 10 characters plus Enter arrive in a single frame on A2.
+    let mut single_frame: Vec<egui::Event> = "9876543210".chars().map(|c| egui::Event::Text(c.to_string())).collect();
+    single_frame.extend(key_events(egui::Key::Enter));
+    step(single_frame);
+    step(vec![]);
+
+    // Burst 3: F4 in the same frame stops seeding before text typed after it, so F4 anchors
+    // A1 rather than pulling `+B1` ahead of the shortcut.
+    let mut f4_frame: Vec<egui::Event> = "=A1".chars().map(|c| egui::Event::Text(c.to_string())).collect();
+    f4_frame.extend(key_events(egui::Key::F4));
+    f4_frame.extend("+B1".chars().map(|c| egui::Event::Text(c.to_string())));
+    f4_frame.extend(key_events(egui::Key::Enter));
+    step(f4_frame);
+    step(vec![]);
+
+    let sh = app.session.active().unwrap().wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1_234_567_890.0), "A1 must keep every digit of a multi-frame burst");
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::Number(9_876_543_210.0), "A2 must keep every digit of a single-frame burst");
+    assert_eq!(
+        sh.cell(CellRef::new(2, 0)).map(|c| c.input_text()).as_deref(),
+        Some("=$A$1"),
+        "A3 must stop seeding at F4 so F4 anchors A1 instead of text after it"
+    );
+}
