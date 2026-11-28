@@ -48,6 +48,20 @@ impl SheetApp {
 
     pub(super) fn submit_print(&mut self, params: Json) -> Result<Json, String> {
         if self.services.print_native.is_some() && !self.printing.ready() {
+            if let Some(discover) = &self.services.printers
+                && self.printing.printers.is_empty()
+                && !self.printing.discovering()
+            {
+                // Actionable recovery guidance as requested by CodeRabbit:
+                // Restart discovery if it failed previously, or start it for the first time.
+                let msg = match self.printing.message.as_ref() {
+                    Some(printing::Feedback::DiscoveryFailed) => "Printer discovery failed. Retrying... Please wait.",
+                    Some(printing::Feedback::NoPrinters) => "No printers found. Searching again...",
+                    _ => "Discovering printers... Please try again in a moment.",
+                };
+                self.printing.refresh(discover);
+                return Err(msg.into());
+            }
             return Err("Select an available printer in File > Print before submitting.".into());
         }
         let pdf = self.run("file.print", params)?;
@@ -87,3 +101,5 @@ impl SheetApp {
         }
     }
 }
+
+
