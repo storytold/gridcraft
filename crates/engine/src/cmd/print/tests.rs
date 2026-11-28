@@ -645,8 +645,9 @@ fn centred_header_sits_between_the_margins_when_they_differ() {
     s.execute("pageLayout.pageSetup", json!({"left": 1.5, "right": 1.0})).unwrap();
     let (unequal, _) = pdf_of(&mut s, json!({}));
     let x_unequal = text_at(&unequal, "Mid").unwrap().0;
-    let shift = (x_unequal - x_equal).abs();
-    assert!((shift - 18.0).abs() < 0.5, "the centred header moves by half the 0.5-inch margin difference (18 pt), got {shift}");
+    // Signed: shrinking the right margin moves the centre right, not just anywhere.
+    let shift = x_unequal - x_equal;
+    assert!((shift - 18.0).abs() < 0.5, "the centred header moves right by half the 0.5-inch margin difference (18 pt), got {shift}");
 }
 
 #[test]
