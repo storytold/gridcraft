@@ -28,10 +28,16 @@ pub fn parse(src: &str) -> Result<Expr, ParseError> {
     parse_syntax(src, crate::FormulaLocale::En)
 }
 
+/// Parse file syntax for an AST rewrite that needs the original spelling of each function call.
+/// The result is for rewriting and printing, before parsing with canonical function names for evaluation.
+pub fn parse_preserving_call_names(src: &str) -> Result<Expr, ParseError> {
+    parse_top(src, crate::FormulaLocale::En, false, true)
+}
+
 /// Parses a defined name's formula. Unlike a cell formula, a comma at the top level is the
 /// union operator: Excel stores and shows a name over several ranges as `Sheet1!$A$1,Sheet1!$C$1`.
 pub fn parse_name(src: &str) -> Result<Expr, ParseError> {
-    parse_top(src, crate::FormulaLocale::En, true)
+    parse_top(src, crate::FormulaLocale::En, true, false)
 }
 
 /// Most closing parentheses [`parse_closing_parens`] adds.
@@ -56,17 +62,17 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 }
 
 pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
-    parse_top(src, locale, false)
+    parse_top(src, locale, false, false)
 }
 
-fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
+fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool, preserve_call_names: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
         return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es, preserve_call_names };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof if wrapper_height(&e) > MAX_DEPTH => Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 }),
@@ -131,6 +137,7 @@ struct Parser {
     i: usize,
     depth: usize,
     input: bool,
+    preserve_call_names: bool,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -316,8 +323,8 @@ impl Parser {
                 Ok(Expr::Paren(Box::new(e)))
             }
             Tok::LBrace => self.array(),
-            Tok::Func(name) => {
-                let name = normalize_function_name(&name);
+            Tok::Func(raw) => {
+                let name = normalize_function_name(&raw);
                 let mut args = self.args()?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
                 if name == "ANCHORARRAY"
@@ -350,7 +357,7 @@ impl Parser {
                 {
                     return Ok(Expr::Unary(UnOp::Trim(mode), Box::new(x)));
                 }
-                Ok(Expr::Call(name, args))
+                Ok(Expr::Call(if self.preserve_call_names { raw } else { name }, args))
             }
             Tok::Sheet(a, b) => {
                 let sheet = match b {

@@ -1,15 +1,16 @@
 //! Formula text conversion between the model (canonical text, no `=`) and files (`_xlfn.`
 //! prefixes for newer functions).
 
-use gridcraft_formula::Expr;
-use gridcraft_model::Formula;
+use gridcraft_formula::{Expr, normalize_function_name, parser::parse_preserving_call_names};
+use gridcraft_model::{FileFunctionPrefix, Formula};
+use std::collections::BTreeMap;
 
 /// Formula text for a file.
 pub fn to_file(f: &Formula) -> String {
     match f.expr_arc() {
         // Most formulas have nothing the file spells differently: print them without copying.
-        Some(e) if !needs_file_spelling(&e) => gridcraft_formula::print(&e),
-        Some(e) => expr_to_file(Expr::clone(&e)),
+        Some(e) if f.file_functions.is_empty() && !needs_file_spelling(&e) => gridcraft_formula::print(&e),
+        Some(e) => expr_to_file_with_prefixes(Expr::clone(&e), &f.file_functions),
         None => f.text.clone(),
     }
 }
@@ -101,13 +102,19 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
     }
 }
 
+/// Canonical file spelling for formulas that have no imported namespace overrides.
 fn expr_to_file(e: Expr) -> String {
+    expr_to_file_with_prefixes(e, &BTreeMap::new())
+}
+
+fn expr_to_file_with_prefixes(e: Expr, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> String {
     let e = prefix_params(e, &[]);
+    let mut imported = imported_call_names(&e, prefixes).into_iter();
     let e = e.map(&mut |x| match x {
-        Expr::Call(name, args) => match crate::tables::file_function_name(&name) {
-            Some(n) => Expr::Call(n, args),
-            None => Expr::Call(name, args),
-        },
+        Expr::Call(name, args) => {
+            let name = imported.next().flatten().unwrap_or_else(|| crate::tables::file_function_name(&name).unwrap_or(name));
+            Expr::Call(name, args)
+        }
         // Files have no `#` operator: Excel writes `A1#` as `_xlfn.ANCHORARRAY(A1)`, and a spill
         // reference that became `#REF!` (its cell was deleted) as plain `#REF!`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) if matches!(*r, Expr::Error(_)) => *r,
@@ -152,13 +159,157 @@ fn strip_param_prefix(n: String) -> String {
     }
 }
 
+/// Canonical call key, including a LET/LAMBDA call whose file spelling uses `_xlpm.`.
+fn call_key(raw: &str) -> String {
+    strip_param_prefix(gridcraft_formula::normalize_function_name(raw)).to_ascii_uppercase()
+}
+
+/// Resolve namespaces against original calls in source order, then emit the choices in the
+/// bottom-up order used by `Expr::map`. Operator-generated calls (for example TRIMRANGE) do not
+/// occur in this list and cannot consume an imported call's namespace. An explicit stack also
+/// keeps long operator chains off the Rust call stack.
+fn imported_call_names(e: &Expr, prefixes: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>) -> Vec<Option<String>> {
+    if prefixes.is_empty() {
+        return Vec::new();
+    }
+    let mut totals: BTreeMap<String, usize> = BTreeMap::new();
+    e.walk(&mut |node| {
+        if let Expr::Call(raw, _) = node {
+            let count = totals.entry(call_key(raw)).or_default();
+            *count = count.saturating_add(1);
+        }
+    });
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut names = Vec::new();
+    let mut pending = vec![(e, false, None)];
+    while let Some((node, finished, replacement)) = pending.pop() {
+        if finished {
+            names.push(replacement);
+            continue;
+        }
+        match node {
+            Expr::Call(raw, args) => {
+                let key = call_key(raw);
+                let replacement = prefixes.get(&key).filter(|sequence| totals.get(&key) == Some(&sequence.len())).and_then(|sequence| {
+                    let index = counts.entry(key.clone()).or_default();
+                    let prefix = sequence.get(*index);
+                    *index = index.saturating_add(1);
+                    prefix.map(|prefix| match prefix {
+                        Some(prefix) => prefix.apply(&key),
+                        None if raw.to_ascii_uppercase().starts_with("_XLPM.") => raw.clone(),
+                        None => key,
+                    })
+                });
+                pending.push((node, true, replacement));
+                pending.extend(args.iter().rev().map(|a| (a, false, None)));
+            }
+            Expr::Array(rows) => pending.extend(rows.iter().flatten().rev().map(|a| (a, false, None))),
+            Expr::Unary(_, x) | Expr::Paren(x) => pending.push((x, false, None)),
+            Expr::Binary(_, a, b) => {
+                pending.push((b, false, None));
+                pending.push((a, false, None));
+            }
+            Expr::Invoke(callee, args) => {
+                pending.extend(args.iter().rev().map(|a| (a, false, None)));
+                pending.push((callee, false, None));
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// Read a cell formula and retain explicit namespaces the known-function table cannot recreate.
+pub(crate) fn cell_from_file(text: &str) -> Formula {
+    let text = text.strip_prefix('=').unwrap_or(text);
+    let source = parse_model_expr(text);
+    let model_text = source.as_ref().map_or_else(|| text.strip_prefix('=').unwrap_or(text).to_string(), gridcraft_formula::print);
+    let mut formula = Formula::new(&model_text);
+    if formula.expr.is_none()
+        || (text.len() > gridcraft_formula::MAX_FORMULA_LEN
+            && text.chars().take(gridcraft_formula::MAX_FORMULA_LEN + 1).count() > gridcraft_formula::MAX_FORMULA_LEN)
+        || !text.as_bytes().windows(b"_xlfn.".len()).any(|part| part.eq_ignore_ascii_case(b"_xlfn."))
+    {
+        return formula;
+    }
+    let mut calls: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
+    if let Ok(tokens) = gridcraft_formula::lexer::tokenize(text) {
+        for token in tokens {
+            let gridcraft_formula::lexer::Tok::Func(raw) = token.tok else { continue };
+            let name = call_key(&raw);
+            if matches!(name.as_str(), "SINGLE" | "ANCHORARRAY" | "_TRO_ALL" | "_TRO_LEADING" | "_TRO_TRAILING") {
+                continue;
+            }
+            let upper = raw.to_ascii_uppercase();
+            let prefix = if upper.starts_with("_XLFN._XLWS.") {
+                Some(FileFunctionPrefix::XlfnXlws)
+            } else if upper.starts_with("_XLFN.") {
+                Some(FileFunctionPrefix::Xlfn)
+            } else {
+                None
+            };
+            calls.entry(name).or_default().push(prefix);
+        }
+    }
+    // Printing a non-range trim operand already turns it into TRIMRANGE in the model text.
+    // Align the metadata with those model calls too, before testing which sequences need it.
+    if let Some(source) = source.as_ref() {
+        calls = model_call_prefixes(source, &calls);
+    }
+    let mut overrides = std::collections::BTreeSet::new();
+    for (name, sequence) in &calls {
+        let canonical = crate::tables::file_function_name(name);
+        let different = sequence.iter().flatten().any(|p| canonical.as_deref() != Some(p.apply(name).as_str()));
+        let mixed = sequence.iter().any(Option::is_none) && sequence.iter().any(Option::is_some);
+        if different || mixed {
+            overrides.insert(name.clone());
+        }
+    }
+    formula.file_functions = calls.into_iter().filter(|(name, _)| overrides.contains(name)).collect();
+    formula
+}
+
 /// Formula text read from a file → model text (strips prefixes when it parses).
 pub fn from_file(text: &str) -> String {
-    let body = text.strip_prefix('=').unwrap_or(text);
-    match gridcraft_formula::parse(body) {
-        Ok(e) => gridcraft_formula::print(&strip_param_prefixes(e)),
-        Err(_) => body.to_string(),
-    }
+    parse_model_expr(text).as_ref().map_or_else(|| text.strip_prefix('=').unwrap_or(text).to_string(), gridcraft_formula::print)
+}
+
+fn parse_model_expr(text: &str) -> Option<Expr> {
+    gridcraft_formula::parse(text.strip_prefix('=').unwrap_or(text)).ok().map(strip_param_prefixes)
+}
+
+/// Model printing uses a call for trim operands that have no reference-operator spelling.
+/// Insert its canonical namespace in source order without consuming a real imported call.
+fn model_call_prefixes(
+    source: &Expr,
+    original: &BTreeMap<String, Vec<Option<FileFunctionPrefix>>>,
+) -> BTreeMap<String, Vec<Option<FileFunctionPrefix>>> {
+    let mut mapped: BTreeMap<String, Vec<Option<FileFunctionPrefix>>> = BTreeMap::new();
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    source.walk(&mut |node| match node {
+        Expr::Call(raw, _) => {
+            let key = call_key(raw);
+            if let Some(sequence) = original.get(&key) {
+                let index = counts.entry(key.clone()).or_default();
+                if let Some(prefix) = sequence.get(*index) {
+                    mapped.entry(key).or_default().push(*prefix);
+                }
+                *index = index.saturating_add(1);
+            }
+        }
+        Expr::Unary(gridcraft_formula::UnOp::Trim(_), x) => {
+            let becomes_call = match &**x {
+                Expr::Ref(r) => matches!(r.kind, gridcraft_formula::RefKind::Cell(_)),
+                Expr::Binary(gridcraft_formula::BinOp::Range, _, _) | Expr::Error(_) => false,
+                _ => true,
+            };
+            if becomes_call {
+                mapped.entry("TRIMRANGE".into()).or_default().push(Some(FileFunctionPrefix::Xlfn));
+            }
+        }
+        _ => {}
+    });
+    mapped
 }
 
 fn strip_param_prefixes(e: Expr) -> Expr {
@@ -179,15 +330,18 @@ fn mentions_dummy_function(text: &str) -> bool {
     text.as_bytes().windows(NEEDLE.len()).any(|w| w.eq_ignore_ascii_case(NEEDLE))
 }
 
-/// The model text of `text` (a formula as read, see [`from_file`]) with its Google Sheets export
-/// wrappers replaced (see [`crate::read_xlsx_with`]), or `None` when nothing changes.
-pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> Option<String> {
+/// Read the file formula with any supported Google Sheets export wrappers replaced, or return
+/// `None` when nothing changes. Each call keeps its file name on the syntax node through the
+/// rewrite, so inserted and discarded calls cannot shift the prefixes of surviving calls.
+pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> Option<Formula> {
     if !mentions_dummy_function(text) {
         return None;
     }
-    let e = gridcraft_formula::parse(text.strip_prefix('=').unwrap_or(text)).ok()?;
+    let e = parse_preserving_call_names(text).ok()?;
     let unwrapped = unwrap_dummy_functions(e, known)?;
-    Some(gridcraft_formula::print(&strip_param_prefixes(unwrapped)))
+    let formula = cell_from_file(&gridcraft_formula::print(&unwrapped));
+    // A replacement could put the combined expression past the parser's nesting limit.
+    formula.expr.is_some().then_some(formula)
 }
 
 /// The original formula inside Google Sheets' export wrapper
@@ -196,12 +350,11 @@ pub(crate) fn unwrap_google_sheets(text: &str, known: &dyn Fn(&str) -> bool) -> 
 /// the doubled quotes. The cached value is also the cell's `<v>`, which the reader keeps.
 fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> {
     let Expr::Call(name, args) = e else { return None };
-    // The parser has already dropped an `_xlfn.` prefix from IFERROR.
-    if !name.eq_ignore_ascii_case("IFERROR") {
+    if normalize_function_name(name) != "IFERROR" {
         return None;
     }
     let [Expr::Call(dummy, inner), _fallback] = args.as_slice() else { return None };
-    if !dummy.eq_ignore_ascii_case(DUMMY_FUNCTION) {
+    if !normalize_function_name(dummy).eq_ignore_ascii_case(DUMMY_FUNCTION) {
         return None;
     }
     let [Expr::Text(src)] = inner.as_slice() else { return None };
@@ -210,21 +363,20 @@ fn dummy_function_inner(e: &Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> 
     if src.len() > gridcraft_formula::MAX_FORMULA_LEN && src.chars().count() > gridcraft_formula::MAX_FORMULA_LEN {
         return None;
     }
-    let parsed = gridcraft_formula::parse(src).ok()?;
+    let parsed = parse_preserving_call_names(src).ok()?;
     // A function GridCraft can't calculate would show `#NAME?` where Excel shows the cached
     // value; a wrapper inside the text is one too, so only one level is ever unwrapped.
     let mut all_known = true;
     parsed.walk(&mut |x| {
         if let Expr::Call(n, _) = x {
-            all_known &= known(n);
+            all_known &= known(&normalize_function_name(n));
         }
     });
     all_known.then_some(parsed)
 }
 
 /// `e` with each Google Sheets export wrapper (see [`dummy_function_inner`]) replaced by the
-/// formula it holds, for the whole formula or anywhere inside it, or `None` when none is. If the
-/// result no longer parses (nesting beyond the parser's limit), nothing is replaced.
+/// formula it holds, for the whole formula or anywhere inside it, or `None` when none is.
 fn unwrap_dummy_functions(e: Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr> {
     // The whole formula: no parentheses needed.
     if let Some(inner) = dummy_function_inner(&e, known) {
@@ -255,11 +407,7 @@ fn unwrap_dummy_functions(e: Expr, known: &dyn Fn(&str) -> bool) -> Option<Expr>
         }
         None => x,
     });
-    if !found {
-        return None;
-    }
-    gridcraft_formula::parse(&gridcraft_formula::print(&rewritten)).ok()?;
-    Some(rewritten)
+    found.then_some(rewritten)
 }
 
 /// What the engine passes as `known` (`gridcraft_calc::is_known_function`), for tests here: the
@@ -416,11 +564,9 @@ mod tests {
         assert_eq!(to_file(&Formula::new("GROUPBY(A1:A3,B1:B3,\"SUM\")")), "_xlfn.GROUPBY(A1:A3,B1:B3,\"SUM\")");
     }
 
-    /// A formula as the reader leaves it, then with Google Sheets' wrappers unwrapped against
-    /// the real function library.
+    /// Read the file formula against the real function library.
     fn read(file: &str) -> String {
-        let text = from_file(file);
-        unwrap_google_sheets(&text, &test_known_function).unwrap_or(text)
+        unwrap_google_sheets(file, &test_known_function).map_or_else(|| from_file(file), |formula| formula.text)
     }
 
     /// #2871: Google Sheets' export wraps formulas as
@@ -471,7 +617,7 @@ mod tests {
         ] {
             let kept = gridcraft_formula::print(&gridcraft_formula::parse(file).unwrap());
             assert_eq!(read(file), kept, "{file}");
-            assert_eq!(unwrap_google_sheets(&from_file(file), &test_known_function), None, "{file}");
+            assert!(unwrap_google_sheets(file, &test_known_function).is_none(), "{file}");
         }
         // Inner text over the formula length limit.
         let long = format!("IFERROR(__xludf.DUMMYFUNCTION(\"{}\"),5)", "1".repeat(gridcraft_formula::MAX_FORMULA_LEN + 1));
@@ -498,5 +644,22 @@ mod tests {
         // A LET-bound LAMBDA called by name.
         assert_eq!(to_file(&Formula::new("LET(f,LAMBDA(x,x*2),f(3))")), "_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.F(3))");
         assert_eq!(from_file("_xlfn.LET(_xlpm.f,_xlfn.LAMBDA(_xlpm.x,_xlpm.x*2),_xlpm.f(3))"), "LET(f,LAMBDA(x,x*2),F(3))");
+    }
+
+    #[test]
+    fn canonical_known_calls_do_not_need_namespace_overrides() {
+        for text in ["XLOOKUP(B1,C1:C3,D1:D3)", "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)"] {
+            let formula = cell_from_file(text);
+            assert!(formula.file_functions.is_empty(), "{text}");
+            assert_eq!(to_file(&formula), "_xlfn.XLOOKUP(B1,C1:C3,D1:D3)");
+        }
+    }
+
+    /// Older JSON or externally supplied metadata with another call count must not retarget it.
+    #[test]
+    fn mismatched_occurrence_metadata_uses_canonical_spelling_without_guessing() {
+        let mut formula = Formula::new("TRIMRANGE(A1:B2,3,3)+TRIMRANGE(C1:D2,1,1)+TRIMRANGE(E1:F2,1,1)");
+        formula.file_functions.insert("TRIMRANGE".into(), vec![None, Some(FileFunctionPrefix::XlfnXlws)]);
+        assert_eq!(to_file(&formula), "_xlfn.TRIMRANGE(A1:B2,3,3)+_xlfn.TRIMRANGE(C1:D2,1,1)+_xlfn.TRIMRANGE(E1:F2,1,1)");
     }
 }

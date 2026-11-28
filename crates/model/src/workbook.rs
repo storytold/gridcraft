@@ -495,7 +495,7 @@ impl Workbook {
                     // its stored text, even text that isn't canonical, and isn't printed.
                     let old = cell.formula.as_ref()?;
                     let new = old.with_expr(|e| Some(f(e.clone())).filter(|n| n != e))??;
-                    Some((c, Formula { array: old.array, dynamic: old.dynamic, ..Formula::from_expr(new) }))
+                    Some((c, Formula { array: old.array, dynamic: old.dynamic, ..old.rewrite_expr(new) }))
                 })
                 .collect();
             let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
@@ -725,7 +725,7 @@ impl Workbook {
                     let f = cell.formula.as_ref()?;
                     let e = f.expr()?;
                     let ne = spell_calls(e.clone(), &lambdas);
-                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(ne) }))
+                    (ne != e).then(|| (c, Formula { array: f.array, dynamic: f.dynamic, ..f.rewrite_expr(ne) }))
                 })
                 .collect();
             if fixed.is_empty() {

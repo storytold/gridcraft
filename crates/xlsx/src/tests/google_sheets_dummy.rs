@@ -101,3 +101,31 @@ fn google_sheets_wrapper_saves_the_real_formula() {
     assert_eq!(xml.matches("DUMMYFUNCTION").count(), 2, "{xml}");
     assert_google_book(&open(&saved));
 }
+
+#[test]
+fn google_sheets_wrapper_keeps_prefixes_on_surviving_and_inserted_calls() {
+    let book = super::minimal(
+        concat!(
+            r#"<sheetData><row r="1">"#,
+            r#"<c r="A1"><f>_xlfn.FUTUREFUNC(A3)+_xlfn.IFERROR(__xludf.DUMMYFUNCTION("B1+2"),_xlfn.FUTUREFUNC(C3))</f><v>5</v></c>"#,
+            r#"<c r="B1"><f>IFERROR(__xludf.DUMMYFUNCTION("_xlfn.FILTER(A3:A5,C3:C5)"),_xlfn._xlws.FILTER(D3:D5,C3:C5))+_xlfn._xlws.FILTER(E3:E5,C3:C5)</f><v>3</v></c>"#,
+            "</row></sheetData>"
+        ),
+        &[],
+        "",
+        "",
+    );
+    let wb = open(&book);
+    assert_eq!(formula(&wb, "A1").text, "FUTUREFUNC(A3)+(B1+2)");
+    assert_eq!(formula(&wb, "B1").text, "FILTER(A3:A5,C3:C5)+FILTER(E3:E5,C3:C5)");
+    let saved = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&saved).unwrap();
+    let xml = String::from_utf8(pkg.read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
+    assert!(xml.contains("_xlfn.FUTUREFUNC(A3)+(B1+2)</f>"), "{xml}");
+    assert!(xml.contains("_xlfn.FILTER(A3:A5,C3:C5)+_xlfn._xlws.FILTER(E3:E5,C3:C5)</f>"), "{xml}");
+    for cell in ["A1", "B1"] {
+        let reopened = formula(&open(&saved), cell);
+        let first = formula(&wb, cell);
+        assert_eq!((reopened.text, reopened.file_functions), (first.text, first.file_functions));
+    }
+}
