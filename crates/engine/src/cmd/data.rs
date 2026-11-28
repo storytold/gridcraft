@@ -43,16 +43,30 @@ pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cel
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("data.sortAscending", "Sort A to Z", ["Data", "Sort & Filter"], None, "{range?, column?: \"B\"}", has_doc, |s, p| quick_sort(
-            s, p, true
-        )),
-        cmd!("data.sortDescending", "Sort Z to A", ["Data", "Sort & Filter"], None, "{range?, column?}", has_doc, |s, p| quick_sort(s, p, false)),
+        cmd!(
+            "data.sortAscending",
+            "Sort A to Z",
+            ["Data", "Sort & Filter"],
+            None,
+            "{range?, column?: \"B\", textAsNumbers?: bool}",
+            has_doc,
+            |s, p| quick_sort(s, p, true)
+        ),
+        cmd!(
+            "data.sortDescending",
+            "Sort Z to A",
+            ["Data", "Sort & Filter"],
+            None,
+            "{range?, column?: \"B\", textAsNumbers?: bool}",
+            has_doc,
+            |s, p| quick_sort(s, p, false)
+        ),
         cmd!(
             "data.sort",
             "Sort…",
             ["Data", "Sort & Filter"],
             None,
-            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..]}], orientation?: rows|columns, matchCase?}",
+            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..]}], orientation?: rows|columns, matchCase?, textAsNumbers?: bool (per key or for all keys)}",
             has_doc,
             sort
         ),
