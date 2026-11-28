@@ -972,10 +972,10 @@ fn find_previous_undoes_find_next_and_wraps() {
             };
             let count = s.execute("edit.find", json!({"what": "pear", "within": within, "all": true})).unwrap()["count"].as_u64().unwrap();
             // Every hit, including the last (Find Next wraps to the first) and the first (back wraps to the last).
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = Vec::new();
             for _ in 0..count {
                 let from = find(&mut s, false);
-                seen.insert(from.clone());
+                seen.push(from.clone());
                 let next = find(&mut s, false);
                 assert_ne!(next, from, "{within} byColumns={by_cols}");
                 assert_eq!(find(&mut s, true), from, "{within} byColumns={by_cols}: back from {next:?}");
@@ -983,7 +983,16 @@ fn find_previous_undoes_find_next_and_wraps() {
                     assert_eq!(s.doc().unwrap().selection.a1(), "A1:C3", "the range stays selected");
                 }
             }
-            assert_eq!(seen.len() as u64, count, "{within} byColumns={by_cols}: every hit visited");
+            let distinct: std::collections::HashSet<_> = seen.iter().collect();
+            assert_eq!(distinct.len() as u64, count, "{within} byColumns={by_cols}: every hit visited");
+            // The visits climb in row order, or column order with `byColumns`, and drop back only
+            // once round the cycle: at the wrap. Both directions ignoring `byColumns` fails here.
+            let key = |(si, a1): &(usize, String)| {
+                let c = CellRef::parse(a1).unwrap();
+                if by_cols { (*si, c.col, c.row) } else { (*si, c.row, c.col) }
+            };
+            let drops = (0..seen.len()).filter(|&i| key(&seen[(i + 1) % seen.len()]) < key(&seen[i])).count();
+            assert_eq!(drops, 1, "{within} byColumns={by_cols}: visited in order, {seen:?}");
         }
     }
 }
