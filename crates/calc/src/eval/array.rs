@@ -57,7 +57,8 @@ pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gr
     match v {
         Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect() }),
         Value::Error(e) => Value::Error(*e),
-        Value::Text(_) if plus => v.clone(),
+        // Unary plus changes nothing: `=+"abc"` is text and `=+TRUE` stays a logical (observed on Windows Excel 16.0.20430).
+        Value::Text(_) | Value::Bool(_) if plus => v.clone(),
         other => match other.to_number_in(sys) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
