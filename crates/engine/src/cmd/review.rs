@@ -351,7 +351,7 @@ fn stats(s: &mut Session, _: &Json) -> Result<Json> {
     let formulas = sh.cells.iter().filter(|(_, c)| c.formula.is_some()).count();
     Ok(json!({
         "sheet": {"name": sh.name, "endOfSheet": sh.used_range().map(|r| r.end.a1()), "cellsWithData": sh.cells.iter().filter(|(_, c)| !c.value.is_empty()).count(), "tables": sh.tables.len(), "formulas": formulas, "charts": sh.charts.len(), "comments": sh.comments.len()},
-        "workbook": {"sheets": d.wb.sheets.len(), "cellsWithData": d.wb.sheets.iter().map(|s| s.cells.len()).sum::<usize>(), "tables": d.wb.sheets.iter().map(|s| s.tables.len()).sum::<usize>(), "charts": d.wb.sheets.iter().map(|s| s.charts.len()).sum::<usize>(), "names": d.wb.names.len()}
+        "workbook": {"sheets": d.wb.sheets.len(), "cellsWithData": d.wb.sheets.iter().flat_map(|s| s.cells.iter()).filter(|(_, c)| !c.value.is_empty()).count(), "tables": d.wb.sheets.iter().map(|s| s.tables.len()).sum::<usize>(), "charts": d.wb.sheets.iter().map(|s| s.charts.len()).sum::<usize>(), "names": d.wb.names.len()}
     }))
 }
 
@@ -393,6 +393,33 @@ mod tests {
     fn at(s: &Session) -> (usize, String) {
         let d = s.doc().unwrap();
         (d.wb.active_sheet(), d.selection.active.a1())
+    }
+
+    #[test]
+    fn workbook_statistics_count_only_cells_with_data_across_sheets() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let r = s.execute("review.workbookStatistics", json!({})).unwrap();
+        assert_eq!(r["sheet"]["cellsWithData"], 0);
+        assert_eq!(r["workbook"]["cellsWithData"], 0);
+
+        s.execute("home.bold", json!({"range": "B1", "on": true})).unwrap();
+        let r = s.execute("review.workbookStatistics", json!({})).unwrap();
+        assert_eq!(r["sheet"]["cellsWithData"], 0);
+        assert_eq!(r["workbook"]["cellsWithData"], 0);
+
+        s.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "0"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "label"})).unwrap();
+        s.execute("home.bold", json!({"range": "C1:C2", "on": true})).unwrap();
+        for (sheet, count) in [(0, 1), (1, 2)] {
+            s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+            let r = s.execute("review.workbookStatistics", json!({})).unwrap();
+            assert_eq!(r["sheet"]["cellsWithData"], count);
+            assert_eq!(r["workbook"]["cellsWithData"], 3);
+            assert_eq!(r["workbook"]["sheets"], 2);
+        }
     }
 
     #[test]
